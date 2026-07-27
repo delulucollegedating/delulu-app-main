@@ -989,43 +989,15 @@ async function initializeChat() {
   
 
   
-  // Wire up toolbar quick actions
-  const btnIcebreakerQuick = document.getElementById('btn-icebreaker-quick');
-  if (btnIcebreakerQuick) btnIcebreakerQuick.onclick = () => openIcebreakerModal();
+  // Wire up header buttons
+  const btnIcebreaker = document.getElementById('btn-icebreaker');
+  if (btnIcebreaker) btnIcebreaker.onclick = () => openIcebreakerModal();
 
-  const btnEndChatQuick = document.getElementById('btn-end-chat-quick');
-  if (btnEndChatQuick) btnEndChatQuick.onclick = () => submitNotVibing();
+  const btnNotVibing = document.getElementById('btn-not-vibing');
+  if (btnNotVibing) btnNotVibing.onclick = () => submitNotVibing();
 
-  const btnToolbarMore = document.getElementById('btn-toolbar-more');
-  if (btnToolbarMore) btnToolbarMore.onclick = () => openModal('modal-chat-more');
-
-  // Wire up toolbar theme toggle
-  function syncChatThemeIcons(isDark) {
-    const toolbarIcon = document.querySelector('#btn-toolbar-theme .material-symbols-outlined');
-    if (toolbarIcon) toolbarIcon.textContent = isDark ? 'light_mode' : 'dark_mode';
-    document.querySelectorAll('.theme-toggle-icon').forEach(el => {
-      el.textContent = isDark ? 'light_mode' : 'dark_mode';
-    });
-  }
-
-  // Sync toolbar theme icon on init
-  const initialIsDark = document.body.classList.contains('dark');
-  syncChatThemeIcons(initialIsDark);
-
-  const btnToolbarTheme = document.getElementById('btn-toolbar-theme');
-  if (btnToolbarTheme) {
-    btnToolbarTheme.onclick = () => {
-      const isDark = document.body.classList.toggle('dark');
-      document.documentElement.classList.toggle('dark', isDark);
-      localStorage.setItem('delulu_theme', isDark ? 'dark' : 'light');
-      syncChatThemeIcons(isDark);
-      const globalToggle = document.getElementById('theme-toggle');
-      if (globalToggle) {
-        const gi = globalToggle.querySelector('.material-symbols-outlined');
-        if (gi) gi.textContent = isDark ? 'light_mode' : 'dark_mode';
-      }
-    };
-  }
+  const btnChatMore = document.getElementById('btn-chat-more');
+  if (btnChatMore) btnChatMore.onclick = () => openModal('modal-chat-more');
 
   const btnIdentityReveal = document.getElementById('btn-identity-reveal');
   if (btnIdentityReveal) btnIdentityReveal.onclick = () => openModal('modal-identity-reveal');
@@ -1434,13 +1406,16 @@ async function loadChatInfo() {
 
 function updateChatStatus(c) {
   const statusEl = document.getElementById('chat-status');
+  const notVibingBtn = document.getElementById('btn-not-vibing');
   const identityRevealBtn = document.getElementById('btn-identity-reveal');
   const faceRevealBtn = document.getElementById('btn-face-reveal');
   
+  if (notVibingBtn) notVibingBtn.classList.add('hidden');
   if (identityRevealBtn) identityRevealBtn.classList.add('hidden');
   if (faceRevealBtn) faceRevealBtn.classList.add('hidden');
   
-  if (c.status === 'accepted') {
+  if (c.status === 'accepted' || c.status === 'revealed') {
+    if (notVibingBtn) notVibingBtn.classList.remove('hidden');
     const now = Date.now();
     const chatStarted = new Date(c.chat_started_at).getTime();
     const daysSinceChatStarted = Math.floor((now - chatStarted) / (24 * 60 * 60 * 1000));
