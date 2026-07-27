@@ -167,49 +167,63 @@ async function loadMessagesList(options = {}) {
 }
 
 function renderLastMessage(c) {
-  if (!c.last_message) {
-    return c.status === 'revealed' 
-      ? '<span class="text-primary font-medium">Identities Revealed</span>' 
-      : '<span class="text-on-surface-variant/60 text-[13px]">Tap to start chatting</span>';
-  }
-  
-  const msgText = c.last_message.length > 40 
-    ? escapeHtml(c.last_message.substring(0, 40)) + '...' 
+  // This is now used only as a fallback; main preview rendered inside renderChatListItem
+  if (!c.last_message) return '';
+  return c.last_message.length > 45
+    ? escapeHtml(c.last_message.substring(0, 45)) + '…'
     : escapeHtml(c.last_message);
-  
-  // Check if the last message was from the other user and was read
-  const isUnread = c.last_sender_id && c.last_sender_id !== currentUser?.id && !c.last_read;
-  
-  let statusIcon = '';
-  if (c.last_sender_id === currentUser?.id) {
-    statusIcon = c.last_read 
-      ? '<span class="material-symbols-outlined text-[12px] text-blue-500 align-middle" style="font-variation-settings: \'FILL\' 1">done_all</span> '
-      : '<span class="material-symbols-outlined text-[12px] opacity-50 align-middle">check</span> ';
-  }
-  
-  const prefix = statusIcon || (isUnread ? '' : '');
-  return `<span class="${isUnread ? 'font-bold text-on-surface' : 'text-on-surface-variant'} text-[13px]">${prefix}${msgText}</span>`;
 }
 
 function renderChatListItem(c, safeUsername, isRevealed, lastMsg) {
-  const isUnread = c.last_sender_id && c.last_sender_id !== currentUser?.id && !c.last_read;
-  
+  const isUnread = c.last_sender_id && Number(c.last_sender_id) !== Number(currentUser?.id) && !c.last_read;
+  const isSentByMe = c.last_sender_id && Number(c.last_sender_id) === Number(currentUser?.id);
+
+  // Build preview text
+  let previewText = '';
+  let previewPrefix = '';
+  let previewIcon = '';
+  if (!c.last_message) {
+    previewText = isRevealed
+      ? '\u2728 Identities Revealed'
+      : '<span class="italic text-on-surface-variant/50">Tap to start chatting</span>';
+  } else if (c.last_message.startsWith('/uploads/voice/')) {
+    previewIcon = '<span class="material-symbols-outlined text-[13px] align-middle mr-0.5" style="vertical-align:-2px">mic</span>';
+    previewText = 'Voice note';
+  } else {
+    const raw = c.last_message.length > 48
+      ? escapeHtml(c.last_message.substring(0, 48)) + '\u2026'
+      : escapeHtml(c.last_message);
+    previewText = raw;
+  }
+  if (isSentByMe && c.last_message) {
+    previewPrefix = '<span class="text-on-surface-variant/70">You: </span>';
+  }
+
   return `
-    <a href="chat.html?id=${c.id}" class="w-full flex items-center gap-4 p-4 rounded-2xl hover:bg-surface-container-low mb-2 transition-colors fade-in relative ${isUnread ? 'bg-primary-fixed/10 border border-primary/10' : ''}">
-      <div class="w-14 h-14 rounded-full overflow-hidden shrink-0 border border-outline-variant/30 relative">
-        ${getAvatarHtml(c.other_username, c.other_avatar)}
-        <div class="presence-dot absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full border-2 border-surface hidden" data-user-id="${c.other_user_id}"></div>
-      </div>
-      <div class="flex-1 min-w-0 text-left">
-        <div class="flex justify-between items-baseline mb-0.5">
-          <h3 class="font-bold text-on-surface capitalize truncate text-[15px]">${safeUsername}</h3>
-          ${c.last_message_time ? `<span class="text-[11px] text-on-surface-variant/60 shrink-0 ml-2">${formatChatTime(c.last_message_time)}</span>` : ''}
+    <a href="chat.html?id=${c.id}" class="tg-chat-row ${isUnread ? 'unread-row' : ''}">
+      <!-- Avatar + presence dot -->
+      <div class="relative shrink-0">
+        <div class="w-[52px] h-[52px] rounded-full overflow-hidden shadow-sm">
+          ${getAvatarHtml(c.other_username, c.other_avatar)}
         </div>
-        <div class="flex items-center gap-1.5">
-          ${lastMsg}
+        <div class="presence-dot absolute bottom-0.5 right-0.5 w-3 h-3 rounded-full border-2 border-surface bg-emerald-500 hidden" data-user-id="${c.other_user_id}"></div>
+      </div>
+      <!-- Text info -->
+      <div class="flex-1 min-w-0">
+        <!-- Row 1: name + time -->
+        <div class="flex items-center justify-between mb-0.5">
+          <span class="font-bold text-on-surface capitalize truncate text-[15px] leading-snug">${safeUsername}</span>
+          <div class="flex items-center gap-1 shrink-0 ml-2">
+            ${isSentByMe ? `<span class="material-symbols-outlined text-[13px] ${c.last_read ? 'text-blue-500' : 'text-on-surface-variant/40'}" style="font-variation-settings:'FILL' ${c.last_read ? 1 : 0}">done_all</span>` : ''}
+            ${c.last_message_time ? `<span class="text-[11.5px] whitespace-nowrap ${isUnread ? 'text-primary font-semibold' : 'text-on-surface-variant/60'}">${formatChatTime(c.last_message_time)}</span>` : ''}
+          </div>
+        </div>
+        <!-- Row 2: preview + unread badge -->
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[13px] truncate leading-snug ${isUnread ? 'font-medium text-on-surface' : 'text-on-surface-variant'}">${previewPrefix}${previewIcon}${previewText}</p>
+          ${isUnread ? '<div class="unread-badge">1</div>' : ''}
         </div>
       </div>
-      ${isUnread ? '<div class="w-2.5 h-2.5 rounded-full bg-primary shrink-0"></div>' : ''}
     </a>
   `;
 }
