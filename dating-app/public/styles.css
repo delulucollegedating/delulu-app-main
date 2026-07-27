@@ -829,7 +829,8 @@ textarea:focus-visible {
 /* Ensures chat layout uses dynamic viewport height so keyboard doesn't cover input */
 @supports (height: 100dvh) {
   #app-root { height: 100dvh; }
-  .h-\\[100dvh\\] { height: 100dvh !important; }
+  /* Tailwind's h-[100dvh] equivalent — used on the main chat container */
+  .h-dvh-full { height: 100dvh !important; }
 }
 
 /* ===== Fade-in Animation for Messages ===== */
@@ -851,3 +852,208 @@ textarea:focus-visible {
   will-change: transform;
   transform: translateZ(0);
 }
+
+/* ===== Chat Infinite Scroll — Load More Indicator ===== */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.animate-spin {
+  animation: spin 0.8s linear infinite;
+}
+
+/* Sentinel div — invisible trigger element for IntersectionObserver */
+#chat-top-sentinel {
+  height: 4px;
+  width: 100%;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+/* Loading indicator that appears at the top when fetching older messages */
+#older-msgs-loader {
+  animation: fadeInUp 0.15s ease-out both;
+}
+
+/* ============================================================
+   TELEGRAM-LIKE CHAT EXPERIENCE (v244)
+   ============================================================ */
+
+/* ── Chat Wallpaper ───────────────────────────────────────── */
+/* Warm cream with subtle dot-grid pattern */
+#chat-messages {
+  background-color: #ede8e1 !important;
+  background-image: radial-gradient(circle, rgba(165,59,41,0.09) 1.5px, transparent 1.5px) !important;
+  background-size: 28px 28px !important;
+  background-attachment: local !important;
+}
+body.dark #chat-messages {
+  background-color: #181a1c !important;
+  background-image: radial-gradient(circle, rgba(255,180,166,0.07) 1.5px, transparent 1.5px) !important;
+  background-size: 28px 28px !important;
+}
+
+/* ── Telegram Message Bubbles ─────────────────────────────── */
+.msg-bubble {
+  position: relative;
+  padding: 8px 12px 6px 12px !important;
+  min-width: 60px;
+  max-width: 78% !important;
+  word-wrap: break-word !important;
+  overflow-wrap: anywhere !important;
+  word-break: break-word !important;
+  box-sizing: border-box !important;
+  transition: border-radius 0.12s ease;
+}
+
+/* Sent (right) — warm red gradient */
+.msg-bubble-sent {
+  background: linear-gradient(155deg, #b84030 0%, #a53b29 100%) !important;
+  color: white !important;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2), 0 0 0 0.5px rgba(0,0,0,0.07) !important;
+}
+
+/* Received (left) — white card */
+.msg-bubble-received {
+  background: #ffffff !important;
+  color: #1b1c1c !important;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.10), 0 0 0 0.5px rgba(0,0,0,0.04) !important;
+}
+body.dark .msg-bubble-received {
+  background: #2c2e30 !important;
+  color: #e3e2e0 !important;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.35), 0 0 0 0.5px rgba(255,255,255,0.04) !important;
+}
+
+/* ── Bubble Tail Shapes ────────────────────────────────────── */
+/* Last in group (or solo) — sharp corner acts as tail */
+.msg-bubble-sent.msg-tail    { border-radius: 18px 18px 4px 18px !important; }
+.msg-bubble-received.msg-tail { border-radius: 18px 18px 18px 4px !important; }
+
+/* Middle/first in group — no tail, squared on sender side */
+.msg-bubble-sent.msg-no-tail    { border-radius: 18px 4px 4px 18px !important; }
+.msg-bubble-received.msg-no-tail { border-radius: 4px 18px 18px 4px !important; }
+
+/* ── Row Spacing (message grouping) ───────────────────────── */
+/* Grouped consecutive messages: very tight spacing */
+.msg-row-grouped    { margin-top: 2px !important; margin-bottom: 0 !important; }
+/* First message from a new sender: generous gap */
+.msg-row-new-sender { margin-top: 14px !important; }
+
+/* ── Meta (timestamp + status tick) ──────────────────────── */
+.msg-meta { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
+.msg-bubble-sent .msg-meta     { color: rgba(255,255,255,0.72) !important; }
+.msg-bubble-received .msg-meta { color: rgba(87,66,62,0.65) !important; }
+body.dark .msg-bubble-received .msg-meta { color: rgba(196,196,192,0.65) !important; }
+
+/* Ensure paragraph text color inherits from bubble */
+.msg-bubble-sent p  { color: white !important; }
+.msg-bubble-received p { color: inherit !important; }
+
+/* ── Animated Typing Dots ─────────────────────────────────── */
+.tg-typing-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  vertical-align: middle;
+  margin-right: 3px;
+}
+.tg-typing-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: tgDotBounce 1.2s ease-in-out infinite;
+}
+.tg-typing-dot:nth-child(2) { animation-delay: 0.18s; }
+.tg-typing-dot:nth-child(3) { animation-delay: 0.36s; }
+@keyframes tgDotBounce {
+  0%, 60%, 100% { transform: translateY(0);   opacity: 0.45; }
+  30%           { transform: translateY(-5px); opacity: 1;    }
+}
+
+/* ── Unread Count Badge ───────────────────────────────────── */
+.unread-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  border-radius: 10px;
+  padding: 0 5px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #a53b29;
+  color: white;
+  line-height: 1;
+  flex-shrink: 0;
+}
+body.dark .unread-badge {
+  background: #ffb4a6;
+  color: #3f0300;
+}
+
+/* ── Telegram-Style Chat List Rows ────────────────────────── */
+.tg-chat-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  text-decoration: none;
+  color: inherit;
+  position: relative;
+  transition: background 0.13s ease;
+  cursor: pointer;
+}
+.tg-chat-row:hover  { background: rgba(165,59,41,0.05); }
+.tg-chat-row.unread-row { background: rgba(165,59,41,0.04); }
+body.dark .tg-chat-row:hover    { background: rgba(255,180,166,0.07); }
+body.dark .tg-chat-row.unread-row { background: rgba(255,180,166,0.05); }
+
+/* Hairline divider (skips avatar area) */
+.tg-chat-row::after {
+  content: '';
+  position: absolute;
+  left: 80px;
+  right: 0;
+  bottom: 0;
+  height: 0.5px;
+  background: rgba(222,192,186,0.6);
+  pointer-events: none;
+}
+body.dark .tg-chat-row::after { background: rgba(80,76,72,0.5); }
+.tg-chat-row:last-child::after { display: none; }
+
+/* ── Auto-Growing Textarea (chat input) ───────────────────── */
+#chat-input {
+  resize: none !important;
+  min-height: 22px !important;
+  max-height: 120px !important;
+  overflow-y: auto !important;
+  line-height: 1.45 !important;
+  padding-top: 7px !important;
+  padding-bottom: 7px !important;
+  display: block;
+  scrollbar-width: thin;
+}
+
+/* ── Date Divider refinement ──────────────────────────────── */
+#chat-messages .date-divider-pill {
+  background: rgba(165,59,41,0.12);
+  color: #7a2819;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-radius: 12px;
+  padding: 3px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+body.dark #chat-messages .date-divider-pill {
+  background: rgba(255,180,166,0.12);
+  color: #ffb4a6;
+}
+

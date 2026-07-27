@@ -113,7 +113,7 @@
         <span id="connection-bar-text">Reconnecting...</span>
       </div>
       
-      <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-1 bg-gradient-to-b from-surface-bright to-surface flex flex-col-reverse">
+      <div id="chat-messages" class="flex-1 overflow-y-auto p-3 flex flex-col-reverse">
         <!-- Messages injected here -->
       </div>
       
@@ -142,8 +142,8 @@
           </div>
         </div>
         
-        <form id="chat-form" class="flex items-center gap-2 bg-surface-container-low rounded-full p-1 pr-1 shadow-sm" action="javascript:void(0)" onsubmit="return false">
-          <input id="chat-input" class="flex-1 bg-transparent border-none text-sm px-4 focus:ring-0 placeholder-outline outline-none" placeholder="Type a message..." type="text" autocomplete="off"/>
+        <form id="chat-form" class="flex items-end gap-2 bg-surface-container-low rounded-3xl p-1 pr-1 shadow-sm" action="javascript:void(0)" onsubmit="return false">
+          <textarea id="chat-input" class="flex-1 bg-transparent border-none text-sm px-4 focus:ring-0 placeholder-outline outline-none" placeholder="Type a message..." autocomplete="off" rows="1"></textarea>
           
           <!-- Mic Button for Voice Note -->
           <button type="button" id="btn-record-voice" class="w-9 h-9 flex items-center justify-center bg-surface-variant text-on-surface-variant rounded-full hover:bg-surface-dim hover:text-primary transition-all shrink-0 shadow-sm relative cursor-pointer" title="Record Voice Note">
@@ -274,10 +274,10 @@
 
   </div>
 
-  <link rel="preload" href="js/shared.js?v=243" as="script">
-  <script src="js/shared.js?v=243"></script>
-  <script src="js/chat-cache.js?v=243"></script>
+  <link rel="preload" href="js/shared.js?v=244" as="script">
+  <script src="js/shared.js?v=244"></script>
+  <script src="js/chat-cache.js?v=244"></script>
   <script src="js/crypto.js"></script>
-  <script src="js/chat.js?v=243"></script>
+  <script src="js/chat.js?v=244"></script>
 </body>
 </html>

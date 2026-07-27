@@ -1,9 +1,21 @@
 // ===== IndexedDB Local Chat Cache (via Dexie) =====
 // Provides instant render on chat open + offline outbox + delta sync
+// v2: Added compound index for efficient cursor-based pagination (oldest-first history load)
 
 const CHAT_CACHE_DB = new Dexie('DeluluChatCache');
+
+// v1 schema (preserved — Dexie requires all versions listed)
 CHAT_CACHE_DB.version(1).stores({
   messages: '&id, connection_id, created_at, sender_id',
+  pending: '&client_uuid, connection_id, created_at',
+  meta: '&key'
+});
+
+// v2 schema — adds compound index for efficient time-cursor queries
+// The [connection_id+created_at] compound index powers getCachedOlderMessages()
+// without doing a full table scan of potentially thousands of cached messages.
+CHAT_CACHE_DB.version(2).stores({
+  messages: '&id, connection_id, created_at, sender_id, [connection_id+created_at]',
   pending: '&client_uuid, connection_id, created_at',
   meta: '&key'
 });
@@ -48,16 +60,63 @@ const messageCache = {
     }
   },
 
-  async getCachedMessages(connectionId) {
+  /**
+   * Get the latest N cached messages for a connection (cold open / initial render).
+   * Returns oldest-first so the UI flex-col-reverse layout renders newest at bottom.
+   * @param {string|number} connectionId
+   * @param {number} limit  Max messages to return (default 30 — matches server page size)
+   */
+  async getCachedMessages(connectionId, limit = 30) {
     try {
-      // Match the server contract: oldest first. appendMessage() handles the
-      // flex-col-reverse/prepend layout, so cached and network renders must use
-      // the same order to avoid flipped conversations on cold open.
+      // Use the compound index to sort by [connection_id, created_at] efficiently
+      const all = await CHAT_CACHE_DB.messages
+        .where('[connection_id+created_at]')
+        .between(
+          [String(connectionId), Dexie.minKey],
+          [String(connectionId), Dexie.maxKey]
+        )
+        .reverse()           // newest first
+        .limit(limit)
+        .toArray();
+
+      // Reverse back to oldest-first for rendering
+      return all.reverse();
+    } catch (e) {
+      // Fallback to old query if compound index isn't ready yet
+      try {
+        const msgs = await CHAT_CACHE_DB.messages
+          .where('connection_id')
+          .equals(String(connectionId))
+          .sortBy('created_at');
+        return msgs.slice(-limit);
+      } catch (e2) {
+        return [];
+      }
+    }
+  },
+
+  /**
+   * Get cached messages OLDER than a given timestamp (infinite scroll / load more).
+   * Used when the user scrolls to the top and requests history.
+   * @param {string|number} connectionId
+   * @param {string} beforeTimestamp  ISO string — fetch messages with created_at < this
+   * @param {number} limit
+   */
+  async getCachedOlderMessages(connectionId, beforeTimestamp, limit = 30) {
+    try {
       const msgs = await CHAT_CACHE_DB.messages
-        .where('connection_id')
-        .equals(String(connectionId))
-        .sortBy('created_at');
-      return msgs;
+        .where('[connection_id+created_at]')
+        .between(
+          [String(connectionId), Dexie.minKey],
+          [String(connectionId), beforeTimestamp],
+          false, false           // exclusive upper bound
+        )
+        .reverse()               // newest-of-the-older-page first
+        .limit(limit)
+        .toArray();
+
+      // Reverse to oldest-first for prepending to chat UI
+      return msgs.reverse();
     } catch (e) {
       return [];
     }
@@ -69,6 +128,50 @@ const messageCache = {
       return entry ? entry.value : null;
     } catch (e) {
       return null;
+    }
+  },
+
+  /**
+   * Get the oldest cached message's timestamp for this connection.
+   * Used as the `before` cursor when requesting more history from the server.
+   */
+  async getOldestMessageTime(connectionId) {
+    try {
+      const msgs = await CHAT_CACHE_DB.messages
+        .where('[connection_id+created_at]')
+        .between(
+          [String(connectionId), Dexie.minKey],
+          [String(connectionId), Dexie.maxKey]
+        )
+        .limit(1)
+        .toArray();
+
+      return msgs.length > 0 ? msgs[0].created_at : null;
+    } catch (e) {
+      // Fallback
+      try {
+        const all = await CHAT_CACHE_DB.messages
+          .where('connection_id').equals(String(connectionId))
+          .sortBy('created_at');
+        return all.length > 0 ? all[0].created_at : null;
+      } catch (e2) {
+        return null;
+      }
+    }
+  },
+
+  /**
+   * Total count of cached messages for a connection.
+   * Lets the client know if the local cache can serve "Load More" or if it must hit the network.
+   */
+  async getTotalCachedCount(connectionId) {
+    try {
+      return await CHAT_CACHE_DB.messages
+        .where('connection_id')
+        .equals(String(connectionId))
+        .count();
+    } catch (e) {
+      return 0;
     }
   }
 };

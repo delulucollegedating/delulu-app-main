@@ -18,6 +18,13 @@ let pollingTimeout = null;
 let pollInterval = 3000;
 const maxInterval = 8000;
 
+// ── Pagination State ─────────────────────────────────────────────────────────
+// Tracks infinite-scroll-upward state for loading older message history.
+let hasMoreMessages = false;       // true when server says there are older pages
+let oldestMessageTimestamp = null; // ISO string — used as 'before' cursor
+let _loadingOlderMessages = false; // guard to prevent duplicate requests
+let _topSentinelObserver = null;   // IntersectionObserver for the top sentinel div
+
 // SSE realtime stream for connection state and message nudges.
 // It keeps chat updates instant while avoiding repeated full HTTP polling.
 let eventSource = null;
@@ -432,6 +439,14 @@ async function initializeChat() {
   currentConnId = connId;
   lastMessageTimestamp = null;
   hasLoadedInitialMessages = false;
+  // Reset pagination state for the new chat thread
+  hasMoreMessages = false;
+  oldestMessageTimestamp = null;
+  _loadingOlderMessages = false;
+  if (_topSentinelObserver) {
+    _topSentinelObserver.disconnect();
+    _topSentinelObserver = null;
+  }
   loadChatInfo();
   
   // ── Socket setup ──────────────────────────────────────────────────────────
@@ -782,7 +797,14 @@ async function initializeChat() {
   }
 
   // Text input changed (show/hide mic or send buttons + notify typing)
+  // Auto-grow textarea handler
+  const resizeChatInput = () => {
+    chatInput.style.height = 'auto';
+    chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
+  };
+
   chatInput.oninput = () => {
+    resizeChatInput();
     if (chatInput.value.trim().length > 0) {
       chatSendBtn.classList.remove('hidden');
       chatMicBtn.classList.add('hidden');
@@ -799,6 +821,16 @@ async function initializeChat() {
     }
   };
 
+  // Enter sends, Shift+Enter inserts a newline
+  chatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (chatInput.value.trim()) {
+        chatForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      }
+    }
+  });
+
   chatInput.onblur = () => {
     notifyTypingState(false);
   };
@@ -813,6 +845,7 @@ async function initializeChat() {
 
     // Clear input & buttons instantly
     chatInput.value = '';
+    chatInput.style.height = 'auto'; // Reset textarea auto-grow height
     chatSendBtn.classList.add('hidden');
     chatMicBtn.classList.remove('hidden');
 
@@ -1249,6 +1282,7 @@ let isPartnerOnline = false;
 let otherTypingTimer = null;
 let lastTypingStateSent = false;
 let typingThrottleTimer = null;
+let _typingLeadingEdgeSent = false; // prevents sending typing=true more than once per 2s burst
 
 function handlePresenceChange(isOnline) {
   isPartnerOnline = isOnline;
@@ -1262,7 +1296,7 @@ function handleOtherUserTyping(isTyping) {
   if (otherTypingTimer) clearTimeout(otherTypingTimer);
 
   if (isTyping) {
-    statusEl.innerHTML = `<span class="flex items-center gap-1.5 text-primary font-semibold italic animate-pulse"><span class="material-symbols-outlined text-[14px]">edit</span> typing...</span>`;
+    statusEl.innerHTML = `<span class="flex items-center gap-1 text-primary font-semibold text-xs"><span class="tg-typing-dots"><span class="tg-typing-dot"></span><span class="tg-typing-dot"></span><span class="tg-typing-dot"></span></span>typing</span>`;
     otherTypingTimer = setTimeout(() => {
       updatePresenceDisplay(isPartnerOnline);
     }, 3500);
@@ -1285,8 +1319,19 @@ function updatePresenceDisplay(isOnline) {
 function notifyTypingState(isTyping) {
   if (!currentConnId) return;
   if (lastTypingStateSent === isTyping) return;
-  lastTypingStateSent = isTyping;
 
+  // Leading-edge throttle: send typing=true immediately on first keypress,
+  // but suppress any further typing=true signals for 2 seconds to prevent
+  // spamming the server with one API call per keystroke.
+  if (isTyping) {
+    if (_typingLeadingEdgeSent) return; // suppressed — cooldown active
+    _typingLeadingEdgeSent = true;
+    setTimeout(() => { _typingLeadingEdgeSent = false; }, 2000);
+  } else {
+    _typingLeadingEdgeSent = false;
+  }
+
+  lastTypingStateSent = isTyping;
   apiCall(`/api/connections/${currentConnId}/typing`, 'POST', { isTyping: !!isTyping }).catch(() => {});
 }
 
@@ -1569,6 +1614,182 @@ function showChatSkeleton() {
   });
 }
 
+// ── Load Older Messages (Infinite Scroll Upward) ────────────────────────────
+// Triggered by the IntersectionObserver when the top sentinel enters the viewport.
+// Fetches the next page of older messages using oldestMessageTimestamp as cursor.
+async function loadOlderMessages() {
+  if (!currentConnId || _loadingOlderMessages || !hasMoreMessages) return;
+  _loadingOlderMessages = true;
+
+  const cont = document.getElementById('chat-messages');
+  if (!cont) { _loadingOlderMessages = false; return; }
+
+  // Show a subtle loading indicator at the top
+  const loader = document.createElement('div');
+  loader.id = 'older-msgs-loader';
+  loader.className = 'flex justify-center items-center py-3 gap-2 text-on-surface-variant text-xs font-medium fade-in';
+  loader.innerHTML = '<span class="w-4 h-4 rounded-full border-2 border-primary/30 border-t-primary animate-spin"></span> Loading older messages...';
+  cont.appendChild(loader); // append = top of flex-col-reverse = visual top
+
+  try {
+    // 1. Try to serve from IndexedDB cache first (zero network cost)
+    if (oldestMessageTimestamp && typeof messageCache !== 'undefined') {
+      const cachedOlder = await messageCache.getCachedOlderMessages(
+        currentConnId, oldestMessageTimestamp, 30
+      );
+
+      if (cachedOlder.length > 0) {
+        // Capture scroll position before inserting to prevent jump
+        const prevScrollHeight = cont.scrollHeight;
+
+        // Update oldest cursor
+        oldestMessageTimestamp = cachedOlder[0].created_at;
+
+        // Prepend older messages (they are oldest-first, so append in flex-col-reverse = visual top)
+        const tempLastDate = lastMessageDate;
+        const tempLastSender = lastSenderId;
+        lastMessageDate = null;
+        lastSenderId = null;
+
+        for (const m of cachedOlder) {
+          await appendMessageAtTop(m);
+        }
+
+        // Restore rendering state for future messages
+        lastMessageDate = tempLastDate;
+        lastSenderId = tempLastSender;
+
+        // Maintain scroll position — user should not feel any jump
+        const newScrollHeight = cont.scrollHeight;
+        cont.scrollTop = cont.scrollTop + (newScrollHeight - prevScrollHeight);
+
+        // Check if the cache has even older messages
+        const cachedCount = await messageCache.getTotalCachedCount(currentConnId);
+        const oldestCached = await messageCache.getOldestMessageTime(currentConnId);
+        // If the oldest we displayed equals the oldest in cache, we may need to hit network
+        if (oldestCached && oldestMessageTimestamp <= oldestCached) {
+          // Cache is exhausted — check network for older data
+          hasMoreMessages = true; // let next scroll attempt hit network
+        }
+
+        loader.remove();
+        _loadingOlderMessages = false;
+        return;
+      }
+    }
+
+    // 2. Cache miss — fetch from server
+    const params = new URLSearchParams({ limit: '30' });
+    if (oldestMessageTimestamp) params.set('before', oldestMessageTimestamp);
+
+    const data = await apiCall(`/api/messages/${currentConnId}?${params}`);
+    const older = data.messages || [];
+    hasMoreMessages = data.has_more || false;
+
+    if (older.length > 0) {
+      // Cache these messages for future offline access
+      if (typeof messageCache !== 'undefined') {
+        messageCache.cacheMessages(currentConnId, older).catch(() => {});
+      }
+
+      const prevScrollHeight = cont.scrollHeight;
+      oldestMessageTimestamp = older[0].created_at;
+
+      // Temporarily reset date/sender tracking so headers render correctly for this older page
+      const savedDate = lastMessageDate;
+      const savedSender = lastSenderId;
+      lastMessageDate = null;
+      lastSenderId = null;
+
+      for (const m of older) {
+        await appendMessageAtTop(m);
+      }
+
+      lastMessageDate = savedDate;
+      lastSenderId = savedSender;
+
+      // Restore scroll to prevent jump
+      const newScrollHeight = cont.scrollHeight;
+      cont.scrollTop = cont.scrollTop + (newScrollHeight - prevScrollHeight);
+    }
+
+    if (!hasMoreMessages) {
+      // Show "beginning of conversation" pill
+      const endPill = document.createElement('div');
+      endPill.className = 'flex justify-center my-4 fade-in';
+      endPill.innerHTML = '<span class="px-4 py-1.5 rounded-full bg-surface-variant/60 text-on-surface-variant text-[11px] font-semibold backdrop-blur-sm">✨ Beginning of conversation</span>';
+      cont.appendChild(endPill);
+    }
+  } catch (err) {
+    console.warn('loadOlderMessages error:', err);
+  } finally {
+    loader.remove();
+    _loadingOlderMessages = false;
+  }
+}
+
+/**
+ * Like appendMessage() but inserts at the visual TOP (bottom of DOM in flex-col-reverse).
+ * Used exclusively by loadOlderMessages() for historical pages.
+ */
+async function appendMessageAtTop(m) {
+  const cont = document.getElementById('chat-messages');
+  if (!cont || !m) return;
+  // Skip if already in the DOM
+  if (m.id && document.querySelector(`[data-msg-id="${m.id}"]`)) return;
+  // Temporarily swap prepend → append so message goes to visual top
+  const _origPrepend = cont.prepend.bind(cont);
+  cont.prepend = (...args) => cont.append(...args);
+  // Also mark that we're in top-append mode so grouping is skipped
+  cont._appendingAtTop = true;
+  try {
+    await appendMessage(m, false);
+  } finally {
+    cont.prepend = _origPrepend;
+    cont._appendingAtTop = false;
+  }
+}
+
+/**
+ * Wire up the IntersectionObserver on the top sentinel div so loadOlderMessages()
+ * fires automatically when the user scrolls to the top of the chat.
+ */
+function initTopSentinelObserver() {
+  if (_topSentinelObserver) {
+    _topSentinelObserver.disconnect();
+    _topSentinelObserver = null;
+  }
+
+  const cont = document.getElementById('chat-messages');
+  if (!cont) return;
+
+  // Create or find the sentinel
+  let sentinel = document.getElementById('chat-top-sentinel');
+  if (!sentinel) {
+    sentinel = document.createElement('div');
+    sentinel.id = 'chat-top-sentinel';
+    sentinel.className = 'h-1 w-full flex-shrink-0';
+    sentinel.setAttribute('aria-hidden', 'true');
+    cont.appendChild(sentinel); // append = visual top in flex-col-reverse
+  }
+
+  _topSentinelObserver = new IntersectionObserver(
+    (entries) => {
+      const entry = entries[0];
+      if (entry.isIntersecting && hasMoreMessages && !_loadingOlderMessages) {
+        loadOlderMessages();
+      }
+    },
+    {
+      root: cont,
+      rootMargin: '200px 0px 0px 0px', // trigger 200px before user actually hits the top
+      threshold: 0
+    }
+  );
+
+  _topSentinelObserver.observe(sentinel);
+}
+
 async function loadMessages(isInitial = false, forceFull = false) {
   const cont = document.getElementById('chat-messages');
   if (!cont) return;
@@ -1617,6 +1838,11 @@ async function loadMessages(isInitial = false, forceFull = false) {
     if (isInitial && !hasCachedMessages) {
       cont.innerHTML = '';
     }
+
+    // Update pagination state from server response
+    if (isInitial || forceFull) {
+      hasMoreMessages = data.has_more || false;
+    }
     
     if (data.messages && data.messages.length > 0) {
       const existingIds = new Set();
@@ -1641,6 +1867,14 @@ async function loadMessages(isInitial = false, forceFull = false) {
         }
         scrollToBottom();
       }
+
+      // Track the oldest message timestamp for the load-more cursor
+      if ((isInitial || forceFull) && data.messages.length > 0) {
+        const oldest = data.messages[0].created_at;
+        if (!oldestMessageTimestamp || oldest < oldestMessageTimestamp) {
+          oldestMessageTimestamp = oldest;
+        }
+      }
       
       // Cache all messages for next instant render
       if (typeof messageCache !== 'undefined') {
@@ -1650,6 +1884,11 @@ async function loadMessages(isInitial = false, forceFull = false) {
     
     // Mark as read after loading
     setTimeout(() => markMessagesAsRead(), 300);
+
+    // Initialise the top sentinel observer after the first successful load
+    if (isInitial) {
+      initTopSentinelObserver();
+    }
   } catch (err) {
     console.error('loadMessages caught error:', err);
     if (!hasCachedMessages) {
@@ -1704,7 +1943,7 @@ function refreshExistingMessage(m) {
   if (!m || !m.id) return false;
   const el = document.querySelector(`[data-msg-id="${m.id}"]`);
   if (!el) return false;
-  const inner = el.querySelector('.rounded-2xl');
+  const inner = el.querySelector('.msg-bubble') || el.querySelector('.rounded-2xl');
   if (!inner) return true;
 
   if (m.deleted_at) {
@@ -1716,7 +1955,7 @@ function refreshExistingMessage(m) {
 
     const timeEl = document.createElement('div');
     const isMe = Number(m.sender_id) === Number(currentUser.id);
-    timeEl.className = `text-[10px] mt-1 text-right ${isMe ? 'text-white/70' : 'text-on-surface-variant/70'}`;
+    timeEl.className = `msg-meta text-[10px] mt-1`;
     timeEl.textContent = formatTime(m.created_at);
     inner.appendChild(timeEl);
 
@@ -1779,7 +2018,7 @@ function showMessageMenu(e, msg, bubbleEl) {
           p.textContent = 'This message was deleted';
           bubbleEl.appendChild(p);
           const timeEl = document.createElement('div');
-          timeEl.className = 'text-[10px] mt-1 text-right text-white/70';
+          timeEl.className = 'msg-meta text-[10px] mt-1';
           timeEl.textContent = 'deleted';
           bubbleEl.appendChild(timeEl);
           const wrapper = bubbleEl.closest('[data-msg-id]');
@@ -1842,14 +2081,39 @@ async function appendMessage(m, scrollToBottom = true) {
   const isSenderChange = lastSenderId !== null && Number(lastSenderId) !== Number(m.sender_id);
   lastSenderId = m.sender_id;
 
+  // ── Telegram-style grouping ───────────────────────────────────────────────
+  // Find the most recently rendered message (DOM first child = visual bottom in flex-col-reverse)
+  // If it's from the same sender, update its bubble to remove the tail (it's now middle of group)
+  // and tighten the spacing on the new message.
+  const _prevMsgEl = (() => {
+    for (const child of cont.children) {
+      if (child.dataset && child.dataset.senderId !== undefined) return child;
+    }
+    return null;
+  })();
+  const _prevSenderId = _prevMsgEl?.dataset?.senderId;
+  const _isGrouped = !isSenderChange && _prevSenderId !== undefined && !m.is_sending;
+
+  if (_isGrouped && _prevMsgEl) {
+    const prevBubble = _prevMsgEl.querySelector('.msg-bubble');
+    if (prevBubble) {
+      prevBubble.classList.remove('msg-tail');
+      prevBubble.classList.add('msg-no-tail');
+    }
+  }
+
   const div = document.createElement('div');
-  div.className = `flex group items-end gap-2 ${isMe ? 'justify-end pl-10' : 'justify-start pr-10'} w-full fade-in ${isSenderChange ? 'mt-3.5 mb-1' : 'mt-1 mb-0.5'}`;
-  if (m.id) div.setAttribute('data-msg-id', m.id);
+  const _rowSpacing = _isGrouped
+    ? 'msg-row-grouped'
+    : (isSenderChange ? 'msg-row-new-sender' : 'mt-2');
+  div.className = `flex group items-end gap-2 ${isMe ? 'justify-end pl-10' : 'justify-start pr-10'} w-full fade-in ${_rowSpacing}`;
+  if (m.id)    div.setAttribute('data-msg-id', m.id);
   if (m.tempId) div.id = m.tempId;
   if (m.is_sending) div.classList.add('opacity-60');
-  
+  div.dataset.senderId = String(m.sender_id);
+
   const inner = document.createElement('div');
-  inner.className = `max-w-[75%] min-w-0 break-words overflow-hidden rounded-2xl p-3 relative ${isMe ? 'bg-primary text-white rounded-tr-sm shadow-sm' : 'bg-surface-container-low text-on-surface rounded-tl-sm shadow-sm border border-outline-variant/10'}`;
+  inner.className = `msg-bubble ${isMe ? 'msg-bubble-sent' : 'msg-bubble-received'} msg-tail min-w-0 relative`;
   
   if (m.deleted_at !== null && m.deleted_at !== undefined) {
     const p = document.createElement('p');
@@ -1858,7 +2122,7 @@ async function appendMessage(m, scrollToBottom = true) {
     inner.appendChild(p);
     
     const timeEl = document.createElement('div');
-    timeEl.className = `text-[10px] mt-1 text-right ${isMe ? 'text-white/70' : 'text-on-surface-variant/70'}`;
+    timeEl.className = 'msg-meta text-[10px] mt-1';
     timeEl.textContent = time;
     inner.appendChild(timeEl);
     
@@ -1927,7 +2191,7 @@ async function appendMessage(m, scrollToBottom = true) {
   
   // Time + Status row
   const metaRow = document.createElement('div');
-  metaRow.className = `text-[10px] mt-1 text-right flex items-center justify-end gap-0.5 ${isMe ? 'text-white/70' : 'text-on-surface-variant/70'}`;
+  metaRow.className = 'msg-meta text-[10px] mt-1';
   
   const timeSpan = document.createElement('span');
   timeSpan.textContent = time;
