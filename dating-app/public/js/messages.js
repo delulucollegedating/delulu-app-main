@@ -263,7 +263,7 @@ function updateChatListItem(data) {
   conn.last_sender_id = senderId;
   
   // If the current user sent the message (via API), mark as read immediately
-  if (senderId === currentUser?.id) {
+  if (Number(senderId) === Number(currentUser?.id)) {
     conn.last_read = true;
   } else {
     conn.last_read = false;

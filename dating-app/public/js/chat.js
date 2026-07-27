@@ -451,7 +451,7 @@ function isMessageRead(msg) {
 }
 
 function isUnreadFromOther(msg) {
-  if (!msg || Number(msg.sender_id) === Number(currentUser.id) || msg.deleted_at) return false;
+  if (!msg || !currentUser || Number(msg.sender_id) === Number(currentUser.id) || msg.deleted_at) return false;
   if (!myLastReadAt) return true;
   if (!msg.created_at) return false;
   return new Date(msg.created_at) > new Date(myLastReadAt);
