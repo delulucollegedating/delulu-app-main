@@ -85,7 +85,7 @@
             <p id="chat-status" class="text-[11px] md:text-xs text-primary font-medium flex items-center gap-1 truncate"></p>
           </div>
         </div>
-        <div class="flex items-center gap-1.5 shrink-0">
+        <div class="flex items-center gap-1 shrink-0">
           <!-- Secondary chat actions live in the overflow menu to keep the header calm. -->
           <button id="btn-identity-reveal" class="px-2.5 py-1 btn-primary text-white rounded-full text-[11px] md:text-xs font-bold transition-all shadow-sm hidden shrink-0" aria-label="Reveal Identity">
             Reveal
@@ -93,10 +93,7 @@
           <button id="btn-face-reveal" class="px-2.5 py-1 btn-primary text-white rounded-full text-[11px] md:text-xs font-bold transition-all shadow-sm hidden shrink-0" aria-label="Face Reveal Video Meeting">
             Let's Meet
           </button>
-          <button id="btn-theme-toggle-chat" class="p-1 text-on-surface-variant hover:text-primary transition-colors shrink-0 flex items-center justify-center" title="Toggle theme" aria-label="Toggle theme">
-            <span class="material-symbols-outlined text-lg">dark_mode</span>
-          </button>
-          <button id="btn-chat-more" class="p-1 text-on-surface-variant hover:text-primary transition-colors shrink-0 flex items-center justify-center" title="More Options" aria-label="More Chat Options">
+          <button id="btn-chat-more" class="p-1.5 text-on-surface-variant hover:text-primary hover:bg-surface-container-high rounded-full transition-all shrink-0 flex items-center justify-center" title="More Options" aria-label="More Chat Options">
             <span class="material-symbols-outlined text-lg">more_vert</span>
           </button>
         </div>
@@ -118,38 +115,38 @@
         <span id="new-messages-badge" class="hidden absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-error text-white text-[10px] font-bold leading-5 text-center" aria-live="polite"></span>
       </button>
       
-      <div class="p-3 bg-surface-container-lowest border-t border-outline-variant/10 z-10 pb-safe relative">
-        <!-- Recording overlay -->
-        <div id="recording-overlay" class="absolute inset-0 bg-surface-container-lowest flex items-center justify-between px-6 z-20 hidden transition-all duration-300">
-          <div class="flex items-center gap-3">
-            <div class="w-2.5 h-2.5 rounded-full bg-error animate-pulse"></div>
-            <span class="text-xs text-on-surface-variant font-medium">Recording voice note... <span id="record-timer">0:00</span></span>
-            <div class="flex gap-1 items-center justify-center h-4 shrink-0" id="record-wave">
-              <span class="w-0.5 h-2 bg-primary rounded-full animate-bounce" style="animation-delay: 0.1s"></span>
-              <span class="w-0.5 h-3 bg-primary rounded-full animate-bounce" style="animation-delay: 0.2s"></span>
-              <span class="w-0.5 h-1.5 bg-primary rounded-full animate-bounce" style="animation-delay: 0.3s"></span>
-              <span class="w-0.5 h-4 bg-primary rounded-full animate-bounce" style="animation-delay: 0.4s"></span>
-            </div>
+      <div class="bg-surface-container-lowest border-t border-outline-variant/10 z-10 pb-safe relative">
+        <!-- Quick Action Toolbar - Always visible above input -->
+        <div id="chat-toolbar" class="flex items-center justify-between px-3 pt-1.5 pb-1">
+          <div class="flex items-center gap-1.5">
+            <button type="button" id="btn-icebreaker-quick" class="flex items-center gap-1.5 px-3 py-1.5 bg-surface-container rounded-lg hover:bg-surface-container-high hover:text-primary transition-all text-xs font-semibold text-on-surface-variant shadow-sm cursor-pointer" title="Play Icebreaker Game" aria-label="Play Icebreaker Game">
+              <span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1">casino</span>
+              <span>Icebreaker</span>
+            </button>
+            <button type="button" id="btn-end-chat-quick" class="flex items-center gap-1.5 px-3 py-1.5 bg-error/5 border border-error/10 rounded-lg hover:bg-error/15 hover:text-error hover:border-error/30 transition-all text-xs font-semibold text-on-surface-variant/90 shadow-sm cursor-pointer" title="End this conversation permanently" aria-label="End Chat">
+              <span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1">heart_broken</span>
+              <span>End Chat</span>
+            </button>
           </div>
-          <div class="flex gap-4 shrink-0 items-center">
-            <button type="button" id="btn-record-stop" class="text-xs text-primary font-bold hover:underline">Stop & Send</button>
-            <span class="text-outline-variant/40">|</span>
-            <button type="button" id="btn-record-cancel" class="text-xs text-error font-semibold hover:underline">Cancel</button>
+          <div class="flex items-center gap-0.5">
+            <button type="button" id="btn-toolbar-theme" class="w-8 h-8 flex items-center justify-center rounded-lg text-on-surface-variant hover:text-primary hover:bg-surface-container-high transition-all" title="Toggle theme" aria-label="Toggle theme">
+              <span class="material-symbols-outlined text-sm">dark_mode</span>
+            </button>
+            <button type="button" id="btn-toolbar-more" class="w-8 h-8 flex items-center justify-center rounded-lg text-on-surface-variant hover:text-primary hover:bg-surface-container-high transition-all" title="More Options" aria-label="More Chat Options">
+              <span class="material-symbols-outlined text-sm">more_vert</span>
+            </button>
           </div>
         </div>
-        
-        <form id="chat-form" class="flex items-end gap-2 bg-surface-container-low rounded-3xl p-1 pr-1 shadow-sm" action="javascript:void(0)" onsubmit="return false">
-          <textarea id="chat-input" class="flex-1 bg-transparent border-none text-sm px-4 focus:ring-0 placeholder-outline outline-none" placeholder="Type a message..." autocomplete="off" rows="1"></textarea>
-          
-          <!-- Mic Button for Voice Note -->
-          <button type="button" id="btn-record-voice" class="w-9 h-9 flex items-center justify-center bg-surface-variant text-on-surface-variant rounded-full hover:bg-surface-dim hover:text-primary transition-all shrink-0 shadow-sm relative cursor-pointer" title="Record Voice Note">
-            <span class="material-symbols-outlined text-sm">mic</span>
-          </button>
 
-          <!-- Submit Text Button -->
-          <button type="submit" id="btn-chat-send" class="w-9 h-9 flex items-center justify-center bg-primary text-on-primary rounded-full hover:bg-primary/90 transition-colors shrink-0 shadow-sm hidden">
-            <span class="material-symbols-outlined text-sm material-fill">send</span>
-          </button>
+        <form id="chat-form" class="flex items-end gap-2 px-3 pb-3 pt-1" action="javascript:void(0)" onsubmit="return false">
+          <div class="flex-1 flex items-end bg-surface-container rounded-2xl border border-outline-variant/20 focus-within:border-primary/40 focus-within:shadow-sm transition-all">
+            <textarea id="chat-input" class="flex-1 bg-transparent border-none text-sm px-4 py-2.5 focus:ring-0 placeholder-outline outline-none resize-none" placeholder="Type a message..." autocomplete="off" rows="1"></textarea>
+
+            <!-- Submit Text Button -->
+            <button type="submit" id="btn-chat-send" class="w-9 h-9 mr-1.5 mb-1 flex items-center justify-center bg-primary text-on-primary rounded-full hover:bg-primary/90 transition-all shrink-0 shadow-sm cursor-pointer">
+              <span class="material-symbols-outlined text-sm material-fill">send</span>
+            </button>
+          </div>
         </form>
       </div>
     </div>
@@ -207,6 +204,22 @@
         <span class="material-symbols-outlined text-sm">content_copy</span> Copy Meeting Link
       </button>
       <button data-action="close" class="w-full text-outline font-semibold text-sm py-2 hover:text-on-surface transition-colors">Close</button>
+    </div>
+
+    <!-- End Chat Confirmation Modal -->
+    <div id="modal-end-chat" class="bg-surface rounded-3xl p-6 w-full max-w-sm ambient-shadow hidden transform scale-95 transition-all text-center">
+      <div class="w-20 h-20 bg-error/10 text-error rounded-full flex items-center justify-center mx-auto mb-4">
+        <span class="material-symbols-outlined text-4xl material-fill">heart_broken</span>
+      </div>
+      <h3 class="text-xl font-bold text-on-surface mb-1">End this chat?</h3>
+      <p class="text-on-surface-variant text-sm mb-1">This will permanently end the conversation and clear all messages.</p>
+      <p class="text-on-surface-variant/70 text-xs mb-6">This action cannot be undone.</p>
+      <button id="btn-end-chat-confirm" class="w-full py-3 bg-error text-white font-bold rounded-xl hover:bg-error/90 transition-all mb-3 flex items-center justify-center gap-2">
+        <span class="material-symbols-outlined text-lg">heart_broken</span> End Chat
+      </button>
+      <button data-action="close" class="w-full py-3 bg-surface-variant text-on-surface-variant font-bold rounded-xl hover:bg-surface-dim transition-all">
+        Cancel
+      </button>
     </div>
 
     <!-- Profile Peek Modal -->

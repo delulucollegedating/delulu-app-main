@@ -85,29 +85,6 @@ const io = new Server(server, {
 // Active in-memory games store (prevents Firestore write overload)
 const activeGames = new Map(); // connectionId -> active_game payload
 
-// Ensure upload folders exist
-fs.mkdirSync('public/uploads/voice', { recursive: true });
-const voiceStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, 'public/uploads/voice/');
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    // Force .webm extension for all voice uploads to prevent Stored XSS via HTML/JS files
-    cb(null, 'voice-' + uniqueSuffix + '.webm');
-  }
-});
-const voiceUpload = multer({
-  storage: voiceStorage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
-  fileFilter: (req, file, cb) => {
-    if (!file.mimetype.startsWith('audio/') && file.mimetype !== 'application/octet-stream') {
-      return cb(new Error('Only audio files are allowed'), false);
-    }
-    cb(null, true);
-  }
-});
-
 const PORT = process.env.PORT || 3000;
 
 // Note: email domain validation is defined inline in the send-verification-email handler
@@ -494,7 +471,7 @@ app.get(['/delulu.apk', '/api/download-apk'], (req, res) => {
   }
 });
 
-// Protect user-uploaded files (voice notes, etc.) with authentication
+// Protect user-uploaded files with authentication
 app.use('/uploads', requireAuth);
 
 // Static asset names are not fingerprinted, so a one-year immutable cache would
@@ -1780,88 +1757,6 @@ app.post('/api/messages/send', requireAuth, async (req, res) => {
   res.json({ success: true, message: msg });
 });
 
-// Send voice message
-app.post('/api/messages/upload-voice', requireAuth, (req, res, next) => {
-  voiceUpload.single('audio')(req, res, (err) => {
-    if (err) {
-      return res.status(400).json({ error: err.message || 'File upload failed' });
-    }
-    next();
-  });
-}, async (req, res) => {
-  try {
-    const { connection_id, duration, is_encrypted, iv } = req.body;
-    if (!req.file || !connection_id) {
-      return res.status(400).json({ error: 'Missing audio file or connection_id' });
-    }
-
-    const conn = await connectionOps.getConnection(connection_id, req.session.userId);
-    if (conn && conn._dataIntegrityError) {
-      return res.status(410).json({ error: 'This chat is no longer available — one of the accounts involved no longer exists.' });
-    }
-    if (!conn) return res.status(404).json({ error: 'Connection not found' });
-    if (!requireActiveConnection(conn, res)) return;
-
-    // Store the file path relative to public/
-    const content = `/uploads/voice/${req.file.filename}`;
-    const msg = await messageOps.send(
-      connection_id, 
-      req.session.userId, 
-      content, 
-      1, 
-      Math.round(duration || 0),
-      is_encrypted || 0,
-      iv || null
-    );
-    if (!msg) {
-      return res.status(503).json({ error: 'Voice message service is temporarily unavailable. Please retry.' });
-    }
-
-    const voiceSenderId = Number(req.session.userId);
-
-    // Emit socket event for real-time receipt — sender_id MUST be Number for client === checks
-    io.to(`chat:${connection_id}`).emit('new-message', {
-      ...msg,
-      sender_id: voiceSenderId
-    });
-    io.to(`chat:${connection_id}`).emit('chat-update', {
-      connectionId: connection_id,
-      lastMessage: '🎤 Voice note',
-      lastMessageTime: msg.created_at,
-      senderId: voiceSenderId
-    });
-
-    // Embed full message in SSE event (zero round-trip delivery)
-    connectionEmitter.emit(`update:${connection_id}`, {
-      type: 'message',
-      senderId: voiceSenderId,
-      msg: { ...msg, sender_id: voiceSenderId }
-    });
-
-    // Notify the OTHER user's per-user stream (messages list page)
-    const voiceOtherUserId = Number(conn.from_user_id) === voiceSenderId ? conn.to_user_id : conn.from_user_id;
-    userEmitter.emit(`user:${voiceOtherUserId}`, {
-      type: 'message',
-      connectionId: Number(connection_id),
-      lastMessage: 'Voice note',
-      lastMessageTime: msg.created_at,
-      senderId: voiceSenderId
-    });
-
-    // Send push notification to the other user
-    sendPushNotification(voiceOtherUserId, 'New voice note', 'Voice note', `chat.html?id=${connection_id}`);
-
-    const firestore = getDB();
-    firestore.collection('connections').doc(String(connection_id)).update({
-      last_message_at: new Date().toISOString()
-    }).catch(err => console.error('Failed to update last_message_at in Firestore:', err));
-
-    res.json({ success: true, message: msg });
-  } catch (err) {
-    console.error('Voice upload error:', err);
-    res.status(500).json({ error: 'Failed to upload voice message' });
-  }
-});
 
 // Rate-limited client-side error logger (max 10 writes per minute to protect free tier)
 const _clientLogCache = new Map();

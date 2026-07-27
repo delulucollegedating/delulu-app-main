@@ -1,7 +1,5 @@
 let currentConnId = null;
 let currentChatOther = '';
-let currentPlayingAudio = null;
-let currentPlayingBtn = null;
 let myPrivateKey = null;
 let otherPublicKey = null;
 let sharedSecretKey = null;
@@ -308,7 +306,7 @@ function initRealtimeStream() {
           if (document.hidden && typeof window.showNativeNotification === 'function') {
             window.showNativeNotification({
               title: 'New message',
-              body: streamEvent.msg.is_voice ? 'Voice note' : (streamEvent.msg.content || 'You have a new message'),
+              body: streamEvent.msg.content || 'You have a new message',
               url: `chat.html?id=${currentConnId}`,
               id: streamEvent.msg.id
             });
@@ -832,10 +830,9 @@ async function initializeChat() {
   const chatForm = document.getElementById('chat-form');
   const chatInput = document.getElementById('chat-input');
   const chatSendBtn = document.getElementById('btn-chat-send');
-  const chatMicBtn = document.getElementById('btn-record-voice');
   let typingTimeout = null;
 
-  if (!chatForm || !chatInput || !chatSendBtn || !chatMicBtn) {
+  if (!chatForm || !chatInput || !chatSendBtn) {
     console.error('Chat composer elements are missing; message composer cannot initialize.');
     return;
   }
@@ -852,27 +849,16 @@ async function initializeChat() {
   if (savedDraft) {
     chatInput.value = savedDraft;
     resizeChatInput();
-    chatSendBtn.classList.remove('hidden');
-    chatMicBtn.classList.add('hidden');
   }
 
   chatInput.oninput = () => {
     resizeChatInput();
     localStorage.setItem(draftKey, chatInput.value);
-    if (chatInput.value.trim().length > 0) {
-      chatSendBtn.classList.remove('hidden');
-      chatMicBtn.classList.add('hidden');
-      
-      notifyTypingState(true);
-      if (typingThrottleTimer) clearTimeout(typingThrottleTimer);
-      typingThrottleTimer = setTimeout(() => {
-        notifyTypingState(false);
-      }, 2500);
-    } else {
-      chatSendBtn.classList.add('hidden');
-      chatMicBtn.classList.remove('hidden');
+    notifyTypingState(true);
+    if (typingThrottleTimer) clearTimeout(typingThrottleTimer);
+    typingThrottleTimer = setTimeout(() => {
       notifyTypingState(false);
-    }
+    }, 2500);
   };
 
   // Enter sends, Shift+Enter inserts a newline
@@ -904,8 +890,6 @@ async function initializeChat() {
     chatInput.value = '';
     localStorage.removeItem(draftKey);
     chatInput.style.height = 'auto'; // Reset textarea auto-grow height
-    chatSendBtn.classList.add('hidden');
-    chatMicBtn.classList.remove('hidden');
 
     // Append message to UI instantly (Optimistic UI)
     appendMessage({
@@ -1003,189 +987,45 @@ async function initializeChat() {
     })();
   };
   
-  // Voice Recording Implementation
-  let mediaRecorder = null;
-  let audioChunks = [];
-  let recordStartTime = 0;
-  let recordTimerInterval = null;
-  let voiceStream = null; // Hoisted so both mic and cancel handlers can access it
-  let _startingRecording = false; // Guard against spam-tapping the mic button
 
-  chatMicBtn.onclick = async () => {
-    if (mediaRecorder && mediaRecorder.state === 'recording') {
-      mediaRecorder.stop();
-      return;
-    }
-    // Don't start a new recording while the previous one is still cleaning up
-    if (_startingRecording) return;
-    _startingRecording = true;
+  
+  // Wire up toolbar quick actions
+  const btnIcebreakerQuick = document.getElementById('btn-icebreaker-quick');
+  if (btnIcebreakerQuick) btnIcebreakerQuick.onclick = () => openIcebreakerModal();
 
-    try {
-      voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      let options = {};
-      const mimeTypes = [
-        'audio/mp4',
-        'audio/aac',
-        'audio/webm;codecs=opus',
-        'audio/webm',
-        'audio/ogg'
-      ];
-      for (const mime of mimeTypes) {
-        if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(mime)) {
-          options = { mimeType: mime };
-          break;
-        }
-      }
-      mediaRecorder = new MediaRecorder(voiceStream, options);
-      
-      mediaRecorder.ondataavailable = (event) => {
-        audioChunks.push(event.data);
-      };
+  const btnEndChatQuick = document.getElementById('btn-end-chat-quick');
+  if (btnEndChatQuick) btnEndChatQuick.onclick = () => submitNotVibing();
 
-      mediaRecorder.onstop = async () => {
-        _startingRecording = false;
-        const duration = Math.round((Date.now() - recordStartTime) / 1000);
-        clearInterval(recordTimerInterval);
-        document.getElementById('recording-overlay').classList.add('hidden');
+  const btnToolbarMore = document.getElementById('btn-toolbar-more');
+  if (btnToolbarMore) btnToolbarMore.onclick = () => openModal('modal-chat-more');
 
-        if (voiceStream) {
-          voiceStream.getTracks().forEach(track => track.stop());
-          voiceStream = null;
-        }
-
-        if (audioChunks.length === 0 || duration < 1) {
-          return;
-        }
-
-        const recordedMimeType = (mediaRecorder && mediaRecorder.mimeType) || 'audio/webm';
-        const audioBlob = new Blob(audioChunks, { type: recordedMimeType });
-        
-        let ext = 'webm';
-        if (recordedMimeType.includes('mp4') || recordedMimeType.includes('m4a')) {
-          ext = 'm4a';
-        } else if (recordedMimeType.includes('wav')) {
-          ext = 'wav';
-        } else if (recordedMimeType.includes('aac')) {
-          ext = 'aac';
-        } else if (recordedMimeType.includes('ogg')) {
-          ext = 'ogg';
-        }
-
-        const formData = new FormData();
-        formData.append('connection_id', currentConnId);
-        formData.append('duration', duration);
-
-        try {
-          if (isE2EEActive && sharedSecretKey) {
-            const encrypted = await E2EECrypto.encryptBlob(audioBlob, sharedSecretKey);
-            formData.append('audio', encrypted.encryptedBlob, `voice.${ext}`);
-            formData.append('is_encrypted', 1);
-            formData.append('iv', encrypted.iv);
-          } else {
-            formData.append('audio', audioBlob, `voice.${ext}`);
-          }
-
-          const res = await fetch(resolveUrl('/api/messages/upload-voice'), {
-            method: 'POST',
-            credentials: 'include',
-            body: formData
-          });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.error || 'Failed to send voice note');
-          
-          appendMessage(data.message, true);
-          if (data.message && data.message.created_at) {
-            lastMessageTimestamp = data.message.created_at;
-          }
-          if (data.message && typeof messageCache !== 'undefined') {
-            messageCache.cacheSingleMessage(currentConnId, data.message).catch(() => {});
-          }
-        } catch (err) {
-          showToast(err.message, 'error');
-        }
-      };
-
-      recordStartTime = Date.now();
-      mediaRecorder.start();
-      
-      document.getElementById('recording-overlay').classList.remove('hidden');
-      const timerEl = document.getElementById('record-timer');
-      timerEl.textContent = '0:00';
-      recordTimerInterval = setInterval(() => {
-        const elapsed = Math.round((Date.now() - recordStartTime) / 1000);
-        const mins = Math.floor(elapsed / 60);
-        const secs = elapsed % 60;
-        timerEl.textContent = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
-      }, 1000);
-
-    } catch (err) {
-      if (voiceStream) {
-        voiceStream.getTracks().forEach(track => track.stop());
-      }
-      voiceStream = null;
-      _startingRecording = false;
-      showToast('Could not access microphone: ' + err.message, 'error');
-    }
-  };
-
-  const recordStopBtn = document.getElementById('btn-record-stop');
-  if (recordStopBtn) {
-    recordStopBtn.onclick = () => {
-      if (mediaRecorder && mediaRecorder.state === 'recording') {
-        mediaRecorder.stop();
-      }
-    };
+  // Wire up toolbar theme toggle
+  function syncChatThemeIcons(isDark) {
+    const toolbarIcon = document.querySelector('#btn-toolbar-theme .material-symbols-outlined');
+    if (toolbarIcon) toolbarIcon.textContent = isDark ? 'light_mode' : 'dark_mode';
+    document.querySelectorAll('.theme-toggle-icon').forEach(el => {
+      el.textContent = isDark ? 'light_mode' : 'dark_mode';
+    });
   }
 
-  const recordCancelBtn = document.getElementById('btn-record-cancel');
-  if (recordCancelBtn) {
-    recordCancelBtn.onclick = () => {
-      if (mediaRecorder && mediaRecorder.state === 'recording') {
-        mediaRecorder.onstop = () => {
-          _startingRecording = false;
-          clearInterval(recordTimerInterval);
-          document.getElementById('recording-overlay').classList.add('hidden');
-          // Release the microphone tracks immediately on cancel
-          if (voiceStream) {
-            voiceStream.getTracks().forEach(track => track.stop());
-            voiceStream = null;
-          }
-        };
-        mediaRecorder.stop();
-      }
-    };
-  }
-  
-  const btnIcebreaker = document.getElementById('btn-icebreaker');
-  if (btnIcebreaker) btnIcebreaker.onclick = () => openIcebreakerModal();
-  
-  const btnChatMore = document.getElementById('btn-chat-more');
-  if (btnChatMore) btnChatMore.onclick = () => openModal('modal-chat-more');
-  
-  const chatThemeToggle = document.getElementById('btn-theme-toggle-chat');
-  if (chatThemeToggle) {
-    chatThemeToggle.onclick = () => {
+  // Sync toolbar theme icon on init
+  const initialIsDark = document.body.classList.contains('dark');
+  syncChatThemeIcons(initialIsDark);
+
+  const btnToolbarTheme = document.getElementById('btn-toolbar-theme');
+  if (btnToolbarTheme) {
+    btnToolbarTheme.onclick = () => {
       const isDark = document.body.classList.toggle('dark');
+      document.documentElement.classList.toggle('dark', isDark);
       localStorage.setItem('delulu_theme', isDark ? 'dark' : 'light');
-      const icon = chatThemeToggle.querySelector('.material-symbols-outlined');
-      if (icon) icon.textContent = isDark ? 'light_mode' : 'dark_mode';
+      syncChatThemeIcons(isDark);
       const globalToggle = document.getElementById('theme-toggle');
       if (globalToggle) {
         const gi = globalToggle.querySelector('.material-symbols-outlined');
         if (gi) gi.textContent = isDark ? 'light_mode' : 'dark_mode';
       }
     };
-    const isDark = document.body.classList.contains('dark');
-    const icon = chatThemeToggle.querySelector('.material-symbols-outlined');
-    if (icon) icon.textContent = isDark ? 'light_mode' : 'dark_mode';
-    // Also update the chat-more modal's theme toggle icon to match
-    document.querySelectorAll('.theme-toggle-icon').forEach(el => {
-      el.textContent = isDark ? 'light_mode' : 'dark_mode';
-    });
   }
-  
-  const btnNotVibing = document.getElementById('btn-not-vibing');
-  if (btnNotVibing) btnNotVibing.onclick = () => submitNotVibing();
 
   const btnIdentityReveal = document.getElementById('btn-identity-reveal');
   if (btnIdentityReveal) btnIdentityReveal.onclick = () => openModal('modal-identity-reveal');
@@ -1306,15 +1146,7 @@ async function initializeChat() {
 function cleanupChatResources() {
   stopRealtimeStream();
   stopStatusPollingFallback();
-  // Revoke any pending audio blob URL to prevent memory leaks
-  if (currentPlayingAudio) {
-    currentPlayingAudio.pause();
-    if (currentPlayingAudio._blobUrl) {
-      URL.revokeObjectURL(currentPlayingAudio._blobUrl);
-    }
-    currentPlayingAudio = null;
-    currentPlayingBtn = null;
-  }
+
   // Clear keep-alive interval so it doesn't keep running after navigation
   if (window.__chatKeepAliveInterval) {
     clearInterval(window.__chatKeepAliveInterval);
@@ -1480,7 +1312,7 @@ function setupModalEventDelegation() {
         document.body.classList.toggle('dark');
         const isDark = document.body.classList.contains('dark');
         localStorage.setItem('delulu_theme', isDark ? 'dark' : 'light');
-        document.querySelectorAll('.theme-toggle-icon, #theme-toggle .material-symbols-outlined, #btn-theme-toggle-chat .material-symbols-outlined').forEach(el => {
+        document.querySelectorAll('.theme-toggle-icon, #theme-toggle .material-symbols-outlined').forEach(el => {
           el.textContent = isDark ? 'light_mode' : 'dark_mode';
         });
         closeModal();
@@ -1602,11 +1434,9 @@ async function loadChatInfo() {
 
 function updateChatStatus(c) {
   const statusEl = document.getElementById('chat-status');
-  const notVibingBtn = document.getElementById('btn-not-vibing');
   const identityRevealBtn = document.getElementById('btn-identity-reveal');
   const faceRevealBtn = document.getElementById('btn-face-reveal');
   
-  if (notVibingBtn) notVibingBtn.classList.add('hidden');
   if (identityRevealBtn) identityRevealBtn.classList.add('hidden');
   if (faceRevealBtn) faceRevealBtn.classList.add('hidden');
   
@@ -1617,9 +1447,6 @@ function updateChatStatus(c) {
     
     const revealTarget = c.face_reveal_available_at || c.identity_reveal_available_at;
     const isRevealDue = revealTarget ? now >= new Date(revealTarget) : false;
-    
-    // Show Not Vibing button always (for accepted connections)
-    if (notVibingBtn) notVibingBtn.classList.remove('hidden');
     
     if (isRevealDue || c.both_face_revealed || c.both_identity_revealed) {
       if (c.both_face_revealed || c.both_identity_revealed) {
@@ -2264,36 +2091,12 @@ async function appendMessage(m, scrollToBottom = true) {
     }
   }
 
-  // Handle voice messages
+  // Handle voice messages (rendered as plain text since voice upload was removed)
   if (Number(m.is_voice) === 1 || (displayContent && displayContent.startsWith('/uploads/voice/'))) {
-    // Custom audio player
-    const voiceContainer = document.createElement('div');
-    voiceContainer.className = `flex items-center gap-3 p-0.5 ${isMe ? 'text-white' : 'text-on-surface'}`;
-    
-    const playBtn = document.createElement('button');
-    playBtn.className = `w-9 h-9 rounded-full flex items-center justify-center shadow-sm shrink-0 transition-transform hover:scale-105 active:scale-95 ${isMe ? 'bg-white text-primary' : 'bg-primary text-white'}`;
-    playBtn.innerHTML = `<span class="material-symbols-outlined text-lg">play_arrow</span>`;
-    playBtn.onclick = () => {
-      window.playVoiceNote(playBtn, displayContent, m.is_encrypted, m.iv);
-    };
-
-    const details = document.createElement('div');
-    details.className = 'flex flex-col';
-    
-    const label = document.createElement('span');
-    label.className = 'text-xs font-bold flex items-center gap-0.5';
-    label.innerHTML = `Voice Note ${isEncrypted ? '<span class="material-symbols-outlined text-[10px] text-green-600 align-middle">lock</span>' : ''}`;
-    
-    const dur = document.createElement('span');
-    dur.className = 'text-[9px] opacity-70';
-    dur.textContent = `${m.voice_duration || 0}s`;
-    
-    details.appendChild(label);
-    details.appendChild(dur);
-    
-    voiceContainer.appendChild(playBtn);
-    voiceContainer.appendChild(details);
-    inner.appendChild(voiceContainer);
+    const p = document.createElement('p');
+    p.className = 'text-[15px] italic leading-relaxed break-words [overflow-wrap:anywhere] [word-break:break-word] whitespace-pre-wrap';
+    p.textContent = displayContent.startsWith('/uploads/') ? 'Voice note' : displayContent;
+    inner.appendChild(p);
   } else {
     const p = document.createElement('p');
     p.className = 'text-[15px] leading-relaxed break-words [overflow-wrap:anywhere] [word-break:break-word] whitespace-pre-wrap';
@@ -2367,77 +2170,7 @@ async function appendMessage(m, scrollToBottom = true) {
   }
 }
 
-window.playVoiceNote = async (btn, url, isEncrypted = 0, iv = null) => {
-  const icon = btn.querySelector('span');
-  
-  if (currentPlayingAudio) {
-    currentPlayingAudio.pause();
-    if (currentPlayingBtn) {
-      currentPlayingBtn.querySelector('span').textContent = 'play_arrow';
-    }
-    
-    if (currentPlayingAudio._originalUrl === url) {
-      currentPlayingAudio = null;
-      currentPlayingBtn = null;
-      return;
-    }
-  }
 
-  icon.textContent = 'hourglass_bottom';
-  
-  try {
-    let playUrl = resolveUrl(url);
-    
-    // Decrypt the voice note blob dynamically in memory if encrypted
-    if (Number(isEncrypted) === 1 && iv && isE2EEActive && sharedSecretKey) {
-      const res = await fetch(resolveUrl(url), {
-        credentials: 'include'
-      });
-      if (!res.ok) throw new Error('Failed to fetch encrypted voice note file');
-      const encryptedBuffer = await res.arrayBuffer();
-      
-      // Determine original recording MIME type from the file URL's extension
-      let mimeType = 'audio/webm';
-      if (url.endsWith('.m4a') || url.endsWith('.mp4')) {
-        mimeType = 'audio/mp4';
-      } else if (url.endsWith('.wav')) {
-        mimeType = 'audio/wav';
-      } else if (url.endsWith('.aac')) {
-        mimeType = 'audio/aac';
-      } else if (url.endsWith('.ogg')) {
-        mimeType = 'audio/ogg';
-      }
-
-      const decryptedBlob = await E2EECrypto.decryptBlob(encryptedBuffer, iv, sharedSecretKey, mimeType);
-      playUrl = URL.createObjectURL(decryptedBlob);
-    }
-
-    const audio = new Audio(playUrl);
-    audio._originalUrl = url;
-    if (playUrl.startsWith('blob:')) {
-      audio._blobUrl = playUrl; // Store for cleanup on navigation
-    }
-    currentPlayingAudio = audio;
-    currentPlayingBtn = btn;
-    
-    audio.onplay = () => { icon.textContent = 'pause'; };
-    audio.onpause = () => { icon.textContent = 'play_arrow'; };
-    audio.onended = () => {
-      icon.textContent = 'play_arrow';
-      currentPlayingAudio = null;
-      currentPlayingBtn = null;
-      if (playUrl.startsWith('blob:')) {
-        URL.revokeObjectURL(playUrl); // Clean up memory
-      }
-    };
-    
-    await audio.play();
-  } catch (err) {
-    console.error('Audio play failed:', err);
-    icon.textContent = 'play_arrow';
-    showToast('Failed to play voice note: ' + err.message, 'error');
-  }
-};
 
 window.openModal = function(id) {
   // Cancel any pending close animation to prevent race condition
@@ -2499,11 +2232,29 @@ window.closeModal = function() {
 };
 
 async function submitNotVibing() {
-  if (!confirm('Are you sure you want to end this chat? This cannot be undone.')) return;
-  try {
-    await apiCall('/api/connections/end', 'POST', { connection_id: currentConnId });
-    window.location.href = 'discover.html';
-  } catch(err) { showToast(err.message, 'error'); }
+  // Open the end-chat confirmation modal instead of native confirm()
+  openModal('modal-end-chat');
+}
+
+// Wire up the end-chat confirm button
+function wireEndChatConfirm() {
+  const btn = document.getElementById('btn-end-chat-confirm');
+  if (btn) {
+    btn.onclick = async () => {
+      closeModal();
+      try {
+        await apiCall('/api/connections/end', 'POST', { connection_id: currentConnId });
+        window.location.href = 'discover.html';
+      } catch(err) { showToast(err.message, 'error'); }
+    };
+  }
+}
+
+// Wire up in DOMContentLoaded if not already done
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', wireEndChatConfirm);
+} else {
+  wireEndChatConfirm();
 }
 
 async function submitIdentityRevealAction() {
