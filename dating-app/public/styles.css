@@ -1131,6 +1131,13 @@ body.dark #chat-messages .date-divider-pill {
   align-items: center;
   gap: 10px;
   min-width: 0;
+  padding-right: 48px;
+}
+
+.chat-more-button {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top, 0px));
+  right: 12px;
 }
 
 .chat-icon-button,
@@ -1334,13 +1341,14 @@ body.dark .chat-composer:focus-within { background: #303234; border-color: rgba(
     gap: 20px;
     padding: 10px 16px;
   }
-  .chat-topbar-main { flex: 1 1 auto; max-width: 520px; }
+  .chat-topbar-main { flex: 1 1 auto; max-width: 520px; padding-right: 0; }
   .chat-action-row {
     flex: 0 0 auto;
     padding: 0;
     overflow: visible;
   }
   .chat-action-chip { min-height: 36px; }
+  .chat-more-button { position: static; flex: 0 0 40px; }
   .chat-composer-shell { padding: 10px 16px; }
   .chat-composer { max-width: 960px; margin: 0 auto; }
 }

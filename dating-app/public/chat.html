@@ -45,7 +45,7 @@
       }
     };
   </script>
-  <link rel="stylesheet" href="styles.css?v=250">
+  <link rel="stylesheet" href="styles.css?v=251">
   <style>
     /* Hide navbars on mobile when in a chat for better UX, or keep them. We'll keep global header hidden on chat on mobile. */
   </style>
@@ -84,9 +84,6 @@
             <span class="chat-partner-name">...</span>
             <span id="chat-status" class="chat-partner-status">Connecting…</span>
           </button>
-          <button id="btn-chat-more" class="chat-icon-button" type="button" title="More options" aria-label="More chat options">
-            <span class="material-symbols-outlined text-xl">more_horiz</span>
-          </button>
         </div>
         <div class="chat-action-row" aria-label="Chat actions">
           <button id="btn-icebreaker" class="chat-action-chip chat-action-chip-primary" type="button">
@@ -106,6 +103,9 @@
             <span>Let's meet</span>
           </button>
         </div>
+        <button id="btn-chat-more" class="chat-icon-button chat-more-button" type="button" title="More options" aria-label="More chat options">
+          <span class="material-symbols-outlined text-xl">more_horiz</span>
+        </button>
       </header>
       
       <!-- Connection Status Bar -->
