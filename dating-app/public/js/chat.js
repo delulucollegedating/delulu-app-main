@@ -1022,21 +1022,22 @@ async function initializeChat() {
 
   // Profile Peek trigger
   const chatName = document.getElementById('chat-name');
-  if (chatName) {
-    chatName.onclick = async () => {
-      try {
-        const data = await apiCall(`/api/connections/${currentConnId}`);
-        const c = data.connection;
-        const peekName = document.getElementById('peek-name');
-        const peekBio = document.getElementById('peek-bio');
-        const peekAvatar = document.getElementById('peek-avatar');
-        if (peekName) peekName.textContent = c.other_username;
-        if (peekBio) peekBio.textContent = c.other_bio || "No bio set.";
-        if (peekAvatar) peekAvatar.innerHTML = getAvatarHtml(c.other_username, c.other_avatar);
-        openModal('modal-profile-peek');
-      } catch(err) { showToast(err.message, 'error'); }
-    };
-  }
+  const chatAvatar = document.getElementById('chat-avatar');
+  const openChatProfile = async () => {
+    try {
+      const data = await apiCall(`/api/connections/${currentConnId}`);
+      const c = data.connection;
+      const peekName = document.getElementById('peek-name');
+      const peekBio = document.getElementById('peek-bio');
+      const peekAvatar = document.getElementById('peek-avatar');
+      if (peekName) peekName.textContent = c.other_username;
+      if (peekBio) peekBio.textContent = c.other_bio || "No bio set.";
+      if (peekAvatar) peekAvatar.innerHTML = getAvatarHtml(c.other_username, c.other_avatar);
+      openModal('modal-profile-peek');
+    } catch(err) { showToast(err.message, 'error'); }
+  };
+  if (chatName) chatName.onclick = openChatProfile;
+  if (chatAvatar) chatAvatar.onclick = openChatProfile;
   // Remove the vibing/not-vibing buttons from profile peek (replaced by header Not Vibing button)
   const peekVibing = document.getElementById('peek-vibing');
   if (peekVibing) peekVibing.remove();
@@ -1357,7 +1358,7 @@ async function loadChatInfo() {
     // Display lock icon next to name if encrypted
     const chatNameEl = document.getElementById('chat-name');
     if (chatNameEl) {
-      chatNameEl.innerHTML = `${escapeHtml(c.other_username)} ${isE2EEActive ? '<span class="material-symbols-outlined text-[15px] text-green-600 align-middle ml-1" title="End-to-End Encrypted" style="font-variation-settings: \'FILL\' 1">lock</span>' : ''}`;
+      chatNameEl.innerHTML = `<span class="chat-partner-name">${escapeHtml(c.other_username)} ${isE2EEActive ? '<span class="material-symbols-outlined text-[15px] text-green-600 align-middle ml-1" title="End-to-End Encrypted" style="font-variation-settings: \'FILL\' 1">lock</span>' : ''}</span>`;
     }
     const chatAvatarEl = document.getElementById('chat-avatar');
     if (chatAvatarEl) {
@@ -2169,7 +2170,7 @@ window.openModal = function(id) {
 };
 
 function setAllModalsHidden(hidden) {
-  ['modal-identity-reveal', 'modal-face-reveal', 'modal-face-declined', 'modal-google-meet', 'modal-profile-peek', 'modal-icebreaker', 'modal-report', 'modal-chat-more'].forEach(id => {
+  ['modal-identity-reveal', 'modal-face-reveal', 'modal-face-declined', 'modal-google-meet', 'modal-end-chat', 'modal-profile-peek', 'modal-icebreaker', 'modal-report', 'modal-chat-more'].forEach(id => {
     const m = document.getElementById(id);
     if (m) {
       if (hidden) {
@@ -2192,7 +2193,7 @@ window.closeModal = function() {
     overlay.classList.add('hidden');
     overlay.classList.remove('flex');
   }
-  ['modal-identity-reveal', 'modal-face-reveal', 'modal-face-declined', 'modal-google-meet', 'modal-profile-peek', 'modal-icebreaker', 'modal-report', 'modal-chat-more'].forEach(id => {
+  ['modal-identity-reveal', 'modal-face-reveal', 'modal-face-declined', 'modal-google-meet', 'modal-end-chat', 'modal-profile-peek', 'modal-icebreaker', 'modal-report', 'modal-chat-more'].forEach(id => {
     const m = document.getElementById(id);
     if (m) {
       m.classList.remove('scale-100');

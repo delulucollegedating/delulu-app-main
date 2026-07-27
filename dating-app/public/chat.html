@@ -45,7 +45,7 @@
       }
     };
   </script>
-  <link rel="stylesheet" href="styles.css?v=248">
+  <link rel="stylesheet" href="styles.css?v=249">
   <style>
     /* Hide navbars on mobile when in a chat for better UX, or keep them. We'll keep global header hidden on chat on mobile. */
   </style>
@@ -74,35 +74,39 @@
 
   <main class="flex flex-col w-full px-0 md:px-6 h-[100dvh] md:h-[calc(100dvh-var(--header-h-md))] relative" id="app-root">
     <div class="flex flex-col w-full h-full md:rounded-2xl bg-surface-container-lowest shadow-sm border border-outline-variant/20 overflow-hidden relative">
-      <div class="flex items-center justify-between p-3 md:p-4 border-b border-outline-variant/10 glass-panel z-10 pt-safe bg-surface/90 gap-2">
-        <div class="flex items-center gap-2 min-w-0 flex-1">
-          <a href="messages.html" class="p-1.5 -ml-1 text-on-surface-variant hover:text-primary transition-colors shrink-0">
+      <header class="chat-topbar z-10" aria-label="Conversation controls">
+        <div class="chat-topbar-main">
+          <a href="messages.html" class="chat-icon-button" aria-label="Back to chats">
             <span class="material-symbols-outlined text-xl">arrow_back</span>
           </a>
-          <div id="chat-avatar" class="w-9 h-9 md:w-10 md:h-10 rounded-full flex items-center justify-center font-bold text-white bg-primary-container shadow-sm overflow-hidden border border-outline-variant/30 shrink-0"></div>
-          <div class="min-w-0 flex-1">
-            <h2 id="chat-name" class="font-bold text-on-surface text-sm md:text-base capitalize cursor-pointer hover:underline hover:opacity-80 transition-opacity truncate">...</h2>
-            <p id="chat-status" class="text-[11px] md:text-xs text-primary font-medium flex items-center gap-1 truncate"></p>
-          </div>
-        </div>
-        <div class="flex items-center gap-1.5 shrink-0">
-          <button id="btn-icebreaker" class="p-1.5 bg-surface-variant text-on-surface-variant rounded-full text-xs font-bold hover:bg-surface-container-high transition-colors shadow-sm shrink-0 flex items-center justify-center cursor-pointer" title="Icebreaker Games" aria-label="Play Icebreaker Games">
-            <span class="material-symbols-outlined text-base">casino</span>
+          <button id="chat-avatar" class="chat-partner-avatar" type="button" aria-label="Open profile"></button>
+          <button id="chat-name" class="chat-partner-details min-w-0 flex-1 text-left" type="button">
+            <span class="chat-partner-name">...</span>
+            <span id="chat-status" class="chat-partner-status">Connecting…</span>
           </button>
-          <button id="btn-not-vibing" class="px-2.5 py-1 bg-error/10 text-error rounded-full text-[11px] md:text-xs font-bold hover:bg-error/20 transition-colors shadow-sm shrink-0 cursor-pointer" aria-label="Not Vibing">
-            Not Vibing
-          </button>
-          <button id="btn-identity-reveal" class="px-2.5 py-1 btn-primary text-white rounded-full text-[11px] md:text-xs font-bold transition-all shadow-sm hidden shrink-0" aria-label="Reveal Identity">
-            Reveal
-          </button>
-          <button id="btn-face-reveal" class="px-2.5 py-1 btn-primary text-white rounded-full text-[11px] md:text-xs font-bold transition-all shadow-sm hidden shrink-0" aria-label="Face Reveal Video Meeting">
-            Let's Meet
-          </button>
-          <button id="btn-chat-more" class="p-1.5 text-on-surface-variant hover:text-primary hover:bg-surface-container-high rounded-full transition-all shrink-0 flex items-center justify-center cursor-pointer" title="More Options" aria-label="More Chat Options">
-            <span class="material-symbols-outlined text-lg">more_vert</span>
+          <button id="btn-chat-more" class="chat-icon-button" type="button" title="More options" aria-label="More chat options">
+            <span class="material-symbols-outlined text-xl">more_horiz</span>
           </button>
         </div>
-      </div>
+        <div class="chat-action-row" aria-label="Chat actions">
+          <button id="btn-icebreaker" class="chat-action-chip chat-action-chip-primary" type="button">
+            <span class="material-symbols-outlined text-[18px]">casino</span>
+            <span>Icebreaker</span>
+          </button>
+          <button id="btn-not-vibing" class="chat-action-chip chat-action-chip-danger hidden" type="button">
+            <span class="material-symbols-outlined text-[18px]">heart_broken</span>
+            <span>End chat</span>
+          </button>
+          <button id="btn-identity-reveal" class="chat-action-chip chat-action-chip-reveal hidden" type="button">
+            <span class="material-symbols-outlined text-[18px]">lock_open</span>
+            <span>Reveal</span>
+          </button>
+          <button id="btn-face-reveal" class="chat-action-chip chat-action-chip-reveal hidden" type="button">
+            <span class="material-symbols-outlined text-[18px]">videocam</span>
+            <span>Let's meet</span>
+          </button>
+        </div>
+      </header>
       
       <!-- Connection Status Bar -->
       <div id="chat-connection-bar" class="hidden bg-error/90 text-white text-center text-[11px] font-semibold py-1.5 px-4 backdrop-blur-sm">
@@ -120,13 +124,11 @@
         <span id="new-messages-badge" class="hidden absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-error text-white text-[10px] font-bold leading-5 text-center" aria-live="polite"></span>
       </button>
       
-      <div class="p-3 bg-surface-container-lowest border-t border-outline-variant/10 z-10 pb-safe relative">
-        <form id="chat-form" class="flex items-end gap-2 bg-surface-container-low rounded-3xl p-1 pr-1 shadow-sm" action="javascript:void(0)" onsubmit="return false">
+      <div class="chat-composer-shell z-10">
+        <form id="chat-form" class="chat-composer" action="javascript:void(0)" onsubmit="return false">
           <textarea id="chat-input" class="flex-1 bg-transparent border-none text-sm px-4 py-2 focus:ring-0 placeholder-outline outline-none resize-none" placeholder="Type a message..." autocomplete="off" rows="1"></textarea>
-          
-          <!-- Submit Text Button -->
-          <button type="submit" id="btn-chat-send" class="w-9 h-9 flex items-center justify-center bg-primary text-on-primary rounded-full hover:bg-primary/90 transition-all shrink-0 shadow-sm cursor-pointer">
-            <span class="material-symbols-outlined text-sm material-fill">send</span>
+          <button type="submit" id="btn-chat-send" class="chat-send-button" aria-label="Send message">
+            <span class="material-symbols-outlined text-[20px] material-fill">send</span>
           </button>
         </form>
       </div>
@@ -272,6 +274,6 @@
   <script src="js/shared.js?v=244"></script>
   <script src="js/chat-cache.js?v=245"></script>
   <script src="js/crypto.js"></script>
-  <script src="js/chat.js?v=245"></script>
+  <script src="js/chat.js?v=246"></script>
 </body>
 </html>
