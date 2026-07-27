@@ -184,7 +184,7 @@ function renderChatListItem(c, safeUsername, isRevealed, lastMsg) {
   let previewIcon = '';
   if (!c.last_message) {
     previewText = isRevealed
-      ? '\u2728 Identities Revealed'
+      ? 'Identities Revealed'
       : '<span class="italic text-on-surface-variant/50">Tap to start chatting</span>';
   } else if (c.last_message.startsWith('/uploads/voice/')) {
     previewIcon = '<span class="material-symbols-outlined text-[13px] align-middle mr-0.5" style="vertical-align:-2px">mic</span>';

@@ -607,7 +607,7 @@ io.on('connection', async (socket) => {
     // Also emit a chat-list update for the messages list
     io.to(`chat:${connectionId}`).emit('chat-update', {
       connectionId,
-      lastMessage: Number(is_encrypted) === 1 ? '🔒 Encrypted message' : sanitizeText(content.trim()),
+      lastMessage: Number(is_encrypted) === 1 ? 'Encrypted message' : sanitizeText(content.trim()),
       lastMessageTime: msg.created_at,
       senderId: Number(userId)
     });
@@ -1734,7 +1734,7 @@ app.post('/api/messages/send', requireAuth, async (req, res) => {
   );
 
   const senderId = Number(req.session.userId);
-  const displayContent = Number(is_encrypted) === 1 ? '🔒 Encrypted message' : sanitizeText(content.trim());
+  const displayContent = Number(is_encrypted) === 1 ? 'Encrypted message' : sanitizeText(content.trim());
 
   // Emit socket event for real-time receipt — sender_id MUST be Number for client === checks
   io.to(`chat:${connection_id}`).emit('new-message', {
@@ -1837,13 +1837,13 @@ app.post('/api/messages/upload-voice', requireAuth, (req, res, next) => {
     userEmitter.emit(`user:${voiceOtherUserId}`, {
       type: 'message',
       connectionId: Number(connection_id),
-      lastMessage: '🎤 Voice note',
+      lastMessage: 'Voice note',
       lastMessageTime: msg.created_at,
       senderId: voiceSenderId
     });
 
     // Send push notification to the other user
-    sendPushNotification(voiceOtherUserId, 'New voice note', '🎤 Voice note', `chat.html?id=${connection_id}`);
+    sendPushNotification(voiceOtherUserId, 'New voice note', 'Voice note', `chat.html?id=${connection_id}`);
 
     const firestore = getDB();
     firestore.collection('connections').doc(String(connection_id)).update({

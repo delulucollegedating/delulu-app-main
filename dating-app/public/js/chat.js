@@ -272,7 +272,7 @@ function initRealtimeStream() {
           if (document.hidden && typeof window.showNativeNotification === 'function') {
             window.showNativeNotification({
               title: 'New message',
-              body: streamEvent.msg.is_voice ? '🎤 Voice note' : (streamEvent.msg.content || 'You have a new message'),
+              body: streamEvent.msg.is_voice ? 'Voice note' : (streamEvent.msg.content || 'You have a new message'),
               url: `chat.html?id=${currentConnId}`,
               id: streamEvent.msg.id
             });
@@ -1717,7 +1717,7 @@ async function loadOlderMessages() {
       // Show "beginning of conversation" pill
       const endPill = document.createElement('div');
       endPill.className = 'flex justify-center my-4 fade-in';
-      endPill.innerHTML = '<span class="px-4 py-1.5 rounded-full bg-surface-variant/60 text-on-surface-variant text-[11px] font-semibold backdrop-blur-sm">✨ Beginning of conversation</span>';
+      endPill.innerHTML = '<span class="px-4 py-1.5 rounded-full bg-surface-variant/60 text-on-surface-variant text-[11px] font-semibold backdrop-blur-sm">Beginning of conversation</span>';
       cont.appendChild(endPill);
     }
   } catch (err) {
@@ -3079,7 +3079,7 @@ function setupScreenshotProtection() {
         }, 1500);
       }
       if (typeof showToast === 'function') {
-        showToast('🔒 Screenshots are restricted in Delulu chats for privacy', 'warning');
+        showToast('Screenshots are restricted in Delulu chats for privacy', 'warning');
       }
       return false;
     }

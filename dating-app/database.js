@@ -808,7 +808,7 @@ const connectionOps = {
         other_hobbies: otherUser.hobbies,
         other_avatar: otherUser.avatar,
         other_user_id: otherUser.id,
-        last_message: lastMsg ? (Number(lastMsg.is_encrypted) === 1 ? '🔒 Encrypted message' : (lastMsg.is_voice === 1 ? '🎤 Voice note' : lastMsg.is_voice === 2 ? '📷 Photo' : lastMsg.content)) : null,
+        last_message: lastMsg ? (Number(lastMsg.is_encrypted) === 1 ? 'Encrypted message' : (lastMsg.is_voice === 1 ? 'Voice note' : lastMsg.is_voice === 2 ? 'Photo' : lastMsg.content)) : null,
         last_message_time: lastMsg ? lastMsg.created_at : null,
         last_sender_id: lastMsg ? lastMsg.sender_id : null,
         last_read: lastMsg ? (lastMsg.sender_id === Number(userId) ? true : (myLastReadAt && lastMsg.created_at <= myLastReadAt)) : true
