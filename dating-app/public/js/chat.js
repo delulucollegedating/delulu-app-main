@@ -12,11 +12,50 @@ let otherLastReadAt = null;
 let myLastReadAt = null;
 let hasReadMessagesInView = false;
 let hasUnreadMessagesInView = false;
+let unreadIncomingCount = 0;
 let lastMessageTimestamp = null;
 let hasLoadedInitialMessages = false;
 let pollingTimeout = null;
 let pollInterval = 3000;
 const maxInterval = 8000;
+
+// The message container uses flex-col-reverse: visual latest is scrollTop 0
+// (or very close to it across mobile browsers). Never pull a reader away from
+// history just because a new event or background refresh arrives.
+function isViewingLatestMessages() {
+  const cont = document.getElementById('chat-messages');
+  return !!cont && Math.abs(cont.scrollTop) < 120;
+}
+
+function updateNewMessagesButton() {
+  const button = document.getElementById('btn-scroll-bottom');
+  const badge = document.getElementById('new-messages-badge');
+  if (!button || !badge) return;
+  if (unreadIncomingCount > 0) {
+    badge.textContent = unreadIncomingCount > 99 ? '99+' : String(unreadIncomingCount);
+    badge.classList.remove('hidden');
+    button.title = `Jump to ${unreadIncomingCount} new message${unreadIncomingCount === 1 ? '' : 's'}`;
+  } else {
+    badge.classList.add('hidden');
+    button.title = 'Scroll to latest messages';
+  }
+}
+
+function recordIncomingMessage() {
+  hasReadMessagesInView = false;
+  hasUnreadMessagesInView = true;
+  if (!isViewingLatestMessages()) {
+    unreadIncomingCount += 1;
+    updateNewMessagesButton();
+    const button = document.getElementById('btn-scroll-bottom');
+    if (button) {
+      button.classList.remove('opacity-0', 'pointer-events-none');
+      button.classList.add('opacity-100', 'pointer-events-auto');
+    }
+    return false;
+  }
+  return true;
+}
 
 // ── Pagination State ─────────────────────────────────────────────────────────
 // Tracks infinite-scroll-upward state for loading older message history.
@@ -87,20 +126,17 @@ async function pollDelta() {
       if (newMsgs.length > 0) {
         const otherNewMsgs = newMsgs.filter(m => Number(m.sender_id) !== Number(currentUser.id));
         if (otherNewMsgs.length > 0) {
-          hasReadMessagesInView = false;
-          if (otherNewMsgs.some(isUnreadFromOther)) {
-            hasUnreadMessagesInView = true;
-          }
+          otherNewMsgs.forEach(recordIncomingMessage);
         }
         for (const m of newMsgs) {
           await appendMessage(m, false);
         }
-        scrollToBottom();
+        if (isViewingLatestMessages()) scrollToBottom();
         
         if (typeof messageCache !== 'undefined') {
           await messageCache.cacheMessages(currentConnId, data.messages);
         }
-        setTimeout(() => markMessagesAsRead(), 300);
+        if (isViewingLatestMessages()) setTimeout(() => markMessagesAsRead(), 300);
         return true;
       }
     }
@@ -230,7 +266,9 @@ function initRealtimeStream() {
     console.log('[SSE] Stream connected. Syncing connection info & message state.');
     scheduleChatInfoRefresh();
     if (currentConnId && typeof loadMessages === 'function') {
-      loadMessages(currentConnId, true).catch(() => {});
+      // The stream already contains message payloads. A delta refresh repairs
+      // missed events without replacing the reader's current viewport.
+      loadMessages(false).catch(() => {});
     }
     isReconnecting = false;
   };
@@ -262,11 +300,9 @@ function initRealtimeStream() {
       if (streamEvent.msg && Number(streamEvent.senderId) !== Number(currentUser.id)) {
         const alreadyExists = document.querySelector(`[data-msg-id="${streamEvent.msg.id}"]`);
         if (!alreadyExists) {
-          hasReadMessagesInView = false;
-          hasUnreadMessagesInView = true;
-          appendMessage({ ...streamEvent.msg }, true).then(() => {
-            scrollToBottom();
-            markMessagesAsRead();
+          const shouldFollow = recordIncomingMessage();
+          appendMessage({ ...streamEvent.msg }, shouldFollow).then(() => {
+            if (shouldFollow) markMessagesAsRead();
           }).catch(() => {});
           // Fire native notification if the app/tab is in the background
           if (document.hidden && typeof window.showNativeNotification === 'function') {
@@ -476,9 +512,9 @@ async function initializeChat() {
       // Use Number() coercion for safe comparison regardless of int/string type
       if (Number(msg.connection_id) === Number(currentConnId)) {
         if (Number(msg.sender_id) !== Number(currentUser.id)) {
-          hasReadMessagesInView = false;
-          appendMessage(msg, true);
-          markMessagesAsRead();
+          const shouldFollow = recordIncomingMessage();
+          appendMessage(msg, shouldFollow);
+          if (shouldFollow) markMessagesAsRead();
           
           // Cache incoming message
           if (typeof messageCache !== 'undefined') {
@@ -679,7 +715,9 @@ async function initializeChat() {
     }
   }
 
-  if (socket) {
+  // Production client delivery is SSE. The shared socket object is a deliberate
+  // no-op compatibility shim, so never register a second realtime pipeline on it.
+  if (socket && !socket.isMock) {
     // Register all message/presence listeners once
     setupChatSocketListeners();
 
@@ -767,10 +805,13 @@ async function initializeChat() {
     }
     
     const scrollHandler = function() {
-      const isNearBottom = messagesContainer.scrollTop > -200;
+      const isNearBottom = isViewingLatestMessages();
       if (isNearBottom) {
+        unreadIncomingCount = 0;
+        updateNewMessagesButton();
         scrollBottomBtn.classList.add('opacity-0', 'pointer-events-none');
         scrollBottomBtn.classList.remove('opacity-100', 'pointer-events-auto');
+        markMessagesAsRead();
       } else {
         scrollBottomBtn.classList.remove('opacity-0', 'pointer-events-none');
         scrollBottomBtn.classList.add('opacity-100', 'pointer-events-auto');
@@ -781,7 +822,10 @@ async function initializeChat() {
     window.__chatDomListeners.scroll = scrollHandler;
     
     scrollBottomBtn.onclick = function() {
-      scrollToBottom();
+      scrollToBottom(true);
+      unreadIncomingCount = 0;
+      updateNewMessagesButton();
+      setTimeout(markMessagesAsRead, 150);
     };
   }
   
@@ -803,8 +847,18 @@ async function initializeChat() {
     chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
   };
 
+  const draftKey = `delulu_chat_draft_${currentConnId}`;
+  const savedDraft = localStorage.getItem(draftKey);
+  if (savedDraft) {
+    chatInput.value = savedDraft;
+    resizeChatInput();
+    chatSendBtn.classList.remove('hidden');
+    chatMicBtn.classList.add('hidden');
+  }
+
   chatInput.oninput = () => {
     resizeChatInput();
+    localStorage.setItem(draftKey, chatInput.value);
     if (chatInput.value.trim().length > 0) {
       chatSendBtn.classList.remove('hidden');
       chatMicBtn.classList.add('hidden');
@@ -842,9 +896,13 @@ async function initializeChat() {
     
     notifyTypingState(false);
     const tempId = 'temp-' + Date.now();
+    const clientUuid = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `msg-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
     // Clear input & buttons instantly
     chatInput.value = '';
+    localStorage.removeItem(draftKey);
     chatInput.style.height = 'auto'; // Reset textarea auto-grow height
     chatSendBtn.classList.add('hidden');
     chatMicBtn.classList.remove('hidden');
@@ -855,17 +913,18 @@ async function initializeChat() {
       is_sending: true,
       sender_id: currentUser.id,
       content,
+      client_uuid: clientUuid,
       is_encrypted: 0,
       created_at: new Date().toISOString()
     }, true);
 
-    if (socket) {
+    if (socket && !socket.isMock) {
       socket.emit('typing', { connectionId: currentConnId, isTyping: false });
     }
 
     // Process encryption & API request in the background
     (async () => {
-      let payload = { connection_id: currentConnId, content };
+      let payload = { connection_id: currentConnId, content, client_uuid: clientUuid };
       try {
         if (isE2EEActive && sharedSecretKey) {
           const encrypted = await E2EECrypto.encryptMessage(content, sharedSecretKey);
@@ -908,12 +967,14 @@ async function initializeChat() {
               connection_id: currentConnId,
               content: payload.content,
               is_encrypted: payload.is_encrypted || 0,
-              iv: payload.iv || null
+              iv: payload.iv || null,
+              client_uuid: clientUuid
             });
             const msgEl = document.getElementById(tempId);
             if (msgEl) {
               msgEl.classList.remove('opacity-60');
               msgEl.removeAttribute('id');
+              msgEl.dataset.clientUuid = clientUuid;
               const timeEl = msgEl.querySelector('.text-\\[10px\\]');
               if (timeEl) {
                 timeEl.textContent = 'Queued — will send when connected';
@@ -1171,10 +1232,49 @@ async function initializeChat() {
   const peekNotVibing = document.getElementById('peek-not-vibing');
   if (peekNotVibing) peekNotVibing.remove();
   
-  // Start periodic outbox flush — works with or without socket.
-  // Checks every 15s for pending offline messages and sends them.
+  // Reconcile queued optimistic bubbles when the offline outbox later reaches
+  // the server. A client UUID makes this safe even when an HTTP response was
+  // lost after the server had already accepted the message.
+  if (!window.__chatOutboxEventsBound) {
+    window.__chatOutboxEventsBound = true;
+    window.addEventListener('outbox-message-sent', (event) => {
+      const { item, message } = event.detail || {};
+      if (!item || String(item.connection_id) !== String(currentConnId)) return;
+      const row = Array.from(document.querySelectorAll('[data-client-uuid]'))
+        .find(el => el.dataset.clientUuid === item.client_uuid);
+      if (!row) return;
+      row.classList.remove('opacity-60');
+      if (message && message.id) row.setAttribute('data-msg-id', message.id);
+      const status = row.querySelector('.msg-status-icon');
+      if (status) status.innerHTML = '<span class="text-[11px] opacity-70 material-symbols-outlined text-[14px] align-middle">check</span>';
+      if (message && typeof messageCache !== 'undefined') {
+        messageCache.cacheSingleMessage(currentConnId, message).catch(() => {});
+      }
+    });
+    window.addEventListener('outbox-message-failed', (event) => {
+      const item = event.detail;
+      if (!item || String(item.connection_id) !== String(currentConnId)) return;
+      const row = Array.from(document.querySelectorAll('[data-client-uuid]'))
+        .find(el => el.dataset.clientUuid === item.client_uuid);
+      if (!row) return;
+      const status = row.querySelector('.msg-status-icon');
+      if (status) {
+        status.innerHTML = '<button type="button" class="text-error font-bold underline" title="Retry sending this message">Retry</button>';
+        const retryButton = status.querySelector('button');
+        retryButton.onclick = async () => {
+          await CHAT_CACHE_DB.pending.update(item.client_uuid, { retry_count: 0, terminal_notified: 0 });
+          status.innerHTML = '<span class="text-[11px] opacity-50 material-symbols-outlined text-[14px]">schedule</span>';
+          outboxQueue.flushPending().catch(() => {});
+        };
+      }
+    });
+  }
+
+  // Start only after the listeners exist so a quick reconnect cannot lose the
+  // acknowledgement that reconciles an optimistic bubble.
   if (typeof startOutboxFlush !== 'undefined') {
     startOutboxFlush(15000);
+    outboxQueue.flushPending().catch(() => {});
   }
 
   // Kick off real-time event stream (SSE) for icebreaker games and status changes
@@ -1229,7 +1329,9 @@ let _readInFlight = false;
 let _pendingReadMark = false;
 
 function markMessagesAsRead() {
-  if (!currentConnId || document.hidden) return;
+  // Do not acknowledge an entire thread just because it loaded in the
+  // background; advance read state only at the live end of the conversation.
+  if (!currentConnId || document.hidden || !hasUnreadMessagesInView || !isViewingLatestMessages()) return;
   if (_readInFlight) {
     _pendingReadMark = true;
     return;
@@ -1240,6 +1342,7 @@ function markMessagesAsRead() {
     .then((data) => {
       if (data && data.readAt) {
         myLastReadAt = data.readAt;
+        hasUnreadMessagesInView = false;
       }
     })
     .catch(() => {})
@@ -1256,16 +1359,17 @@ function markMessagesAsRead() {
 function scrollToBottom(smooth = false) {
   const cont = document.getElementById('chat-messages');
   if (cont) {
-    // With flex-col-reverse, scrollTop=0 shows the visual top (oldest messages).
-    // We want the visual bottom (newest messages) — scrollHeight achieves that.
-    cont.scrollTo({ top: cont.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+    // flex-col-reverse puts the newest message at the scroll origin.
+    cont.scrollTo({ top: 0, behavior: smooth ? 'smooth' : 'auto' });
+    unreadIncomingCount = 0;
+    updateNewMessagesButton();
     
     // Attach load listeners to async images so height expansion re-scrolls to bottom
     cont.querySelectorAll('img:not([data-scroll-handled])').forEach(img => {
       img.dataset.scrollHandled = '1';
       if (!img.complete) {
         img.addEventListener('load', () => {
-          cont.scrollTo({ top: cont.scrollHeight, behavior: 'auto' });
+          cont.scrollTo({ top: 0, behavior: 'auto' });
         }, { once: true });
       }
     });
@@ -1274,7 +1378,7 @@ function scrollToBottom(smooth = false) {
 
 if (typeof window !== 'undefined' && window.visualViewport) {
   window.visualViewport.addEventListener('resize', () => {
-    scrollToBottom(false);
+    if (isViewingLatestMessages()) scrollToBottom(false);
   });
 }
 
@@ -1356,6 +1460,10 @@ function setupModalEventDelegation() {
       case 'icebreaker-from-chat':
         closeModal();
         setTimeout(() => openIcebreakerModal(), 250);
+        break;
+      case 'end-chat-from-menu':
+        closeModal();
+        submitNotVibing();
         break;
       case 'report-from-chat':
         closeModal();
@@ -1458,11 +1566,12 @@ async function loadChatInfo() {
     hasLoadedInitialMessages = true;
     syncActiveGame(c);
     
-    // Scroll to ensure game cards and latest messages are visible
-    scrollToBottom();
+    // Only the first open owns the viewport. Status/reconnect refreshes must
+    // never force someone out of older messages they are reading.
+    if (isFirstMessageLoad) scrollToBottom();
     
     // Mark messages as read shortly after loading
-    setTimeout(() => markMessagesAsRead(), 500);
+    if (isFirstMessageLoad) setTimeout(() => markMessagesAsRead(), 500);
   } catch (err) {
     console.error('loadChatInfo caught error:', err);
     fetch(resolveUrl('/api/log-error'), {
@@ -1793,6 +1902,9 @@ function initTopSentinelObserver() {
 async function loadMessages(isInitial = false, forceFull = false) {
   const cont = document.getElementById('chat-messages');
   if (!cont) return;
+  // Capture this before DOM mutations: it decides whether a refresh may follow
+  // the newest message or must preserve the reader's history position.
+  const shouldFollowLatest = isInitial || isViewingLatestMessages();
   let hasCachedMessages = false;
   try {
     // 1. Render from IndexedDB cache instantly on initial load (no network wait)
@@ -1820,7 +1932,7 @@ async function loadMessages(isInitial = false, forceFull = false) {
         }
         // Re-prepend game elements so they appear at the bottom (flex-col-reverse)
         existingGames.forEach(el => cont.prepend(el));
-        scrollToBottom();
+        if (shouldFollowLatest) scrollToBottom();
       }
     }
     
@@ -1858,6 +1970,8 @@ async function loadMessages(isInitial = false, forceFull = false) {
       
       const newMsgs = data.messages.filter(m => !existingIds.has(String(m.id)));
       if (newMsgs.length > 0) {
+        const incoming = newMsgs.filter(m => Number(m.sender_id) !== Number(currentUser.id));
+        if (!shouldFollowLatest) incoming.forEach(recordIncomingMessage);
         for (const m of newMsgs) {
           if (isUnreadFromOther(m)) {
             hasUnreadMessagesInView = true;
@@ -1865,7 +1979,7 @@ async function loadMessages(isInitial = false, forceFull = false) {
           }
           await appendMessage(m, false);
         }
-        scrollToBottom();
+        if (shouldFollowLatest) scrollToBottom();
       }
 
       // Track the oldest message timestamp for the load-more cursor
@@ -1883,7 +1997,7 @@ async function loadMessages(isInitial = false, forceFull = false) {
     }
     
     // Mark as read after loading
-    setTimeout(() => markMessagesAsRead(), 300);
+    if (shouldFollowLatest) setTimeout(() => markMessagesAsRead(), 300);
 
     // Initialise the top sentinel observer after the first successful load
     if (isInitial) {
@@ -2109,6 +2223,7 @@ async function appendMessage(m, scrollToBottom = true) {
   div.className = `flex group items-end gap-2 ${isMe ? 'justify-end pl-10' : 'justify-start pr-10'} w-full fade-in ${_rowSpacing}`;
   if (m.id)    div.setAttribute('data-msg-id', m.id);
   if (m.tempId) div.id = m.tempId;
+  if (m.client_uuid) div.dataset.clientUuid = m.client_uuid;
   if (m.is_sending) div.classList.add('opacity-60');
   div.dataset.senderId = String(m.sender_id);
 
@@ -2128,7 +2243,7 @@ async function appendMessage(m, scrollToBottom = true) {
     
     div.appendChild(inner);
     cont.prepend(div);
-    if (scrollToBottom) cont.scrollTop = cont.scrollHeight;
+    if (scrollToBottom) cont.scrollTop = 0;
     return;
   }
 
@@ -2243,7 +2358,7 @@ async function appendMessage(m, scrollToBottom = true) {
   cont.prepend(div);
   
   if (scrollToBottom) {
-    cont.scrollTo({ top: cont.scrollHeight, behavior: 'auto' });
+    cont.scrollTo({ top: 0, behavior: 'auto' });
   }
   
   // Write to IndexedDB cache after rendering

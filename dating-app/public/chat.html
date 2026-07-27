@@ -86,12 +86,7 @@
           </div>
         </div>
         <div class="flex items-center gap-1.5 shrink-0">
-          <button id="btn-icebreaker" class="p-1.5 bg-surface-variant text-on-surface-variant rounded-full text-xs font-bold hover:bg-surface-container-high transition-colors shadow-sm shrink-0 flex items-center justify-center" title="Icebreaker Games" aria-label="Play Icebreaker Games">
-            <span class="material-symbols-outlined text-base">casino</span>
-          </button>
-          <button id="btn-not-vibing" class="px-2.5 py-1 bg-error/10 text-error rounded-full text-[11px] md:text-xs font-bold hover:bg-error/20 transition-colors shadow-sm hidden shrink-0" aria-label="End Chat">
-            Not Vibing
-          </button>
+          <!-- Secondary chat actions live in the overflow menu to keep the header calm. -->
           <button id="btn-identity-reveal" class="px-2.5 py-1 btn-primary text-white rounded-full text-[11px] md:text-xs font-bold transition-all shadow-sm hidden shrink-0" aria-label="Reveal Identity">
             Reveal
           </button>
@@ -120,6 +115,7 @@
       <!-- Scroll to bottom button -->
       <button id="btn-scroll-bottom" class="absolute bottom-20 right-6 w-10 h-10 rounded-full bg-primary text-white shadow-lg flex items-center justify-center opacity-0 pointer-events-none transition-all duration-300 z-10 hover:scale-110 active:scale-95" title="Scroll to bottom">
         <span class="material-symbols-outlined text-lg">keyboard_arrow_down</span>
+        <span id="new-messages-badge" class="hidden absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-error text-white text-[10px] font-bold leading-5 text-center" aria-live="polite"></span>
       </button>
       
       <div class="p-3 bg-surface-container-lowest border-t border-outline-variant/10 z-10 pb-safe relative">
@@ -256,6 +252,10 @@
           <span class="material-symbols-outlined text-primary text-xl">casino</span>
           <div><span class="font-semibold text-sm">Play Icebreaker</span><p class="text-xs text-on-surface-variant">Fun games to break the ice</p></div>
         </button>
+        <button data-action="end-chat-from-menu" class="w-full text-left px-4 py-3 bg-error/10 rounded-xl hover:bg-error/20 transition-colors flex items-center gap-3">
+          <span class="material-symbols-outlined text-error text-xl">heart_broken</span>
+          <div><span class="font-semibold text-sm text-error">End chat</span><p class="text-xs text-on-surface-variant">This cannot be undone</p></div>
+        </button>
         <button data-action="report-from-chat" class="w-full text-left px-4 py-3 bg-surface-container-low rounded-xl hover:bg-surface-container-high transition-colors flex items-center gap-3">
           <span class="material-symbols-outlined text-error text-xl">warning</span>
           <div><span class="font-semibold text-sm">Report User</span><p class="text-xs text-on-surface-variant">Flag inappropriate behavior</p></div>
@@ -276,8 +276,8 @@
 
   <link rel="preload" href="js/shared.js?v=244" as="script">
   <script src="js/shared.js?v=244"></script>
-  <script src="js/chat-cache.js?v=244"></script>
+  <script src="js/chat-cache.js?v=245"></script>
   <script src="js/crypto.js"></script>
-  <script src="js/chat.js?v=244"></script>
+  <script src="js/chat.js?v=245"></script>
 </body>
 </html>

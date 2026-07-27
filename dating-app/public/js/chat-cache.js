@@ -191,6 +191,12 @@ const outboxQueue = {
     }
   },
 
+  notify(type, detail) {
+    try {
+      window.dispatchEvent(new CustomEvent(type, { detail }));
+    } catch (e) {}
+  },
+
   async dequeue(clientUuid) {
     try {
       await CHAT_CACHE_DB.pending.delete(clientUuid);
@@ -215,16 +221,22 @@ const outboxQueue = {
     try {
       const all = await CHAT_CACHE_DB.pending.toArray();
       for (const item of all) {
-        // Skip items that have exceeded max retries (5 attempts = permanently failed)
+        // Keep terminal failures instead of silently deleting a person's words.
+        // The chat UI can surface a retry action; data stays safely on-device.
         if ((item.retry_count || 0) >= 5) {
-          // Remove permanently failed messages so they don't block the queue
-          await outboxQueue.dequeue(item.client_uuid);
-          console.warn('Outbox: dropped message after 5 failed retries', item.client_uuid);
+          if (!item.terminal_notified) {
+            await CHAT_CACHE_DB.pending.update(item.client_uuid, { terminal_notified: 1 });
+            outboxQueue.notify('outbox-message-failed', item);
+          }
           continue;
         }
         
         try {
-          const payload = { connection_id: item.connection_id, content: item.content };
+          const payload = {
+            connection_id: item.connection_id,
+            content: item.content,
+            client_uuid: item.client_uuid
+          };
           if (item.is_encrypted) {
             payload.is_encrypted = 1;
             payload.iv = item.iv;
@@ -238,16 +250,23 @@ const outboxQueue = {
           const data = await res.json();
           if (res.ok && data.success) {
             await outboxQueue.dequeue(item.client_uuid);
+            outboxQueue.notify('outbox-message-sent', { item, message: data.message });
           } else {
             // Increment retry count for non-API errors (server returned error)
             try {
-              await CHAT_CACHE_DB.pending.update(item.client_uuid, { retry_count: (item.retry_count || 0) + 1 });
+              await CHAT_CACHE_DB.pending.update(item.client_uuid, {
+                retry_count: (item.retry_count || 0) + 1,
+                terminal_notified: 0
+              });
             } catch (e) {}
           }
         } catch (e) {
           // Network failure — increment retry count
           try {
-            await CHAT_CACHE_DB.pending.update(item.client_uuid, { retry_count: (item.retry_count || 0) + 1 });
+            await CHAT_CACHE_DB.pending.update(item.client_uuid, {
+              retry_count: (item.retry_count || 0) + 1,
+              terminal_notified: 0
+            });
           } catch (innerErr) {}
           console.warn('Outbox flush item failed (will retry):', e);
         }

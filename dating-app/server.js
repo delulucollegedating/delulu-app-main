@@ -1732,6 +1732,9 @@ app.post('/api/messages/send', requireAuth, async (req, res) => {
     iv || null,
     client_uuid || null
   );
+  if (!msg) {
+    return res.status(503).json({ error: 'Message service is temporarily unavailable. Please retry.' });
+  }
 
   const senderId = Number(req.session.userId);
   const displayContent = Number(is_encrypted) === 1 ? 'Encrypted message' : sanitizeText(content.trim());
@@ -1810,6 +1813,9 @@ app.post('/api/messages/upload-voice', requireAuth, (req, res, next) => {
       is_encrypted || 0,
       iv || null
     );
+    if (!msg) {
+      return res.status(503).json({ error: 'Voice message service is temporarily unavailable. Please retry.' });
+    }
 
     const voiceSenderId = Number(req.session.userId);
 
