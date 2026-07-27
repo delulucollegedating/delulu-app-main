@@ -1106,6 +1106,15 @@ body.dark #chat-messages .date-divider-pill {
   min-height: 0;
 }
 
+/* A real app-frame on desktop: the fixed site navigation consumes space in
+   normal layout, while the chat panel fills every remaining pixel. */
+.chat-page #app-root > div {
+  min-height: 0;
+}
+.chat-page #chat-messages {
+  min-height: 0;
+}
+
 .chat-topbar {
   position: relative;
   flex: 0 0 auto;
@@ -1305,8 +1314,33 @@ body.dark .chat-composer { background: #292b2d; border-color: rgba(255, 255, 255
 body.dark .chat-composer:focus-within { background: #303234; border-color: rgba(255, 180, 166, 0.52); }
 
 @media (min-width: 768px) {
-  .chat-topbar { padding: 14px 18px 12px; }
-  .chat-action-row { padding-top: 12px; }
-  .chat-composer-shell { padding: 12px 18px; }
-  .chat-composer { max-width: 900px; margin: 0 auto; }
+  body.chat-page {
+    box-sizing: border-box;
+    padding-top: var(--header-h-md);
+  }
+  body.chat-page #app-root {
+    height: calc(100dvh - var(--header-h-md)) !important;
+    padding: 0 24px 20px;
+  }
+  .chat-page #app-root > div {
+    height: 100%;
+    max-width: 1440px;
+    margin: 0 auto;
+  }
+  .chat-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 10px 16px;
+  }
+  .chat-topbar-main { flex: 1 1 auto; max-width: 520px; }
+  .chat-action-row {
+    flex: 0 0 auto;
+    padding: 0;
+    overflow: visible;
+  }
+  .chat-action-chip { min-height: 36px; }
+  .chat-composer-shell { padding: 10px 16px; }
+  .chat-composer { max-width: 960px; margin: 0 auto; }
 }
