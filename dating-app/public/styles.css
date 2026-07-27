@@ -6,7 +6,7 @@
 
 /* Ensure hidden elements are ALWAYS hidden, even if CDN script is delayed */
 .hidden {
-  display: none !important;
+  display: none;
 }
 
 /* Ensure Material Symbols icon font is never overridden by text resets */
