@@ -1663,9 +1663,18 @@ app.get('/api/messages/:connectionId', requireAuth, async (req, res) => {
   if (!conn) return res.status(404).json({ error: 'Connection not found' });
   if (!requireActiveConnection(conn, res)) return;
   
-  const { since } = req.query;
-  const messages = await messageOps.getRecentForConnection(req.params.connectionId, 50, since || null);
-  res.json({ messages, connection: sanitizeConnection(conn, req.session.userId) });
+  const { since, before } = req.query;
+  const limit = parseInt(req.query.limit, 10) || 30;
+
+  const messages = await messageOps.getRecentForConnection(
+    req.params.connectionId,
+    Math.min(limit, 100), // Cap at 100 to prevent abuse
+    since || null,
+    before || null
+  );
+
+  const hasMore = messages._hasMore || false;
+  res.json({ messages, has_more: hasMore, connection: sanitizeConnection(conn, req.session.userId) });
 });
 
 // REST fallback for read receipts when Socket.io is disabled or unavailable.

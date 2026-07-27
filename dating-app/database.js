@@ -1456,12 +1456,11 @@ const messageOps = {
   // are fetched — this is the core delta-sync optimization.
   // Tombstoned messages (deleted_at IS NOT NULL) are excluded.
   // Returns oldest-first (ascending) to match the existing client contract.
-  async getRecentForConnection(connectionId, limit = 50, since = null) {
+  async getRecentForConnection(connectionId, limit = 30, since = null, before = null) {
     try {
       const supabase = getSupabase();
 
       // Include deleted messages so the client can show the "deleted" placeholder.
-      // Same row limit (50) applies — no extra reads incurred for typical usage.
       let query = supabase
         .from('messages')
         .select('*')
@@ -1472,15 +1471,39 @@ const messageOps = {
         query = query.gt('created_at', since);
       }
 
+      // Pagination cursor: fetch messages OLDER than the given timestamp
+      // Used by "Load More" / infinite scroll upward in the chat UI
+      if (before) {
+        query = query.lt('created_at', before);
+      }
+
+      // Fetch limit+1 to detect if more pages exist without an extra count query
+      const fetchLimit = since ? 200 : limit + 1;
+
       // Fetch newest-first so .limit() trims the right end, then reverse in JS
       const { data, error } = await query
         .order('created_at', { ascending: false })
-        .limit(limit);
+        .limit(fetchLimit);
 
       if (error) throw error;
 
-      // Reverse to oldest-first — same return contract as the old Firestore version
-      return (data || []).reverse();
+      const rows = data || [];
+
+      // When doing delta sync (since param), return all — no pagination needed
+      if (since) {
+        return rows.reverse();
+      }
+
+      // Determine if more messages exist before this page
+      const hasMore = rows.length > limit;
+      const pageRows = hasMore ? rows.slice(0, limit) : rows;
+
+      // Reverse to oldest-first — same return contract as before
+      const messages = pageRows.reverse();
+
+      // Attach has_more flag on the array itself so the route handler can expose it
+      messages._hasMore = hasMore;
+      return messages;
     } catch (err) {
       console.error('messageOps.getRecentForConnection error:', err.message);
       return [];
