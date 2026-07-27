@@ -45,12 +45,12 @@
       }
     };
   </script>
-  <link rel="stylesheet" href="styles.css?v=247">
+  <link rel="stylesheet" href="styles.css?v=248">
   <style>
     /* Hide navbars on mobile when in a chat for better UX, or keep them. We'll keep global header hidden on chat on mobile. */
   </style>
 </head>
-<body class="bg-background text-on-background min-h-screen flex flex-col pt-0 md:pt-24 pb-0 antialiased">
+<body class="bg-background text-on-background h-dvh overflow-hidden flex flex-col antialiased chat-page">
   
   <header id="global-header" class="fixed top-0 left-0 w-full z-50 flex justify-between items-center px-4 md:px-16 py-3 md:py-4 bg-surface/80 backdrop-blur-xl shadow-sm hidden md:flex">
     <div class="flex items-center gap-2 font-bold text-2xl text-primary tracking-tight">
@@ -72,7 +72,7 @@
     </div>
   </header>
 
-  <main class="flex-grow flex flex-col w-full px-0 md:px-6 h-[100dvh] md:h-[calc(100dvh-var(--header-h-md))] relative" id="app-root">
+  <main class="flex flex-col w-full px-0 md:px-6 h-[100dvh] md:h-[calc(100dvh-var(--header-h-md))] relative" id="app-root">
     <div class="flex flex-col w-full h-full md:rounded-2xl bg-surface-container-lowest shadow-sm border border-outline-variant/20 overflow-hidden relative">
       <div class="flex items-center justify-between p-3 md:p-4 border-b border-outline-variant/10 glass-panel z-10 pt-safe bg-surface/90 gap-2">
         <div class="flex items-center gap-2 min-w-0 flex-1">

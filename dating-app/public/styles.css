@@ -596,6 +596,30 @@ body {
   flex-shrink: 0;
 }
 
+/* Chat Page — Only the messages container scrolls, never the page itself */
+body.chat-page {
+  overflow: hidden !important;
+  height: 100dvh !important;
+  touch-action: none !important;
+}
+
+body.chat-page #app-root {
+  height: 100dvh !important;
+  overflow: hidden !important;
+}
+
+@media (min-width: 768px) {
+  body.chat-page #app-root {
+    height: calc(100dvh - var(--header-h-md)) !important;
+  }
+}
+
+body.chat-page #chat-messages {
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+  touch-action: pan-y !important;
+}
+
 /* Discover & Profile Pages Scroll-Free Layout */
 body.discover-page, body.profile-page {
   overflow: hidden !important;
