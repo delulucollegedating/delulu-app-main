@@ -22,7 +22,7 @@
 // ── Cache Version ─────────────────────────────────────────────────────────────
 // Increment this string whenever you deploy a new version of the app.
 // This causes the service worker to delete the old cache and re-download assets.
-const CACHE_VERSION = 'delulu-v5';
+const CACHE_VERSION = 'delulu-v6';
 
 // ── Static Assets to Pre-Cache on Install ─────────────────────────────────────
 // These files are cached immediately when the service worker installs.
@@ -52,10 +52,6 @@ const STATIC_PATTERNS = [
   /styles\.css/,
   /logo\.png/,
   /favicon/,
-  /fonts\.googleapis\.com/,
-  /fonts\.gstatic\.com/,
-  /cdnjs\.cloudflare\.com/,
-  /cdn\.tailwindcss\.com/,
 ];
 
 // Never cache these — always network only
@@ -63,6 +59,11 @@ const BYPASS_PATTERNS = [
   /\/api\//,
   /\/stream$/,
   /\/uploads\//,
+  /cdn\.tailwindcss\.com/,
+  /fonts\.googleapis\.com/,
+  /fonts\.gstatic\.com/,
+  /cdn\.jsdelivr\.net/,
+  /cdnjs\.cloudflare\.com/,
 ];
 
 // ── Install: Pre-Cache Static Assets ─────────────────────────────────────────
