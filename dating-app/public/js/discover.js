@@ -4,6 +4,7 @@ let navTimeout = null;
 let discoveryLoading = false;
 let lastDiscoveryLoadAt = 0;
 let userHasActiveChat = false;
+let activeGenderFilter = localStorage.getItem('delulu_discover_gender_filter') || 'all';
 
 document.addEventListener('DOMContentLoaded', async () => {
   await requireAuth();
@@ -41,6 +42,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
+  // Restore saved gender filter pill on page load
+  applyGenderFilterUI(activeGenderFilter);
+
   // Smooth scroll wheel/trackpad navigation (debounced vertical scrolling mapped to swiping)
   let lastScrollTime = 0;
   const scrollCooldown = 280; // ms between card swiping transitions
@@ -61,6 +65,40 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }, { passive: false });
 });
+
+// ── Gender Filter ────────────────────────────────────────────────────────────
+
+function applyGenderFilterUI(filter) {
+  const filters = { all: '#filter-all', male: '#filter-male', female: '#filter-female' };
+  Object.entries(filters).forEach(([key, sel]) => {
+    const btn = document.querySelector(sel);
+    if (!btn) return;
+    const isActive = key === filter;
+    btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    if (isActive) {
+      btn.className = 'discover-filter-btn px-4 py-1.5 rounded-full text-xs font-bold border transition-all duration-200 bg-primary text-white border-primary shadow-sm scale-105';
+    } else {
+      btn.className = 'discover-filter-btn px-4 py-1.5 rounded-full text-xs font-bold border transition-all duration-200 bg-surface text-on-surface-variant border-outline-variant hover:border-primary hover:text-primary';
+    }
+  });
+}
+
+function setGenderFilter(filter) {
+  if (activeGenderFilter === filter) return; // already selected — no-op
+  activeGenderFilter = filter;
+  try { localStorage.setItem('delulu_discover_gender_filter', filter); } catch (e) {}
+  applyGenderFilterUI(filter);
+  // Invalidate cache so the new filter is not suppressed by skipRecent cooldown
+  lastDiscoveryLoadAt = 0;
+  // Clear stale cached profiles so we don't flash old gender data
+  try {
+    sessionStorage.removeItem('discover_profiles');
+    localStorage.removeItem('discover_profiles');
+  } catch (e) {}
+  discoverProfiles = [];
+  currentIndex = 0;
+  loadDiscovery();
+}
 
 async function handleDismissCenter() {
   // Sync from avatar3d's authoritative targetIndex
@@ -209,7 +247,9 @@ async function loadDiscovery(options = {}) {
 
   discoveryLoading = true;
   try {
-    const data = await apiCall('/api/discover');
+    // Build URL with optional gender filter query param
+    const genderParam = (activeGenderFilter && activeGenderFilter !== 'all') ? `?gender=${activeGenderFilter}` : '';
+    const data = await apiCall(`/api/discover${genderParam}`);
     lastDiscoveryLoadAt = Date.now();
     userHasActiveChat = !!data.hasActiveConnection;
     discoverProfiles = data.profiles || [];

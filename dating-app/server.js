@@ -1111,9 +1111,14 @@ app.get('/api/discover', requireAuth, async (req, res) => {
   const user = await userOps.getById(req.session.userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
-  // Get IDs of users already connected with
+  // Optional ?gender=male|female filter chosen by the user on the discover page.
+  // If absent or 'all', pass null so getDiscoverable returns everyone in the ecosystem.
+  const rawGender = req.query.gender;
+  const genderFilter = (rawGender === 'male' || rawGender === 'female') ? rawGender : null;
+
+  // Get IDs of users already connected with (active/pending only)
   const excludeIds = await connectionOps.getConnectedUserIds(req.session.userId);
-  const result = await userOps.getDiscoverable(req.session.userId, user.gender, excludeIds);
+  const result = await userOps.getDiscoverable(req.session.userId, genderFilter, excludeIds);
   const profiles = result.profiles || [];
   const hasActiveConnection = !!result.hasActiveConnection;
 
@@ -1176,12 +1181,8 @@ app.post('/api/connections/request', requireAuth, discoverLimiter, async (req, r
   const target = await userOps.getById(to_user_id);
   if (!user || !target) return res.status(404).json({ error: 'User not found' });
 
-  if (user.gender === 'male' && target.gender !== 'female') {
-    return res.status(400).json({ error: 'Gender preference mismatch: Male accounts can only connect with Female accounts.' });
-  }
-  if (user.gender === 'female' && target.gender !== 'male') {
-    return res.status(400).json({ error: 'Gender preference mismatch: Female accounts can only connect with Male accounts.' });
-  }
+  // Gender restriction removed — any user can connect with any user.
+  // The discover page filter is purely a UI preference, not enforced server-side.
 
   const result = await connectionOps.sendRequest(req.session.userId, to_user_id);
   if (result.error) return res.status(400).json(result);

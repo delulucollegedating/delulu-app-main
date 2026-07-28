@@ -253,7 +253,7 @@ const userOps = {
   },
 
   // Get discoverable profiles (filtered by ecosystem)
-  async getDiscoverable(userId, gender, excludeIds = []) {
+  async getDiscoverable(userId, genderFilter = null, excludeIds = []) {
     const firestore = getDB();
     const userDoc = await this.getById(userId);
     const userEcosystem = userDoc?.ecosystem || 'rishihood';
@@ -270,12 +270,9 @@ const userOps = {
     
     const allExclude = [...new Set([...excludeIds, ...blockedIds, Number(userId)])];
     
-    let genderFilter = null;
-    if (gender === 'male') {
-      genderFilter = 'female';
-    } else if (gender === 'female') {
-      genderFilter = 'male';
-    }
+    // genderFilter can be 'male', 'female', or null (= show all genders)
+    // This is now controlled by the user's filter preference on the discover page,
+    // NOT auto-derived from the viewer's own gender.
 
     // Try composite query first (ecosystem + gender) which requires a Firestore composite index.
     // If the index doesn't exist, fall back to querying by ecosystem only and filtering in memory.
