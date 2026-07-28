@@ -55,6 +55,22 @@ const { getAuth: getFirebaseAuth } = require('firebase-admin/auth');
 const { getDB, seedDemoUsers, userOps, connectionOps, messageOps, otpOps, invalidateUserCache, reportOps, blockOps, pushOps } = require('./database');
 const multer = require('multer');
 const fs = require('fs');
+const CircuitBreaker = require('./utils/circuitBreaker');
+
+// Circuit breakers for external service isolation
+const brevoBreaker = new CircuitBreaker('BrevoEmailAPI', {
+  timeoutMs: 5000,       // Abort requests hanging over 5s
+  failureThreshold: 3,   // Trip circuit after 3 consecutive failures
+  resetTimeoutMs: 10000, // Fast-fail for 10s before probing recovery
+  maxConcurrent: 5       // Cap simultaneous outbound email calls
+});
+
+const pushBreaker = new CircuitBreaker('PushNotificationsAPI', {
+  timeoutMs: 4000,       // Abort hanging push calls over 4s
+  failureThreshold: 5,   // Trip after 5 failures
+  resetTimeoutMs: 15000, // Fast-fail push calls for 15s when degraded
+  maxConcurrent: 10      // Cap simultaneous push calls
+});
 
 // Load environment variables
 require('dotenv').config();
@@ -761,33 +777,36 @@ app.get('/api/session', async (req, res) => {
   res.json({ authenticated: false });
 });
 
-// Helper to send transactional emails via Brevo HTTP API
+// Helper to send transactional emails via Brevo HTTP API (protected by CircuitBreaker)
 async function sendBrevoEmail(email, subject, htmlContent) {
   const apiKey = process.env.BREVO_API_KEY;
   if (!apiKey) {
     throw new Error('BREVO_API_KEY is not configured on the server. Please set it in your Render settings.');
   }
 
-  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
-    method: 'POST',
-    headers: {
-      'accept': 'application/json',
-      'api-key': apiKey,
-      'content-type': 'application/json'
-    },
-    body: JSON.stringify({
-      sender: { name: 'Delulu App', email: 'delulu.college.dating@gmail.com' },
-      to: [{ email }],
-      subject,
-      htmlContent
-    })
-  });
+  return brevoBreaker.execute(async (signal) => {
+    const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      signal, // Enforce 5s AbortSignal timeout
+      headers: {
+        'accept': 'application/json',
+        'api-key': apiKey,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        sender: { name: 'Delulu App', email: 'delulu.college.dating@gmail.com' },
+        to: [{ email }],
+        subject,
+        htmlContent
+      })
+    });
 
-  if (!response.ok) {
-    const errData = await response.json().catch(() => ({}));
-    throw new Error(errData.message || `Brevo API error: ${response.status}`);
-  }
-  return response.json();
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.message || `Brevo API error: ${response.status}`);
+    }
+    return response.json();
+  });
 }
 
 // ===== AUTH ROUTES =====
@@ -1883,60 +1902,65 @@ if (vapidPublicKey && vapidPrivateKey) {
 const { getMessaging } = require('firebase-admin/messaging');
 
 async function sendPushNotification(userId, title, body, url = '/messages') {
-  const numUserId = Number(userId);
+  return pushBreaker.execute(async () => {
+    const numUserId = Number(userId);
 
-  // 1. Web Push Notification (PWA / Web Browsers)
-  if (vapidPublicKey && vapidPrivateKey) {
-    try {
-      const subs = await pushOps.getSubscriptions(numUserId);
-      for (const sub of subs) {
-        const pushSub = {
-          endpoint: sub.endpoint,
-          keys: sub.keys
-        };
-        const payload = JSON.stringify({ title, body, url, icon: '/favicon.ico' });
-        webPush.sendNotification(pushSub, payload).catch(err => {
-          if (err.statusCode === 410 || err.statusCode === 404) {
-            pushOps.removeSubscription(sub.endpoint);
-          }
-        });
-      }
-    } catch (err) {
-      console.error('WebPush notification error:', err.message);
-    }
-  }
-
-  // 2. Firebase Admin FCM Native Push Notification (Android App Closed / Background)
-  try {
-    const apps = require('firebase-admin/app').getApps();
-    if (apps.length > 0) {
-      const fcmTokens = await pushOps.getFCMTokens(numUserId);
-      if (fcmTokens && fcmTokens.length > 0) {
-        const messaging = getMessaging(apps[0]);
-        for (const token of fcmTokens) {
-          const message = {
-            token,
-            notification: { title, body },
-            data: { url: url || '/chat.html' },
-            android: {
-              priority: 'high',
-              notification: {
-                sound: 'default',
-                priority: 'high',
-                channelId: 'delulu_messages',
-                visibility: 'public'
-              }
-            }
+    // 1. Web Push Notification (PWA / Web Browsers)
+    if (vapidPublicKey && vapidPrivateKey) {
+      try {
+        const subs = await pushOps.getSubscriptions(numUserId);
+        for (const sub of subs) {
+          const pushSub = {
+            endpoint: sub.endpoint,
+            keys: sub.keys
           };
-          messaging.send(message).catch(fcmErr => {
-            if (fcmErr.code === 'messaging/registration-token-not-registered' || fcmErr.code === 'messaging/invalid-registration-token') {
-              pushOps.removeFCMToken(numUserId, token);
+          const payload = JSON.stringify({ title, body, url, icon: '/favicon.ico' });
+          webPush.sendNotification(pushSub, payload).catch(err => {
+            if (err.statusCode === 410 || err.statusCode === 404) {
+              pushOps.removeSubscription(sub.endpoint);
             }
           });
         }
+      } catch (err) {
+        console.error('WebPush notification error:', err.message);
       }
     }
-  } catch (fcmErr) {}
+
+    // 2. Firebase Admin FCM Native Push Notification (Android App Closed / Background)
+    try {
+      const apps = require('firebase-admin/app').getApps();
+      if (apps.length > 0) {
+        const fcmTokens = await pushOps.getFCMTokens(numUserId);
+        if (fcmTokens && fcmTokens.length > 0) {
+          const messaging = getMessaging(apps[0]);
+          for (const token of fcmTokens) {
+            const message = {
+              token,
+              notification: { title, body },
+              data: { url: url || '/chat.html' },
+              android: {
+                priority: 'high',
+                notification: {
+                  sound: 'default',
+                  priority: 'high',
+                  channelId: 'delulu_messages',
+                  visibility: 'public'
+                }
+              }
+            };
+            messaging.send(message).catch(fcmErr => {
+              if (fcmErr.code === 'messaging/registration-token-not-registered' || fcmErr.code === 'messaging/invalid-registration-token') {
+                pushOps.removeFCMToken(numUserId, token);
+              }
+            });
+          }
+        }
+      }
+    } catch (fcmErr) {}
+  }, () => {
+    // Fallback: If push notification dependency is degraded/open, fail gracefully without blocking chat
+    return false;
+  });
 }
 
 const ALLOWED_REACTIONS = ['😂', '😢', '❤️', '👍', '😮'];
