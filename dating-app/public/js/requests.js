@@ -111,24 +111,51 @@ async function loadRequests(type = 'incoming') {
 }
 
 window.respondReq = async (id, action) => {
+  // Optimistic UI update: animate and remove request card immediately
+  const btn = document.querySelector(`[data-id="${id}"][data-action="${action}"]`);
+  const card = btn ? btn.closest('.glass-panel') : null;
+  if (card) {
+    card.style.transition = 'opacity 180ms ease, transform 180ms ease';
+    card.style.opacity = '0';
+    card.style.transform = 'scale(0.95)';
+    setTimeout(() => { if (card.parentNode) card.remove(); }, 180);
+  }
+
+  if (action === 'accept') {
+    showToast('Accepted! Opening chat...', 'success');
+  } else {
+    showToast('Request declined');
+  }
+
   try {
     await apiCall('/api/connections/respond', 'POST', { connection_id: id, action });
     if (action === 'accept') {
-      showToast('Accepted! Opening chat...', 'success');
-      setTimeout(() => {
-        window.location.href = `chat.html?id=${id}`;
-      }, 300);
-      return;
+      window.location.href = `chat.html?id=${id}`;
     }
+  } catch (err) {
+    // Graceful Rollback: restore requests list state on server error
+    showToast(`Failed to ${action} request: ${err.message}`, 'error');
     loadRequests('incoming');
-  } catch(err) { showToast(err.message, 'error'); }
+  }
 };
 
 window.revokeReq = async (id) => {
+  // Optimistic UI update: animate and remove card immediately
+  const btn = document.querySelector(`[data-id="${id}"][data-action="revoke"]`);
+  const card = btn ? btn.closest('.glass-panel') : null;
+  if (card) {
+    card.style.transition = 'opacity 180ms ease, transform 180ms ease';
+    card.style.opacity = '0';
+    card.style.transform = 'scale(0.95)';
+    setTimeout(() => { if (card.parentNode) card.remove(); }, 180);
+  }
+
   try {
     await apiCall(`/api/connections/${id}`, 'DELETE');
-    loadRequests('sent');
+    showToast('Request cancelled');
   } catch (err) {
-    showToast(err.message, 'error');
+    // Graceful Rollback: restore list state on failure
+    showToast(`Failed to cancel request: ${err.message}`, 'error');
+    loadRequests('sent');
   }
 };

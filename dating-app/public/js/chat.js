@@ -1961,9 +1961,32 @@ function renderReactions(m, parentContainer) {
     
     pill.onclick = async (e) => {
       e.stopPropagation();
+      // Optimistic UI update: toggle current user ID locally for zero-latency feedback
+      const backupReactions = JSON.parse(JSON.stringify(m.reactions || {}));
+      if (!m.reactions) m.reactions = {};
+      if (!m.reactions[emoji]) m.reactions[emoji] = [];
+      const myId = Number(currentUser.id);
+      const userIdx = m.reactions[emoji].indexOf(myId);
+      if (userIdx > -1) {
+        m.reactions[emoji].splice(userIdx, 1);
+        if (m.reactions[emoji].length === 0) delete m.reactions[emoji];
+      } else {
+        m.reactions[emoji].push(myId);
+      }
+      renderReactions(m, parentContainer);
+
       try {
-        await apiCall(`/api/messages/${m.id}/react`, 'POST', { connection_id: currentConnId, emoji });
-      } catch (err) { showToast(err.message, 'error'); }
+        const result = await apiCall(`/api/messages/${m.id}/react`, 'POST', { connection_id: currentConnId, emoji });
+        if (result && result.reactions) {
+          m.reactions = result.reactions;
+          renderReactions(m, parentContainer);
+        }
+      } catch (err) {
+        // Rollback on server failure
+        m.reactions = backupReactions;
+        renderReactions(m, parentContainer);
+        showToast(`Failed to update reaction: ${err.message}`, 'error');
+      }
     };
     container.appendChild(pill);
   });
@@ -2023,35 +2046,67 @@ function showMessageMenu(e, msg, bubbleEl) {
     const btn = document.createElement('button');
     btn.className = 'text-lg hover:scale-125 transition-transform p-1 cursor-pointer';
     btn.textContent = emoji;
-    btn.onclick = async () => {        try {
-          const result = await apiCall(`/api/messages/${msg.id}/react`, 'POST', { connection_id: currentConnId, emoji });
-          if (result && result.reactions) {
-            renderReactions({ id: msg.id, reactions: result.reactions }, bubbleEl);
-          }
-          menu.remove();
-        } catch (err) { showToast(err.message, 'error'); }
-      };
-      emojiRow.appendChild(btn);
-    });
-    menu.appendChild(emojiRow);
+    btn.onclick = async () => {
+      menu.remove();
+      // Optimistic reaction toggle
+      const backupReactions = JSON.parse(JSON.stringify(msg.reactions || {}));
+      if (!msg.reactions) msg.reactions = {};
+      if (!msg.reactions[emoji]) msg.reactions[emoji] = [];
+      const myId = Number(currentUser.id);
+      const userIdx = msg.reactions[emoji].indexOf(myId);
+      if (userIdx > -1) {
+        msg.reactions[emoji].splice(userIdx, 1);
+        if (msg.reactions[emoji].length === 0) delete msg.reactions[emoji];
+      } else {
+        msg.reactions[emoji].push(myId);
+      }
+      renderReactions(msg, bubbleEl);
 
-    if (Number(msg.sender_id) === Number(currentUser.id)) {
-      const delBtn = document.createElement('button');
+      try {
+        const result = await apiCall(`/api/messages/${msg.id}/react`, 'POST', { connection_id: currentConnId, emoji });
+        if (result && result.reactions) {
+          msg.reactions = result.reactions;
+          renderReactions(msg, bubbleEl);
+        }
+      } catch (err) {
+        msg.reactions = backupReactions;
+        renderReactions(msg, bubbleEl);
+        showToast(`Failed to update reaction: ${err.message}`, 'error');
+      }
+    };
+    emojiRow.appendChild(btn);
+  });
+  menu.appendChild(emojiRow);
+
+  if (Number(msg.sender_id) === Number(currentUser.id)) {
+    const delBtn = document.createElement('button');
     delBtn.className = 'w-full text-left px-3 py-1.5 text-error text-xs font-bold hover:bg-error/10 rounded-lg transition-colors flex items-center gap-2 cursor-pointer';
     delBtn.innerHTML = '<span class="material-symbols-outlined text-sm">delete</span> Delete Message';
     delBtn.onclick = async () => {
       if (confirm('Are you sure you want to delete this message? This cannot be undone.')) {
+        menu.remove();
+        // Optimistic UI update: immediately show deleted state
+        const backupHTML = bubbleEl.innerHTML;
+        bubbleEl.innerHTML = '';
+        const p = document.createElement('p');
+        p.className = 'text-[15px] italic opacity-70 break-words';
+        p.textContent = 'This message was deleted';
+        bubbleEl.appendChild(p);
+        const timeEl = document.createElement('div');
+        timeEl.className = 'msg-meta text-[10px] mt-1';
+        timeEl.textContent = 'deleted';
+        bubbleEl.appendChild(timeEl);
+
         try {
           await apiCall(`/api/messages/${msg.id}`, 'DELETE', { connection_id: currentConnId });
-          bubbleEl.innerHTML = '';
-          const p = document.createElement('p');
-          p.className = 'text-[15px] italic opacity-70 break-words';
-          p.textContent = 'This message was deleted';
-          bubbleEl.appendChild(p);
-          const timeEl = document.createElement('div');
-          timeEl.className = 'msg-meta text-[10px] mt-1';
-          timeEl.textContent = 'deleted';
-          bubbleEl.appendChild(timeEl);
+          msg.deleted_at = new Date().toISOString();
+        } catch (err) {
+          // Graceful Rollback on server failure
+          bubbleEl.innerHTML = backupHTML;
+          showToast(`Failed to delete message: ${err.message}`, 'error');
+        }
+      }
+    };
           const wrapper = bubbleEl.closest('[data-msg-id]');
           const moreBtn = wrapper ? wrapper.querySelector('.more-actions-btn') : null;
           if (moreBtn) moreBtn.remove();

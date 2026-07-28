@@ -116,7 +116,6 @@ window.setGenderFilter = setGenderFilter;
 window.applyGenderFilterUI = applyGenderFilterUI;
 
 async function handleDismissCenter() {
-  // Sync from avatar3d's authoritative targetIndex
   if (typeof window.getCurrentIndex === 'function') {
     currentIndex = window.getCurrentIndex();
   }
@@ -124,24 +123,27 @@ async function handleDismissCenter() {
   const idx = currentIndex;
   if (!profile) return;
   
+  // Optimistic UI update: immediately advance card stack for zero-latency feedback
+  removeProfileAt(idx);
+  hapticLight();
+  showUndoToast('Profile dismissed', () => {
+    discoverProfiles.splice(idx, 0, profile);
+    currentIndex = idx;
+    init3DScene();
+  }, 3000);
+
   try {
     await apiCall('/api/connections/dismiss', 'POST', { to_user_id: profile.id });
-    removeProfileAt(idx);
-    hapticLight();
-    showUndoToast('Profile dismissed', () => {
-      // Re-add the profile and restore index
-      discoverProfiles.splice(idx, 0, profile);
-      currentIndex = idx;
-      init3DScene();
-    }, 3000);
   } catch (err) {
-    showToast(err.message, 'error');
+    // Rollback: restore profile card if server request fails
+    discoverProfiles.splice(idx, 0, profile);
+    currentIndex = idx;
+    init3DScene();
+    showToast(`Failed to dismiss profile: ${err.message}`, 'error');
   }
 }
 
 async function handleConnectCenter() {
-  // Always sync from avatar3d's authoritative targetIndex to prevent
-  // the "wrong person connected" bug when the two indices drift.
   if (typeof window.getCurrentIndex === 'function') {
     currentIndex = window.getCurrentIndex();
   }
@@ -154,20 +156,19 @@ async function handleConnectCenter() {
     return;
   }
 
-  const btn = document.getElementById('btn-discover-connect');
-  btn.disabled = true;
-  btn.querySelector('span:not(.material-symbols-outlined)').textContent = 'Sending...';
-  
+  // Optimistic UI update: advance card deck & show toast immediately
+  hapticMedium();
+  removeProfileAt(idx);
+  showToast('Connection request sent!');
+
   try {
     await apiCall('/api/connections/request', 'POST', { to_user_id: profile.id });
-    hapticMedium();
-    removeProfileAt(idx);
-    showToast('Connection sent!');
   } catch (err) {
-    showToast(err.message, 'error');
-  } finally {
-    btn.disabled = false;
-    btn.querySelector('span:not(.material-symbols-outlined)').textContent = 'Connect';
+    // Rollback: restore profile card to stack if connection request fails
+    discoverProfiles.splice(idx, 0, profile);
+    currentIndex = idx;
+    init3DScene();
+    showToast(`Failed to send connection: ${err.message}`, 'error');
   }
 }
 
