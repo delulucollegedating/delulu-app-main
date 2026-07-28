@@ -190,10 +190,11 @@ function getEcosystem(email) {
 The discover page shows profiles filtered by:
 1. **Same ecosystem** as the viewer
 2. **Opposite gender** (male sees female, female sees male; other genders see all)
-3. **Exclude**: already-connected users, blocked users, self
-4. **Random shuffle** via `array.sort(() => Math.random() - 0.5)` on every load
+3. **Exclude**: active/pending connected users, blocked users, self
+4. **Hobby Compatibility & Fairness**: sorted by matching hobbies count descending with subtle random jitter
+5. **Reconnection Allowed**: users with `rejected` or `ended` connection status ("Not Vibing") are **NOT** excluded, so former connections can rediscover each other once their previous chat has ended.
 
-The `getDiscoverable(userId, gender, excludeIds)` method in `database.js` handles this. `excludeIds` is populated from `getConnectedUserIds()` — all users with any connection record (pending/accepted/rejected).
+The `getDiscoverable(userId, gender, excludeIds)` method in `database.js` handles this. `excludeIds` is populated from `getConnectedUserIds()` — which filters only for users with active or pending connections (`pending`, `accepted`, `revealed`).
 
 ### 5.3 Connection Lifecycle (CRITICAL — DO NOT CHANGE)
 ```
@@ -218,7 +219,7 @@ The `getDiscoverable(userId, gender, excludeIds)` method in `database.js` handle
     - If window passes without both agreeing → status: "expired" (sweepExpired)
 ```
 
-**Either user can end the chat at any time** with "Not Vibing" button → status: "rejected", ended_reason: "not_vibing".
+**Either user can end the chat at any time** with "Not Vibing" button → status: "rejected", ended_reason: "not_vibing". Ending a chat instantly clears messages from Supabase Postgres, releases exclusive 1-to-1 active connection locks, and broadcasts `ended` (chat room) and `chat_ended` (messages list) SSE events to both users.
 
 ### 5.4 Connection Expiry Sweep (Background Job)
 `connectionOps.sweepExpired()` runs on a schedule (every 24h):
@@ -269,14 +270,19 @@ E2EE is opt-in and only active when both users have public keys. Plain-text fall
   - `presence` — 100% in-memory live online/offline status (`status: 'online'/'offline'`, 0 DB cost)
   - `game` — game state changed
   - `info` — chat info refresh
-  - `ended` — chat ended by other user
+  - `ended` — chat ended by other user ("Not Vibing")
 - Heartbeat every 25s prevents Render proxy timeout
+- Reconnect uses exponential backoff (2s → 4s → 8s → 16s → 30s cap)
 
 ### 6.2 Per-User SSE (`/api/user/stream`)
 - Client opens on messages list page
 - Server uses `userEmitter` to push events
-- Event: `{ type: 'message', connectionId, lastMessage, lastMessageTime, senderId }`
-- Client calls `updateChatListItem()` for instant list update without page refresh
+- Events: 
+  - `{ type: 'message', connectionId, lastMessage, lastMessageTime, senderId, senderName }`
+  - `{ type: 'chat_ended', connectionId }`
+- Client calls `updateChatListItem()` for instant message list updates, or `loadMessagesList()` when a `chat_ended` event arrives
+- Displays rich Telegram-style top toasts (`showRichToast({ senderName, preview, connectionId })`) when new messages arrive from other chats
+- Updates browser tab title with unread badge count (`setTitleUnread(count)` → `(3) Delulu`), auto-cleared when tab gains focus
 
 ### 6.3 Message Delivery Flow (WhatsApp-like)
 ```
