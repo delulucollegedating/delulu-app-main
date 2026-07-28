@@ -362,36 +362,45 @@ function initHeartBackground() {
 }
 
 // ===== Dark Mode =====
-function initDarkMode() {
-  const saved = localStorage.getItem('delulu_theme');
-  const isDark = saved === 'dark';
-  
+function applyTheme(isDark) {
   if (isDark) {
     document.documentElement.classList.add('dark');
     document.body.classList.add('dark');
-    document.documentElement.style.backgroundColor = '#121313';
   } else {
     document.documentElement.classList.remove('dark');
     document.body.classList.remove('dark');
-    document.documentElement.style.backgroundColor = '#fbf9f8';
   }
+  // Clear any leftover inline background-color overrides so CSS rules control theme cleanly
+  document.documentElement.style.backgroundColor = '';
+  document.body.style.backgroundColor = '';
+
+  localStorage.setItem('delulu_theme', isDark ? 'dark' : 'light');
+
+  // Update theme toggle icons across the page
+  document.querySelectorAll('.theme-toggle-icon, #theme-toggle .material-symbols-outlined').forEach(el => {
+    el.textContent = isDark ? 'light_mode' : 'dark_mode';
+  });
+}
+
+function toggleTheme() {
+  const isDarkNow = !document.documentElement.classList.contains('dark');
+  applyTheme(isDarkNow);
+  return isDarkNow;
+}
+
+window.applyTheme = applyTheme;
+window.toggleTheme = toggleTheme;
+
+function initDarkMode() {
+  const saved = localStorage.getItem('delulu_theme');
+  const isDark = saved === 'dark';
+  applyTheme(isDark);
   
   const toggle = document.getElementById('theme-toggle');
   if (toggle) {
     toggle.onclick = () => {
-      const active = document.body.classList.toggle('dark');
-      document.documentElement.classList.toggle('dark', active);
-      document.documentElement.style.backgroundColor = active ? '#121313' : '#fbf9f8';
-      localStorage.setItem('delulu_theme', active ? 'dark' : 'light');
-      const icon = toggle.querySelector('.material-symbols-outlined');
-      if (icon) {
-        icon.textContent = active ? 'light_mode' : 'dark_mode';
-      }
+      toggleTheme();
     };
-    const icon = toggle.querySelector('.material-symbols-outlined');
-    if (icon) {
-      icon.textContent = isDark ? 'light_mode' : 'dark_mode';
-    }
   }
 }
 

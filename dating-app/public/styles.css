@@ -72,6 +72,9 @@ button:not(:disabled):active, .btn-press:active {
 html.dark,
 html.dark body,
 body.dark,
+html.dark .bg-background,
+html.dark .bg-surface,
+html.dark .bg-surface-bright,
 body.dark .bg-background,
 body.dark .bg-surface,
 body.dark .bg-surface-bright { background-color: #121313 !important; }
@@ -105,6 +108,17 @@ body.dark .text-inverse-on-surface { color: #303030 !important; }
 body.dark .inverse-primary { color: #a53b29 !important; }
 body.dark .bg-surface\/80 { background-color: rgba(26, 28, 30, 0.8) !important; }
 body.dark .bg-surface\/90 { background-color: rgba(26, 28, 30, 0.9) !important; }
+
+/* Light Mode Explicit Reset (ensures clean off-white background when switching from dark to light) */
+html:not(.dark),
+html:not(.dark) body,
+body:not(.dark) { background-color: #fbf9f8; color: #1b1c1c; }
+html:not(.dark) .bg-background,
+body:not(.dark) .bg-background { background-color: #fbf9f8 !important; }
+html:not(.dark) .bg-surface,
+body:not(.dark) .bg-surface { background-color: #fbf9f8 !important; }
+html:not(.dark) .text-on-surface,
+body:not(.dark) .text-on-surface { color: #1b1c1c !important; }
 
 /* Dark mode specific element overrides */
 body.dark .glass-panel {

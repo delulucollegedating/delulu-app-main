@@ -1285,12 +1285,14 @@ function setupModalEventDelegation() {
         submitReport();
         break;
       case 'toggle-theme':
-        document.body.classList.toggle('dark');
-        const isDark = document.body.classList.contains('dark');
-        localStorage.setItem('delulu_theme', isDark ? 'dark' : 'light');
-        document.querySelectorAll('.theme-toggle-icon, #theme-toggle .material-symbols-outlined').forEach(el => {
-          el.textContent = isDark ? 'light_mode' : 'dark_mode';
-        });
+        if (typeof window.toggleTheme === 'function') {
+          window.toggleTheme();
+        } else {
+          document.body.classList.toggle('dark');
+          document.documentElement.classList.toggle('dark');
+          const isDark = document.body.classList.contains('dark');
+          localStorage.setItem('delulu_theme', isDark ? 'dark' : 'light');
+        }
         closeModal();
         break;
     }
