@@ -2097,6 +2097,10 @@ function showMessageMenu(e, msg, bubbleEl) {
         timeEl.textContent = 'deleted';
         bubbleEl.appendChild(timeEl);
 
+        const wrapper = bubbleEl.closest('[data-msg-id]');
+        const moreBtn = wrapper ? wrapper.querySelector('.more-actions-btn') : null;
+        if (moreBtn) moreBtn.remove();
+
         try {
           await apiCall(`/api/messages/${msg.id}`, 'DELETE', { connection_id: currentConnId });
           msg.deleted_at = new Date().toISOString();
@@ -2105,13 +2109,6 @@ function showMessageMenu(e, msg, bubbleEl) {
           bubbleEl.innerHTML = backupHTML;
           showToast(`Failed to delete message: ${err.message}`, 'error');
         }
-      }
-    };
-          const wrapper = bubbleEl.closest('[data-msg-id]');
-          const moreBtn = wrapper ? wrapper.querySelector('.more-actions-btn') : null;
-          if (moreBtn) moreBtn.remove();
-          menu.remove();
-        } catch (err) { showToast(err.message, 'error'); }
       }
     };
     menu.appendChild(delBtn);
