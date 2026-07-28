@@ -1737,12 +1737,15 @@ app.post('/api/messages/send', requireAuth, async (req, res) => {
 
   // Notify the OTHER user's per-user stream (messages list page) for instant updates
   const otherUserId = Number(conn.from_user_id) === senderId ? conn.to_user_id : conn.from_user_id;
+  // Get sender's display name (cached — no extra DB hit)
+  const senderUser = getCachedUser(senderId) || {};
   userEmitter.emit(`user:${otherUserId}`, {
     type: 'message',
     connectionId: Number(connection_id),
     lastMessage: displayContent,
     lastMessageTime: msg.created_at,
-    senderId
+    senderId,
+    senderName: senderUser.username || 'Someone'
   });
 
   // Send push notification to the other user (for background/closed app)

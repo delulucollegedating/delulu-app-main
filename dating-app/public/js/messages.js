@@ -1,8 +1,11 @@
 // Per-user SSE stream for real-time messages list updates
 let userEventSource = null;
+let _sseBackoffMs = 2000; // starts at 2s, doubles up to 30s
+let _sseBackoffTimer = null;
+let _totalUnread = 0;
 
 function initUserStream() {
-  if (userEventSource) return; // Already connected
+  if (userEventSource) return;
   userEventSource = new EventSource(resolveUrl('/api/user/stream'));
 
   userEventSource.onmessage = (event) => {
@@ -10,31 +13,59 @@ function initUserStream() {
     let data;
     try { data = JSON.parse(event.data); } catch { return; }
 
+    // Reset backoff on successful message
+    _sseBackoffMs = 2000;
+
     if (data.type === 'message') {
-      // Update chat list instantly with the new message
+      // Update chat list row in-place
       updateChatListItem({
         connectionId: data.connectionId,
         lastMessage: data.lastMessage,
         lastMessageTime: data.lastMessageTime,
-        senderId: data.senderId
+        senderId: data.senderId,
+        senderName: data.senderName
       });
 
-      // Fire native notification if app is backgrounded
-      if (document.hidden && typeof window.showNativeNotification === 'function') {
-        window.showNativeNotification({
-          title: 'New message',
-          body: data.lastMessage || 'You have a new message',
-          url: `messages.html`,
-          id: data.connectionId
-        });
+      // Only show in-app notification when the user is NOT already in that chat
+      const activeChatId = new URLSearchParams(window.location.search).get('id');
+      const isActiveChat = String(activeChatId) === String(data.connectionId);
+
+      if (!isActiveChat) {
+        // Rich Telegram-style toast with sender name
+        if (typeof window.showRichToast === 'function') {
+          window.showRichToast({
+            senderName: data.senderName || 'New message',
+            preview: data.lastMessage || '',
+            connectionId: data.connectionId,
+          });
+        }
+
+        // Increment unread count in tab title
+        _totalUnread++;
+        if (typeof window.setTitleUnread === 'function') {
+          window.setTitleUnread(_totalUnread);
+        }
+
+        // Native notification if app is backgrounded
+        if (document.hidden && typeof window.showNativeNotification === 'function') {
+          window.showNativeNotification({
+            title: data.senderName ? `${data.senderName} on Delulu` : 'New message',
+            body: data.lastMessage || 'You have a new message',
+            url: `chat.html?id=${data.connectionId}`,
+            id: data.connectionId
+          });
+        }
       }
     }
   };
 
   userEventSource.onerror = () => {
-    // Auto-reconnect after 5 seconds on error
     userEventSource = null;
-    setTimeout(initUserStream, 5000);
+    // Exponential backoff: 2s → 4s → 8s → 16s → 30s cap
+    const delay = _sseBackoffMs;
+    _sseBackoffMs = Math.min(_sseBackoffMs * 2, 30000);
+    clearTimeout(_sseBackoffTimer);
+    _sseBackoffTimer = setTimeout(initUserStream, delay);
   };
 }
 

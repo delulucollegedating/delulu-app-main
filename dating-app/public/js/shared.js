@@ -297,6 +297,64 @@ function prefetchPage(url) {
   document.head.appendChild(link);
 }
 
+// ── Unread badge in browser/app tab title ──────────────────────────────────
+let _titleUnreadCount = 0;
+const _baseTitle = document.title || 'Delulu';
+
+function setTitleUnread(count) {
+  _titleUnreadCount = Math.max(0, count);
+  document.title = _titleUnreadCount > 0
+    ? `(${_titleUnreadCount}) ${_baseTitle}`
+    : _baseTitle;
+}
+
+// Clear unread when user focuses the tab
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) setTitleUnread(0);
+});
+
+window.setTitleUnread = setTitleUnread;
+
+// ── Rich in-app message toast (Telegram-style) ────────────────────────────
+// Shows: [Avatar initial] SenderName — message preview
+// Tapping navigates to the chat.
+function showRichToast({ senderName, preview, connectionId, avatarInitial }) {
+  // Remove any existing rich toast first
+  document.querySelectorAll('.delulu-rich-toast').forEach(t => t.remove());
+
+  const toast = document.createElement('div');
+  const initial = (avatarInitial || (senderName ? senderName.charAt(0) : '?')).toUpperCase();
+
+  toast.className = 'delulu-rich-toast fixed top-4 left-1/2 -translate-x-1/2 z-[99999] flex items-center gap-3 bg-surface shadow-2xl border border-outline-variant/20 rounded-2xl px-4 py-3 max-w-[90vw] w-80 cursor-pointer backdrop-blur-xl';
+  toast.style.cssText += 'box-shadow: 0 8px 32px rgba(60,32,27,0.18);';
+  toast.innerHTML = `
+    <div style="width:36px;height:36px;border-radius:12px;background:linear-gradient(135deg,#a53b29,#d94828);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;flex-shrink:0;">${escapeHtml(initial)}</div>
+    <div style="min-width:0;flex:1;">
+      <div style="font-weight:700;font-size:13px;color:var(--color-on-surface,#1b1c1c);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(senderName || 'New message')}</div>
+      <div style="font-size:12px;color:var(--color-on-surface-variant,#57423e);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;">${escapeHtml(preview || '')}</div>
+    </div>
+    <span class="material-symbols-outlined" style="font-size:18px;color:var(--color-primary,#a53b29);flex-shrink:0;">chevron_right</span>
+  `;
+
+  if (connectionId) {
+    toast.onclick = () => {
+      window.location.href = `chat.html?id=${connectionId}`;
+    };
+  }
+
+  document.body.appendChild(toast);
+
+  // Auto dismiss after 4 seconds
+  setTimeout(() => {
+    toast.style.transition = 'opacity 0.3s, transform 0.3s';
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateX(-50%) translateY(-8px)';
+    setTimeout(() => toast.remove(), 320);
+  }, 4000);
+}
+
+window.showRichToast = showRichToast;
+
 function initHeartBackground() {
   const script = document.createElement('script');
   script.src = '/js/heart-bg.js';

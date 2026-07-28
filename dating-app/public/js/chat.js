@@ -875,10 +875,14 @@ async function initializeChat() {
     notifyTypingState(false);
   };
 
+  let isSending = false; // double-send guard
+
   chatForm.onsubmit = async (e) => {
     e.preventDefault();
+    if (isSending) return; // prevent rapid double-tap duplicate
     const content = chatInput.value.trim();
     if (!content) return;
+    isSending = true;
     
     notifyTypingState(false);
     const tempId = 'temp-' + Date.now();
@@ -983,6 +987,8 @@ async function initializeChat() {
             timeEl.innerHTML = '<span class="material-symbols-outlined text-[12px]">error</span> Failed';
           }
         }
+      } finally {
+        isSending = false; // always unlock for next message
       }
     })();
   };

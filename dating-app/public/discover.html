@@ -74,7 +74,7 @@
       ]
     }
   </script>
-  <link rel="stylesheet" href="styles.css?v=247">
+  <link rel="stylesheet" href="styles.css?v=252">
   <style>
     /* Add active state for navbar */
     #nav-discover, #mnav-discover {
@@ -135,9 +135,19 @@
 
     <div id="view-discovery" class="flex-grow flex flex-col items-center justify-center w-full relative overflow-visible">
       <div id="discovery-empty" class="hidden text-center text-on-surface-variant flex-col items-center justify-center h-full px-6">
-        <span class="material-symbols-outlined text-7xl mb-4 text-outline-variant">explore_off</span>
-        <h2 class="text-2xl font-bold mb-2">No more people right now</h2>
-        <p class="text-on-surface-variant/70">Check back later for new classmates to meet.</p>
+        <!-- Animated emoji stack -->
+        <div style="font-size:72px;line-height:1;margin-bottom:16px;animation:delulu-page-in 0.5s ease-out both;">🌸</div>
+        <h2 class="text-2xl font-bold mb-2 text-on-surface">You've seen everyone!</h2>
+        <p class="text-on-surface-variant/80 max-w-xs leading-relaxed mb-1">New people join Delulu every day.<br>Come back soon or tap below to refresh.</p>
+        <p class="text-xs text-on-surface-variant/50 mb-6">Your perfect match might just have signed up ✨</p>
+        <button
+          id="btn-discover-refresh"
+          onclick="loadDiscovery()"
+          class="flex items-center gap-2 px-6 py-3 rounded-full bg-primary text-white font-bold shadow-lg hover:scale-105 active:scale-95 transition-all duration-200"
+        >
+          <span class="material-symbols-outlined text-[20px]">refresh</span>
+          Refresh
+        </button>
       </div>
       
       <!-- 3D Scene Container -->
