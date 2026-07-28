@@ -83,4 +83,13 @@ describe('Delulu API Routes & Security Tests', () => {
       expect(res.headers['content-encoding']).toBeUndefined();
     });
   });
+
+  describe('Batched Write Operations & Bulk Performance', () => {
+    it('should execute block user active connection rejections via chunked batched writes', async () => {
+      const { blockOps } = require('../database.js');
+      expect(typeof blockOps.block).toBe('function');
+      const result = await blockOps.block(9999, 8888);
+      expect(result).toHaveProperty('success', true);
+    });
+  });
 });

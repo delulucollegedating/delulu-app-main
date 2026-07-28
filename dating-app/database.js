@@ -1760,15 +1760,26 @@ const blockOps = {
       created_at: new Date().toISOString()
     });
     
-    // Also reject any active connections between them
+    // Also reject any active connections between them using batched writes (chunked to avoid oversized limits)
     const connections = await connectionOps.getAllBetween(blockerId, blockedUserId);
-    for (const conn of connections) {
-      if (['pending', 'accepted'].includes(conn.status)) {
-        await firestore.collection('connections').doc(String(conn.id)).update({ status: 'rejected', ended_reason: 'blocked' });
-        evictConnection(conn.id); // cache invalidation — status changed due to block
+    const activeConns = connections.filter(conn => ['pending', 'accepted'].includes(conn.status));
+
+    if (activeConns.length > 0) {
+      const BATCH_LIMIT = 400; // Chunk threshold to stay well under Firestore 500 operations per batch
+      for (let i = 0; i < activeConns.length; i += BATCH_LIMIT) {
+        const chunk = activeConns.slice(i, i + BATCH_LIMIT);
+        const batch = firestore.batch();
+        chunk.forEach(conn => {
+          batch.update(firestore.collection('connections').doc(String(conn.id)), {
+            status: 'rejected',
+            ended_reason: 'blocked'
+          });
+          evictConnection(conn.id); // cache invalidation — status changed due to block
+        });
+        await batch.commit();
       }
     }
-    
+
     return { success: true };
   },
 
