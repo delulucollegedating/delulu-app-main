@@ -487,19 +487,8 @@ const connectionOps = {
   },
 
   async hasActiveConnection(userId) {
-    const firestore = getDB();
-    const activeStatuses = ACTIVE_CONNECTION_STATUSES;
-    const [snap1, snap2] = await Promise.all([
-      firestore.collection('connections')
-        .where('from_user_id', '==', Number(userId))
-        .where('status', 'in', activeStatuses)
-        .limit(1).get(),
-      firestore.collection('connections')
-        .where('to_user_id', '==', Number(userId))
-        .where('status', 'in', activeStatuses)
-        .limit(1).get()
-    ]);
-    return !snap1.empty || !snap2.empty;
+    const activeConns = await this.getActiveConnections(userId);
+    return !!(activeConns && activeConns.length > 0);
   },
 
   async sendRequest(fromId, toId) {
