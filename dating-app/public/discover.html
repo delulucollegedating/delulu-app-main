@@ -137,17 +137,20 @@
     <div class="w-full px-6 md:px-16 pb-2 flex items-center gap-2">
       <span class="text-xs font-semibold text-on-surface-variant mr-1">Show:</span>
       <button id="filter-all"
-        class="discover-filter-btn px-4 py-1.5 rounded-full text-xs font-bold border transition-all duration-200 bg-primary text-white border-primary shadow-sm"
+        onclick="setGenderFilter('all')"
+        class="discover-filter-btn px-4 py-1.5 rounded-full text-xs font-bold border transition-all duration-200 bg-primary text-white border-primary shadow-sm cursor-pointer"
         aria-pressed="true">
         All
       </button>
       <button id="filter-male"
-        class="discover-filter-btn px-4 py-1.5 rounded-full text-xs font-bold border transition-all duration-200 bg-surface text-on-surface-variant border-outline-variant hover:border-primary hover:text-primary"
+        onclick="setGenderFilter('male')"
+        class="discover-filter-btn px-4 py-1.5 rounded-full text-xs font-bold border transition-all duration-200 bg-surface text-on-surface-variant border-outline-variant hover:border-primary hover:text-primary cursor-pointer"
         aria-pressed="false">
         Male
       </button>
       <button id="filter-female"
-        class="discover-filter-btn px-4 py-1.5 rounded-full text-xs font-bold border transition-all duration-200 bg-surface text-on-surface-variant border-outline-variant hover:border-primary hover:text-primary"
+        onclick="setGenderFilter('female')"
+        class="discover-filter-btn px-4 py-1.5 rounded-full text-xs font-bold border transition-all duration-200 bg-surface text-on-surface-variant border-outline-variant hover:border-primary hover:text-primary cursor-pointer"
         aria-pressed="false">
         Female
       </button>
@@ -162,7 +165,8 @@
         <p class="text-xs text-on-surface-variant/50 mb-6">Your perfect match might just have signed up ✨</p>
         <button
           id="btn-discover-refresh"
-          class="flex items-center gap-2 px-6 py-3 rounded-full bg-primary text-white font-bold shadow-lg hover:scale-105 active:scale-95 transition-all duration-200"
+          onclick="loadDiscovery()"
+          class="flex items-center gap-2 px-6 py-3 rounded-full bg-primary text-white font-bold shadow-lg hover:scale-105 active:scale-95 transition-all duration-200 cursor-pointer"
         >
           <span class="material-symbols-outlined text-[20px]">refresh</span>
           Refresh
@@ -192,17 +196,17 @@
       </div>
 
       <!-- Scroll Buttons -->
-      <button id="btn-scroll-left" class="fixed left-4 top-1/2 z-40 w-12 h-12 rounded-full bg-surface/90 backdrop-blur-lg shadow-xl border border-outline-variant/30 flex items-center justify-center text-primary hover:scale-110 active:scale-95 transition-all hover:shadow-2xl" aria-label="Previous profile">
+      <button id="btn-scroll-left" class="fixed left-4 top-1/2 z-40 w-12 h-12 rounded-full bg-surface/90 backdrop-blur-lg shadow-xl border border-outline-variant/30 flex items-center justify-center text-primary hover:scale-110 active:scale-95 transition-all hover:shadow-2xl cursor-pointer" aria-label="Previous profile">
         <span class="material-symbols-outlined text-3xl">chevron_left</span>
       </button>
-      <button id="btn-scroll-right" class="fixed right-4 top-1/2 z-40 w-12 h-12 rounded-full bg-surface/90 backdrop-blur-lg shadow-xl border border-outline-variant/30 flex items-center justify-center text-primary hover:scale-110 active:scale-95 transition-all hover:shadow-2xl" aria-label="Next profile">
+      <button id="btn-scroll-right" class="fixed right-4 top-1/2 z-40 w-12 h-12 rounded-full bg-surface/90 backdrop-blur-lg shadow-xl border border-outline-variant/30 flex items-center justify-center text-primary hover:scale-110 active:scale-95 transition-all hover:shadow-2xl cursor-pointer" aria-label="Next profile">
         <span class="material-symbols-outlined text-3xl">chevron_right</span>
       </button>
     </div>
   </main>
   
-  <script src="js/shared.js?v=243"></script>
-  <script src="js/discover.js?v=243"></script>
+  <script src="js/shared.js?v=255"></script>
+  <script src="js/discover.js?v=255"></script>
   <script src="js/avatar3d.js?v=500"></script>
 </body>
 </html>

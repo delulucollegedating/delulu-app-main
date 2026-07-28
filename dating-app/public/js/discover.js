@@ -112,6 +112,9 @@ function setGenderFilter(filter) {
   loadDiscovery();
 }
 
+window.setGenderFilter = setGenderFilter;
+window.applyGenderFilterUI = applyGenderFilterUI;
+
 async function handleDismissCenter() {
   // Sync from avatar3d's authoritative targetIndex
   if (typeof window.getCurrentIndex === 'function') {
