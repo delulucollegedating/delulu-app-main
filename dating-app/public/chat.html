@@ -90,11 +90,7 @@
             <span class="material-symbols-outlined text-[18px]">casino</span>
             <span>Icebreaker</span>
           </button>
-          <button id="btn-not-vibing" class="chat-action-chip chat-action-chip-danger hidden" type="button">
-            <span class="material-symbols-outlined text-[18px]">heart_broken</span>
-            <span>End chat</span>
-          </button>
-          <button id="btn-identity-reveal" class="chat-action-chip chat-action-chip-reveal hidden" type="button">
+<button id="btn-identity-reveal" class="chat-action-chip chat-action-chip-reveal hidden" type="button">
             <span class="material-symbols-outlined text-[18px]">lock_open</span>
             <span>Reveal</span>
           </button>
@@ -139,14 +135,85 @@
   <div id="modal-overlay" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] hidden flex items-center justify-center p-4">
     <!-- Identity Reveal Modal (Day 7) -->
     <div id="modal-identity-reveal" class="bg-surface rounded-3xl p-6 w-full max-w-sm ambient-shadow hidden transform scale-95 transition-all text-center">
-      <div class="w-20 h-20 bg-primary-container text-on-primary-container rounded-full flex items-center justify-center mx-auto mb-4 pulse-heart">
-        <span class="material-symbols-outlined text-4xl material-fill">lock_open</span>
+      <!-- STATE: Countdown / Pre-Day-7 (default shown before reveal is due) -->
+      <div id="identity-state-countdown">
+        <div class="relative w-24 h-24 mx-auto mb-4">
+          <svg class="w-24 h-24 -rotate-90" viewBox="0 0 100 100">
+            <circle cx="50" cy="50" r="42" fill="none" stroke="var(--surface-variant, #e4e2e1)" stroke-width="6"/>
+            <circle id="identity-progress-ring" cx="50" cy="50" r="42" fill="none" stroke="#a53b29" stroke-width="6" stroke-linecap="round"
+              stroke-dasharray="263.89" stroke-dashoffset="263.89" class="transition-all duration-1000 ease-out"/>
+          </svg>
+          <div class="absolute inset-0 flex items-center justify-center">
+            <span class="material-symbols-outlined text-3xl text-primary">lock</span>
+          </div>
+        </div>
+        <div id="identity-countdown-days" class="text-3xl font-bold text-primary mb-1">--</div>
+        <p class="text-on-surface-variant text-sm mb-1">days until identity reveal</p>
+        <p class="text-on-surface-variant/60 text-xs mb-5">Chat for <strong>7 days</strong> before you can reveal who you are to each other.</p>
+        <!-- Timeline progress -->
+        <div class="flex items-center gap-0 mb-6 px-2">
+          <div class="flex flex-col items-center">
+            <div class="w-6 h-6 rounded-full bg-primary flex items-center justify-center">
+              <span class="material-symbols-outlined text-white text-xs">chat</span>
+            </div>
+            <span class="text-[10px] text-primary font-semibold mt-1">Day 1</span>
+          </div>
+          <div class="flex-1 h-0.5 bg-surface-variant relative">
+            <div id="identity-timeline-progress" class="absolute left-0 top-0 h-full bg-primary transition-all duration-700" style="width: 0%"></div>
+          </div>
+          <div id="identity-timeline-milestone" class="flex flex-col items-center">
+            <div class="w-6 h-6 rounded-full bg-surface-variant flex items-center justify-center">
+              <span class="material-symbols-outlined text-on-surface-variant text-xs">lock_open</span>
+            </div>
+            <span class="text-[10px] text-on-surface-variant font-semibold mt-1">Day 7</span>
+          </div>
+          <div class="flex-1 h-0.5 bg-surface-variant"></div>
+          <div class="flex flex-col items-center">
+            <div class="w-6 h-6 rounded-full bg-surface-variant flex items-center justify-center">
+              <span class="material-symbols-outlined text-on-surface-variant text-xs">videocam</span>
+            </div>
+            <span class="text-[10px] text-on-surface-variant font-semibold mt-1">Day 10</span>
+          </div>
+        </div>
+        <button data-action="close" class="w-full py-2.5 bg-surface-variant text-on-surface-variant font-semibold rounded-xl hover:bg-surface-dim transition-all text-sm">
+          Got it
+        </button>
       </div>
-      <h3 class="text-2xl font-bold text-primary mb-2">Identity Reveal!</h3>
-      <p class="text-on-surface-variant text-sm mb-2">It's time! Both of you can now reveal yourselves.</p>
-      <p class="text-on-surface-variant text-xs mb-6">If both agree, you'll receive a Google Meet link to see each other face-to-face!</p>
-      <button id="identity-reveal-yes" class="w-full py-3 bg-gradient-to-r from-primary to-primary-container text-white font-bold rounded-xl hover:shadow-md transition-all mb-3">Yes, Let's Reveal!</button>
-      <button id="identity-reveal-no" class="w-full text-outline font-semibold text-sm py-2 hover:text-on-surface transition-colors">Not yet</button>
+
+      <!-- STATE: Reveal Prompt (Day 7 arrived, neither has revealed) -->
+      <div id="identity-state-prompt" class="hidden">
+        <div class="w-20 h-20 bg-gradient-to-br from-primary to-secondary-container rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse-soft">
+          <span class="material-symbols-outlined text-4xl text-white material-fill">lock_open</span>
+        </div>
+        <h3 class="text-2xl font-bold text-primary mb-1">Identity Reveal is Here!</h3>
+        <p class="text-on-surface-variant text-sm mb-1">You've been chatting for 7 days. Ready to show each other who you are?</p>
+        <p class="text-on-surface-variant/60 text-xs mb-6">If both agree, you'll get a video call link to connect face-to-face!</p>
+        <button id="identity-reveal-yes" class="w-full py-3 bg-gradient-to-r from-primary to-primary-container text-white font-bold rounded-xl hover:shadow-md hover:scale-[1.02] active:scale-[0.98] transition-all mb-3 flex items-center justify-center gap-2">
+          <span class="material-symbols-outlined text-lg">lock_open</span> Reveal My Identity
+        </button>
+        <button id="identity-reveal-no" class="w-full py-2.5 text-outline font-semibold text-sm hover:text-on-surface transition-colors">
+          Not yet, let's chat more
+        </button>
+      </div>
+
+      <!-- STATE: Waiting for Partner (user has revealed, waiting for other) -->
+      <div id="identity-state-waiting" class="hidden">
+        <div class="w-20 h-20 bg-secondary-container/60 rounded-full flex items-center justify-center mx-auto mb-4">
+          <span class="material-symbols-outlined text-4xl text-secondary animate-pulse-soft">hourglass_empty</span>
+        </div>
+        <h3 class="text-xl font-bold text-on-surface mb-1">You Revealed Your Identity!</h3>
+        <p class="text-on-surface-variant text-sm mb-6">Waiting for your partner to reveal theirs. We'll notify you when they do!</p>
+        <div class="flex items-center justify-center gap-2 mb-6">
+          <span class="w-2 h-2 rounded-full bg-secondary animate-pulse"></span>
+          <span class="text-sm text-on-surface-variant">Waiting for partner...</span>
+        </div>
+        <button disabled class="w-full py-3 bg-surface-variant text-on-surface-variant/50 font-bold rounded-xl cursor-not-allowed mb-3">
+          Waiting...
+        </button>
+        <button data-action="close" class="w-full py-2.5 text-outline font-semibold text-sm hover:text-on-surface transition-colors">
+          Cancel?
+        </button>
+      </div>
     </div>
 
     <!-- Face Reveal Modal (Day 10) -->

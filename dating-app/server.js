@@ -1469,6 +1469,32 @@ app.post('/api/connections/end', requireAuth, async (req, res) => {
   }
 
   res.json(result);
+});
+
+// Submit identity reveal (Day 7)
+app.post('/api/connections/identity-reveal', requireAuth, async (req, res) => {
+    const { connection_id } = req.body;
+    if (!connection_id) return res.status(400).json({ error: 'Missing connection id' });
+    evictConnectionAuth(connection_id); // Invalidate auth cache — status changing
+    const result = await connectionOps.submitIdentityReveal(connection_id, req.session.userId);
+  if (result.error) return res.status(400).json(result);
+  
+  if (result.bothRevealed) {
+    // Both users revealed identity — emit meeting code
+    io.to(`chat:${connection_id}`).emit('identity-revealed', {
+      connection_id,
+      meeting_code: result.meeting_code
+    });
+    connectionEmitter.emit(`update:${connection_id}`, { 
+      type: 'revealed', 
+      meeting_code: result.meeting_code 
+    });
+  } else {
+    // Only this user revealed, waiting for the other
+    connectionEmitter.emit(`update:${connection_id}`, { type: 'game' });
+  }
+
+  res.json(result);
 });  // Submit face reveal (Day 10)
   app.post('/api/connections/face-reveal', requireAuth, async (req, res) => {
     const { connection_id } = req.body;
@@ -2105,6 +2131,20 @@ setInterval(async () => {
     const reqSweep = await connectionOps.sweepExpiredRequests();
     if (sweepResult.identityRevealsExpired > 0 || sweepResult.faceRevealsExpired > 0 || reqSweep.expiredCount > 0) {
       console.log(`[Sweep] Expired ${sweepResult.identityRevealsExpired} identity reveals, ${sweepResult.faceRevealsExpired} face reveals, ${reqSweep.expiredCount} pending requests.`);
+    }
+    // Emit SSE events for each expired connection so users' UIs update in real-time
+    if (sweepResult.expiredConnections && sweepResult.expiredConnections.length > 0) {
+      const endedMsg = 'The chat window has closed because neither user completed the face reveal in time.';
+      for (const entry of sweepResult.expiredConnections) {
+        connectionEmitter.emit(`update:${entry.id}`, {
+          type: 'ended',
+          reason: 'expired',
+          message: endedMsg
+        });
+        const chatEndedEvent = { type: 'chat_ended', connectionId: Number(entry.id) };
+        userEmitter.emit(`user:${entry.from_user_id}`, chatEndedEvent);
+        userEmitter.emit(`user:${entry.to_user_id}`, chatEndedEvent);
+      }
     }
   } catch (err) {
     console.error('[Sweep Error]', err);

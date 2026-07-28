@@ -999,9 +999,6 @@ async function initializeChat() {
   const btnIcebreaker = document.getElementById('btn-icebreaker');
   if (btnIcebreaker) btnIcebreaker.onclick = () => openIcebreakerModal();
 
-  const btnNotVibing = document.getElementById('btn-not-vibing');
-  if (btnNotVibing) btnNotVibing.onclick = () => submitNotVibing();
-
   const btnChatMore = document.getElementById('btn-chat-more');
   if (btnChatMore) btnChatMore.onclick = () => openModal('modal-chat-more');
 
@@ -1411,62 +1408,171 @@ async function loadChatInfo() {
   }
 }
 
+function updateIdentityRevealModal(c) {
+  const countdownDiv = document.getElementById('identity-state-countdown');
+  const promptDiv = document.getElementById('identity-state-prompt');
+  const waitingDiv = document.getElementById('identity-state-waiting');
+
+  if (!countdownDiv || !promptDiv || !waitingDiv) return;
+
+  // Hide all states
+  countdownDiv.classList.add('hidden');
+  promptDiv.classList.add('hidden');
+  waitingDiv.classList.add('hidden');
+
+  const now = Date.now();
+  const chatStarted = c.chat_started_at ? new Date(c.chat_started_at).getTime() : now;
+  const identityRevealAt = c.identity_reveal_available_at ? new Date(c.identity_reveal_available_at).getTime() : null;
+  const daysSinceChatStarted = Math.floor((now - chatStarted) / (24 * 60 * 60 * 1000));
+
+  // If both already revealed — show meeting modal instead
+  if (c.both_identity_revealed) {
+    if (c.meeting_code) showMeetingModal(c.meeting_code);
+    return;
+  }
+
+  // If user already revealed — show waiting state
+  if (c.my_identity_reveal === 1) {
+    waitingDiv.classList.remove('hidden');
+    return;
+  }
+
+  // If before Day 7 identity reveal — show countdown with progress
+  if (identityRevealAt && now < identityRevealAt) {
+    const msRemaining = identityRevealAt - now;
+    const totalMs = 7 * 24 * 60 * 60 * 1000;
+    const msElapsed = now - chatStarted;
+    const progressPct = Math.min(100, Math.max(0, (msElapsed / totalMs) * 100));
+    const daysRemaining = Math.floor(msRemaining / (24 * 60 * 60 * 1000));
+    const hoursRemaining = Math.floor((msRemaining % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+
+    const daysEl = document.getElementById('identity-countdown-days');
+    if (daysEl) daysEl.textContent = `${daysRemaining}d ${hoursRemaining}h`;
+
+    // Update progress ring (circumference = 2 * pi * 42 = 263.89)
+    const ring = document.getElementById('identity-progress-ring');
+    if (ring) {
+      const circumference = 263.89;
+      const offset = circumference * (1 - progressPct / 100);
+      ring.style.strokeDashoffset = offset;
+    }
+
+    // Update timeline bar (maxes at 50% since Day 7 is midpoint of the journey)
+    const tlProgress = document.getElementById('identity-timeline-progress');
+    if (tlProgress) {
+      const tlPct = Math.min(50, (progressPct / 100) * 50);
+      tlProgress.style.width = `${tlPct}%`;
+    }
+
+    // Update the milestone dot
+    const milestone = document.getElementById('identity-timeline-milestone');
+    if (milestone) {
+      if (daysSinceChatStarted >= 1) {
+        const dot = milestone.querySelector('div');
+        if (dot) {
+          dot.className = 'w-6 h-6 rounded-full bg-secondary flex items-center justify-center';
+        }
+      }
+    }
+
+    countdownDiv.classList.remove('hidden');
+    return;
+  }
+
+  // Day 7 has arrived and user hasn't revealed — show prompt
+  if (c.my_identity_reveal === 0) {
+    // Update the day count text dynamically
+    const dayText = promptDiv.querySelector('p.text-on-surface-variant.text-sm');
+    if (dayText) {
+      dayText.textContent = `You've been chatting for ${daysSinceChatStarted} days. Ready to show each other who you are?`;
+    }
+    promptDiv.classList.remove('hidden');
+  }
+}
+
 function updateChatStatus(c) {
   const statusEl = document.getElementById('chat-status');
-  const notVibingBtn = document.getElementById('btn-not-vibing');
   const identityRevealBtn = document.getElementById('btn-identity-reveal');
   const faceRevealBtn = document.getElementById('btn-face-reveal');
   
-  if (notVibingBtn) notVibingBtn.classList.add('hidden');
   if (identityRevealBtn) identityRevealBtn.classList.add('hidden');
   if (faceRevealBtn) faceRevealBtn.classList.add('hidden');
   
   if (c.status === 'accepted' || c.status === 'revealed') {
-    if (notVibingBtn) notVibingBtn.classList.remove('hidden');
     const now = Date.now();
-    const chatStarted = new Date(c.chat_started_at).getTime();
+    const chatStarted = c.chat_started_at ? new Date(c.chat_started_at).getTime() : now;
     const daysSinceChatStarted = Math.floor((now - chatStarted) / (24 * 60 * 60 * 1000));
     
-    const revealTarget = c.face_reveal_available_at || c.identity_reveal_available_at;
-    const isRevealDue = revealTarget ? now >= new Date(revealTarget) : false;
+    const identityRevealAt = c.identity_reveal_available_at ? new Date(c.identity_reveal_available_at).getTime() : null;
+    const faceRevealAt = c.face_reveal_available_at ? new Date(c.face_reveal_available_at).getTime() : null;
+    const isIdentityRevealDue = identityRevealAt ? now >= identityRevealAt : false;
+    const isFaceRevealDue = faceRevealAt ? now >= faceRevealAt : false;
     
-    if (isRevealDue || c.both_face_revealed || c.both_identity_revealed) {
-      if (c.both_face_revealed || c.both_identity_revealed) {
-        // Both agreed - show the Video Call modal & status link
-        if (c.meeting_code && !document.getElementById('modal-google-meet').classList.contains('scale-100')) {
-          showMeetingModal(c.meeting_code);
-        }
-        if (statusEl) {
-          statusEl.innerHTML = `<span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold"><span class="material-symbols-outlined text-[14px]">videocam</span> Meeting ready! <a href="#" onclick="showMeetingModal('${c.meeting_code}'); return false;" class="underline font-bold">Join</a></span>`;
-        }
-      } else {
-        // Show Reveal button
-        const btnToUse = faceRevealBtn || identityRevealBtn;
-        if (btnToUse) {
-          btnToUse.classList.remove('hidden');
-          btnToUse.textContent = (c.my_face_reveal === 0 && c.my_identity_reveal === 0) ? "Reveal" : 'Waiting...';
-          btnToUse.disabled = (c.my_face_reveal === 1 || c.my_identity_reveal === 1);
-        }
-        if (c.my_face_reveal === 0 && c.my_identity_reveal === 0) {
-          const faceModal = document.getElementById('modal-face-reveal') || document.getElementById('modal-identity-reveal');
-          if (faceModal && !faceModal.classList.contains('scale-100')) {
-            openModal(faceModal.id);
-          }
-        }
-        if (statusEl) {
-          statusEl.textContent = (c.my_face_reveal === 1 || c.my_identity_reveal === 1) 
-            ? 'Waiting for partner to reveal...' 
-            : `Day ${daysSinceChatStarted} - Reveal available!`;
+    // Both agreed to any reveal — show meeting
+    if (c.both_face_revealed || c.both_identity_revealed) {
+      if (c.meeting_code && !document.getElementById('modal-google-meet').classList.contains('scale-100')) {
+        showMeetingModal(c.meeting_code);
+      }
+      if (statusEl) {
+        statusEl.innerHTML = `<span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold"><span class="material-symbols-outlined text-[14px]">videocam</span> Meeting ready! <a href="#" onclick="showMeetingModal('${c.meeting_code}'); return false;" class="underline font-bold">Join</a></span>`;
+      }
+      return;
+    }
+    
+    // Face reveal (Day 10) takes priority over identity reveal
+    if (isFaceRevealDue) {
+      if (faceRevealBtn) {
+        faceRevealBtn.classList.remove('hidden');
+        faceRevealBtn.textContent = c.my_face_reveal === 0 ? "Let's Meet" : 'Waiting...';
+        faceRevealBtn.disabled = c.my_face_reveal === 1;
+      }
+      if (c.my_face_reveal === 0 && c.my_identity_reveal === 0) {
+        const faceModal = document.getElementById('modal-face-reveal');
+        if (faceModal && !faceModal.classList.contains('scale-100')) {
+          openModal(faceModal.id);
         }
       }
-    } else {
-      // Before Day 10: Chatting period
-      const daysUntilReveal = revealTarget ? Math.ceil((new Date(revealTarget) - now) / (24 * 60 * 60 * 1000)) : 10;
-      if (statusEl && !isPartnerOnline) {
-        statusEl.innerHTML = `<span class="text-on-surface-variant/80">Reveal in ${daysUntilReveal}d</span>`;
+      if (statusEl) {
+        statusEl.textContent = c.my_face_reveal === 1
+          ? 'Waiting for partner to reveal...'
+          : `Day ${daysSinceChatStarted} - Face reveal available!`;
       }
+      return;
+    }
+    
+    // Identity reveal (Day 7) — show identity reveal modal
+    if (isIdentityRevealDue) {
+      if (identityRevealBtn) {
+        identityRevealBtn.classList.remove('hidden');
+        identityRevealBtn.textContent = c.my_identity_reveal === 0 ? "Reveal" : 'Waiting...';
+        identityRevealBtn.disabled = c.my_identity_reveal === 1;
+      }
+      // Auto-show the identity reveal modal (with the right state)
+      if (c.my_identity_reveal === 0) {
+        updateIdentityRevealModal(c);
+        const idModal = document.getElementById('modal-identity-reveal');
+        if (idModal && !idModal.classList.contains('scale-100')) {
+          openModal('modal-identity-reveal');
+        }
+      }
+      if (statusEl) {
+        if (c.my_identity_reveal === 1) {
+          statusEl.textContent = 'Waiting for partner to reveal...';
+        } else {
+          const daysUntilFace = faceRevealAt ? Math.ceil((faceRevealAt - now) / (24 * 60 * 60 * 1000)) : 3;
+          statusEl.innerHTML = `<span class="text-on-surface-variant/80">Identity reveal ready! Face reveal in ${daysUntilFace}d</span>`;
+        }
+      }
+      return;
+    }
+    
+    // Before Day 7: Show countdown to identity reveal
+    const daysUntilIdentity = identityRevealAt ? Math.ceil((identityRevealAt - now) / (24 * 60 * 60 * 1000)) : 7;
+    if (statusEl && !isPartnerOnline) {
+      statusEl.innerHTML = `<span class="text-on-surface-variant/80"><span class="material-symbols-outlined text-[12px] align-middle mr-0.5">lock</span> Identity reveal in ${daysUntilIdentity}d</span>`;
     }
   } else if (c.status === 'revealed') {
+    // Both already revealed — meeting ready (both_face_revealed or both_identity_revealed handles this above)
     if (statusEl) statusEl.innerHTML = `<span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold"><span class="material-symbols-outlined text-[14px]">videocam</span> Meeting ready! <a href="#" onclick="showMeetingModal('${c.meeting_code}'); return false;" class="underline font-bold">Join</a></span>`;
   } else {
     if (statusEl) statusEl.textContent = c.status;
@@ -2242,9 +2348,17 @@ if (document.readyState === 'loading') {
 async function submitIdentityRevealAction() {
   try {
     const data = await apiCall('/api/connections/identity-reveal', 'POST', { connection_id: currentConnId });
-    closeModal();
     if (data.bothRevealed && data.meeting_code) {
+      closeModal();
       showMeetingModal(data.meeting_code);
+    } else {
+      // Switch to waiting state without closing the modal
+      const countdownDiv = document.getElementById('identity-state-countdown');
+      const promptDiv = document.getElementById('identity-state-prompt');
+      const waitingDiv = document.getElementById('identity-state-waiting');
+      if (countdownDiv) countdownDiv.classList.add('hidden');
+      if (promptDiv) promptDiv.classList.add('hidden');
+      if (waitingDiv) waitingDiv.classList.remove('hidden');
     }
     loadChatInfo();
   } catch(err) { showToast(err.message, 'error'); }

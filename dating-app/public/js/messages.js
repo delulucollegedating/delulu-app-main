@@ -17,6 +17,8 @@ function initUserStream() {
     _sseBackoffMs = 2000;
 
     if (data.type === 'chat_ended') {
+      // Clear localStorage cache so the ended chat doesn't flash back on page reload
+      try { localStorage.removeItem('cached_messages_list'); } catch (e) {}
       // Refresh the messages list instantly when a chat is ended
       loadMessagesList({ skipRecent: false });
     } else if (data.type === 'message') {

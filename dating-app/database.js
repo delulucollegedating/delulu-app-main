@@ -541,6 +541,29 @@ const connectionOps = {
       
     const doc = !snap1.empty ? snap1.docs[0].data() : (!snap2.empty ? snap2.docs[0].data() : null);
     if (doc) {
+      // Allow reconnection if the previous connection was ended/rejected/expired.
+      // This ensures users can send a new request after a chat ends ("Not Vibing").
+      if (doc.status === 'rejected' || doc.status === 'expired') {
+        const docRef = !snap1.empty ? snap1.docs[0].ref : snap2.docs[0].ref;
+        const connId = doc.id;
+        await docRef.update({
+          status: 'pending',
+          ended_reason: null,
+          chat_started_at: null,
+          identity_reveal_available_at: null,
+          face_reveal_available_at: null,
+          face_reveal_expires_at: null,
+          from_face_reveal: 0,
+          to_face_reveal: 0,
+          from_identity_reveal: 0,
+          to_identity_reveal: 0,
+          meeting_code: null,
+          from_last_read_at: null,
+          to_last_read_at: null
+        });
+        evictConnection(connId);
+        return { success: true, reconnected: true };
+      }
       return { error: 'Connection already exists', status: doc.status };
     }
     
@@ -729,15 +752,19 @@ const connectionOps = {
       }
 
       const now = new Date();
+      const identityRevealAvailable = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
       const faceRevealAvailable = new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000).toISOString();
       const faceRevealExpires = new Date(now.getTime() + 11 * 24 * 60 * 60 * 1000).toISOString();
       transaction.update(connDocRef, {
         status: 'accepted',
         chat_started_at: now.toISOString(),
+        identity_reveal_available_at: identityRevealAvailable,
         face_reveal_available_at: faceRevealAvailable,
         face_reveal_expires_at: faceRevealExpires,
         from_face_reveal: 0,
         to_face_reveal: 0,
+        from_identity_reveal: 0,
+        to_identity_reveal: 0,
         face_reveal_declined_by: null,
         meeting_code: null
       });
@@ -748,6 +775,7 @@ const connectionOps = {
       result = {
         success: true,
         chat_started_at: now.toISOString(),
+        identity_reveal_available_at: identityRevealAvailable,
         face_reveal_available_at: faceRevealAvailable,
         face_reveal_expires_at: faceRevealExpires
       };
@@ -943,6 +971,53 @@ const connectionOps = {
       return { success: true, ended: true, otherId };
     }
     return { error: 'Connection not active' };
+  },
+
+  // Day-7 mutual identity reveal. Both users must explicitly agree.
+  async submitIdentityReveal(connectionId, userId) {
+    const firestore = getDB();
+    const connDocRef = firestore.collection('connections').doc(String(connectionId));
+
+    let result = null;
+
+    try {
+      await firestore.runTransaction(async (transaction) => {
+        const doc = await transaction.get(connDocRef);
+        if (!doc.exists) {
+          result = { error: 'Connection not found' };
+          return;
+        }
+        const conn = doc.data();
+        if (conn.status !== 'accepted') {
+          result = { error: 'Connection is no longer active' };
+          return;
+        }
+        if (conn.from_user_id !== Number(userId) && conn.to_user_id !== Number(userId)) {
+          result = { error: 'Not authorized' };
+          return;
+        }
+        const now = Date.now();
+        if (!conn.identity_reveal_available_at || now < new Date(conn.identity_reveal_available_at).getTime()) {
+          result = { error: 'Identity reveal is available on Day 7.' };
+          return;
+        }
+
+        const isFrom = conn.from_user_id === Number(userId);
+        const field = isFrom ? 'from_identity_reveal' : 'to_identity_reveal';
+        const otherVal = isFrom ? conn.to_identity_reveal : conn.from_identity_reveal;
+        const bothRevealed = otherVal === 1;
+        const meetingCode = bothRevealed ? (conn.meeting_code || generateMeetingCode()) : null;
+        transaction.update(connDocRef, bothRevealed
+          ? { [field]: 1, status: 'revealed', meeting_code: meetingCode }
+          : { [field]: 1 });
+        result = { success: true, bothRevealed, meeting_code: meetingCode };
+      });
+    } catch (txErr) {
+      return { error: 'Failed to process identity reveal. Please try again.' };
+    }
+
+    if (result?.success) evictConnection(connectionId);
+    return result || { error: 'Failed to process identity reveal. Please try again.' };
   },
 
   // Day-10 mutual reveal. Both users must explicitly agree during the reveal window.
@@ -1165,9 +1240,11 @@ const connectionOps = {
   async sweepExpired() {
     const firestore = getDB();
     const now = new Date().toISOString();
+    const nowMs = Date.now();
     
     let identityRevealsExpired = 0;
     let faceRevealsExpired = 0;
+    /** @type {Array<{id: number, from_user_id: number, to_user_id: number}>} */
     const allExpiredIds = [];
     let lastDoc = null;
     const PAGE_SIZE = 500;
@@ -1192,6 +1269,16 @@ const connectionOps = {
         lastDoc = doc; // Track for pagination
         const conn = doc.data();
         
+        // Track identity reveals that have passed their Day-7 window (informational metric only).
+        // The connection continues to face reveal — no expiry here.
+        if (conn.identity_reveal_available_at && new Date(conn.identity_reveal_available_at).getTime() <= nowMs) {
+          const fromRevealed = conn.from_identity_reveal || 0;
+          const toRevealed = conn.to_identity_reveal || 0;
+          if (fromRevealed === 0 && toRevealed === 0) {
+            identityRevealsExpired++;
+          }
+        }
+        
         // Face reveal opens on Day 10 and stays open for 24 hours. Older records
         // without an explicit expiry use the same 24-hour compatibility window.
         const faceExpiry = conn.face_reveal_expires_at || (conn.face_reveal_available_at
@@ -1202,7 +1289,7 @@ const connectionOps = {
             batch.update(doc.ref, { status: 'expired', ended_reason: 'face_reveal_timeout' });
             batch.delete(activeConnectionLockRef(conn.from_user_id));
             batch.delete(activeConnectionLockRef(conn.to_user_id));
-            allExpiredIds.push(conn.id);
+            allExpiredIds.push({ id: conn.id, from_user_id: conn.from_user_id, to_user_id: conn.to_user_id });
             faceRevealsExpired++;
             pageChanged = true;
             continue; // skip to next doc — this connection is handled
@@ -1218,8 +1305,8 @@ const connectionOps = {
       if (snapshot.size < PAGE_SIZE) break;
     }
     
-    for (const id of allExpiredIds) evictConnection(id);
-    return { identityRevealsExpired, faceRevealsExpired };
+    for (const entry of allExpiredIds) evictConnection(entry.id);
+    return { identityRevealsExpired, faceRevealsExpired, expiredConnections: allExpiredIds };
   },
 
   async getConnectionById(connectionId) {

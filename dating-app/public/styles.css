@@ -547,6 +547,14 @@ body {
 .pulse-heart { animation: pulseHeart 1.5s ease-in-out infinite; }
 @keyframes pulseHeart { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
 
+@keyframes pulse-soft {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.05); opacity: 0.85; }
+}
+.animate-pulse-soft {
+  animation: pulse-soft 2s ease-in-out infinite;
+}
+
 /* ===== 3D Hello Emote Animation (Fallback CSS Cards) ===== */
 @keyframes hello-emote {
   0% { 
