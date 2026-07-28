@@ -45,6 +45,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Restore saved gender filter pill on page load
   applyGenderFilterUI(activeGenderFilter);
 
+  // Gender filter pill buttons
+  const btnAll = document.getElementById('filter-all');
+  if (btnAll) btnAll.onclick = () => setGenderFilter('all');
+  const btnMale = document.getElementById('filter-male');
+  if (btnMale) btnMale.onclick = () => setGenderFilter('male');
+  const btnFemale = document.getElementById('filter-female');
+  if (btnFemale) btnFemale.onclick = () => setGenderFilter('female');
+
+  // Empty state refresh button
+  const refreshBtn = document.getElementById('btn-discover-refresh');
+  if (refreshBtn) refreshBtn.onclick = () => loadDiscovery();
+
   // Smooth scroll wheel/trackpad navigation (debounced vertical scrolling mapped to swiping)
   let lastScrollTime = 0;
   const scrollCooldown = 280; // ms between card swiping transitions

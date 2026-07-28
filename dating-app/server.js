@@ -182,6 +182,7 @@ app.use(helmet({
     directives: {
       defaultSrc: ["'self'", "https:"],
       scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "blob:", "https:", "http:"],
+      scriptSrcAttr: ["'self'", "'unsafe-inline'"],
       styleSrc: ["'self'", "'unsafe-inline'", "https:", "http:"],
       fontSrc: ["'self'", "https:", "http:", "data:"],
       imgSrc: ["'self'", "data:", "blob:", "https:", "http:"],
