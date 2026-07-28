@@ -33,10 +33,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (e.key === 'ArrowRight') navigateCards(1);
   });
 
-  // Auto-refresh when tab becomes visible (compensates for mock socket)
+  // Auto-refresh when tab becomes visible — use a long cooldown so
+  // switching back from APK / other tabs does NOT reset the card deck.
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
-      loadDiscovery({ skipRecent: true });
+      loadDiscovery({ skipRecent: true, preserveIndex: true });
     }
   });
 
@@ -62,6 +63,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 async function handleDismissCenter() {
+  // Sync from avatar3d's authoritative targetIndex
+  if (typeof window.getCurrentIndex === 'function') {
+    currentIndex = window.getCurrentIndex();
+  }
   const profile = discoverProfiles[currentIndex];
   const idx = currentIndex;
   if (!profile) return;
@@ -82,6 +87,11 @@ async function handleDismissCenter() {
 }
 
 async function handleConnectCenter() {
+  // Always sync from avatar3d's authoritative targetIndex to prevent
+  // the "wrong person connected" bug when the two indices drift.
+  if (typeof window.getCurrentIndex === 'function') {
+    currentIndex = window.getCurrentIndex();
+  }
   const profile = discoverProfiles[currentIndex];
   const idx = currentIndex;
   if (!profile) return;
@@ -178,7 +188,7 @@ function updateProfileOverlay(index) {
 
 async function loadDiscovery(options = {}) {
   if (discoveryLoading) return;
-  if (options.skipRecent && Date.now() - lastDiscoveryLoadAt < 5000) return;
+  if (options.skipRecent && Date.now() - lastDiscoveryLoadAt < 60000) return;
 
   // Instant zero-latency render from local cache (eliminates skeleton waiting time)
   if (!discoverProfiles.length) {
@@ -214,8 +224,16 @@ async function loadDiscovery(options = {}) {
     if (discoverProfiles.length > 0) {
       const overlay = document.getElementById('profile-overlay');
       if (overlay) overlay.classList.remove('hidden');
-      currentIndex = 0;
-      updateProfileOverlay(0);
+
+      // preserveIndex: keep the user on the card they were viewing
+      // (prevents the reload-from-visibilitychange resetting back to card 0)
+      if (options.preserveIndex && currentIndex > 0 && currentIndex < discoverProfiles.length) {
+        // stay on currentIndex — just refresh the overlay text in case bio changed
+        updateProfileOverlay(currentIndex);
+      } else {
+        currentIndex = 0;
+        updateProfileOverlay(0);
+      }
       updateNavButtons();
     }
     
@@ -235,8 +253,11 @@ function init3DScene() {
   if (!container) return;
   
   if (typeof initAvatarScene === 'function') {
+    // Clamp currentIndex in case the profile list shrank
+    const safeIdx = Math.min(currentIndex, discoverProfiles.length - 1);
+    currentIndex = safeIdx;
     initAvatarScene('avatar-3d-container', discoverProfiles);
-    window.updateAvatarScene(currentIndex);
+    window.updateAvatarScene(safeIdx);
   } else {
     renderFallbackCards();
   }
