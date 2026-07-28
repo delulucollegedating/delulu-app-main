@@ -265,9 +265,14 @@ async function loadDiscovery(options = {}) {
     // Build URL with optional gender filter query param
     const genderParam = (activeGenderFilter && activeGenderFilter !== 'all') ? `?gender=${activeGenderFilter}` : '';
     const data = await apiCall(`/api/discover${genderParam}`);
-    lastDiscoveryLoadAt = Date.now();
-    userHasActiveChat = !!data.hasActiveConnection;
-    discoverProfiles = data.profiles || [];
+    const newProfiles = data.profiles || [];
+    
+    // Compare incoming profile IDs with current deck to prevent unnecessary DOM resets & jumping avatars
+    const currentIds = (discoverProfiles || []).map(p => p.id).join(',');
+    const newIds = newProfiles.map(p => p.id).join(',');
+    const deckUnchanged = (currentIds === newIds && currentIds.length > 0);
+
+    discoverProfiles = newProfiles;
     
     // Cache profiles for instant zero-latency loading
     try {
@@ -275,15 +280,23 @@ async function loadDiscovery(options = {}) {
       localStorage.setItem('discover_profiles', JSON.stringify(discoverProfiles));
     } catch (e) {}
     
+    // If profile deck is unchanged and already rendered, do NOT tear down or re-render 3D scene!
+    if (deckUnchanged) {
+      if (currentIndex >= discoverProfiles.length) {
+        currentIndex = Math.max(0, discoverProfiles.length - 1);
+      }
+      updateProfileOverlay(currentIndex);
+      updateNavButtons();
+      return;
+    }
+
     // Show profile overlay immediately
     if (discoverProfiles.length > 0) {
       const overlay = document.getElementById('profile-overlay');
       if (overlay) overlay.classList.remove('hidden');
 
       // preserveIndex: keep the user on the card they were viewing
-      // (prevents the reload-from-visibilitychange resetting back to card 0)
       if (options.preserveIndex && currentIndex > 0 && currentIndex < discoverProfiles.length) {
-        // stay on currentIndex — just refresh the overlay text in case bio changed
         updateProfileOverlay(currentIndex);
       } else {
         currentIndex = 0;

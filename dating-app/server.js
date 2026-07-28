@@ -1166,8 +1166,11 @@ app.get('/api/discover', requireAuth, async (req, res) => {
     };
   });
 
-  // Sort by match count descending (most matching hobbies first)
-  mappedProfiles.sort((a, b) => b.match_count - a.match_count);
+  // Sort by match count descending (most matching hobbies first), then stable tie-breaker by ID
+  mappedProfiles.sort((a, b) => {
+    if (b.match_count !== a.match_count) return b.match_count - a.match_count;
+    return a.id - b.id;
+  });
 
   res.json({ profiles: mappedProfiles, hasActiveConnection });
 });

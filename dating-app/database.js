@@ -336,14 +336,16 @@ const userOps = {
         score += 5;
       }
 
-      // 3. Fairness random jitter (+0-8 pts) so every classmate gets discovered
-      score += Math.random() * 8;
-
+      // 3. Completeness & Priority Score
       profile.compatibilityScore = Math.round(score);
     });
 
-    // Sort profiles descending by compatibility score
-    const sorted = discoverable.sort((a, b) => (b.compatibilityScore || 0) - (a.compatibilityScore || 0));
+    // Stable deterministic sort: compatibility score descending, then user ID ascending as tie-breaker
+    const sorted = discoverable.sort((a, b) => {
+      const diff = (b.compatibilityScore || 0) - (a.compatibilityScore || 0);
+      if (diff !== 0) return diff;
+      return a.id - b.id;
+    });
     return { profiles: sorted, hasActiveConnection: isUserActive };
   }
 };
