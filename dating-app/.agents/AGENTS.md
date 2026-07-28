@@ -186,15 +186,19 @@ function getEcosystem(email) {
 
 **Discovery query** always filters by `ecosystem === userEcosystem`. This is the core isolation mechanism.
 
-### 5.2 Discovery Algorithm (CRITICAL — DO NOT CHANGE)
+### 5.2 Discovery Algorithm & Gender Filter (UPDATED)
 The discover page shows profiles filtered by:
-1. **Same ecosystem** as the viewer
-2. **Opposite gender** (male sees female, female sees male; other genders see all)
-3. **Exclude**: active/pending connected users, blocked users, self
-4. **Hobby Compatibility & Fairness**: sorted by matching hobbies count descending with subtle random jitter
-5. **Reconnection Allowed**: users with `rejected` or `ended` connection status ("Not Vibing") are **NOT** excluded, so former connections can rediscover each other once their previous chat has ended.
+1. **Same ecosystem** as the viewer (mandatory college isolation)
+2. **Inclusive Gender Filter**: Users can discover and send connection requests to **any user** in their ecosystem regardless of gender. An interactive UI filter bar (`All`, `Male`, `Female`) lets users choose their view preference (defaults to `All`, persisted in `localStorage`). Passed to server as `/api/discover?gender=male|female|all`.
+3. **Exclude**: Active/pending connected users, blocked users, self
+4. **Deterministic Hobby Compatibility & Priority Ranking**:
+   - **Shared Hobbies**: +10 points per matching hobby
+   - **Bio Completeness**: +5 points for bios >10 characters
+   - **Deterministic Tie-Breaker**: User `ID` ascending (eliminates random jitter, ensuring 100% stable profile order across re-fetches)
+5. **Smart Deck Diffing & Stability**: `public/js/discover.js` compares incoming profile IDs with the current deck; if unchanged, it avoids 3D scene DOM teardown so avatars never jump, flicker, or reset under the user's hands.
+6. **Reconnection Allowed**: Users with `rejected` or `ended` connection status ("Not Vibing") are **NOT** excluded, so former connections can rediscover each other once their previous chat has ended.
 
-The `getDiscoverable(userId, gender, excludeIds)` method in `database.js` handles this. `excludeIds` is populated from `getConnectedUserIds()` — which filters only for users with active or pending connections (`pending`, `accepted`, `revealed`).
+The `getDiscoverable(userId, genderFilter, excludeIds)` method in `database.js` handles this. `excludeIds` is populated from `getConnectedUserIds()` — which filters only for users with active or pending connections (`pending`, `accepted`, `revealed`).
 
 ### 5.3 Connection Lifecycle (CRITICAL — DO NOT CHANGE)
 ```
@@ -464,3 +468,21 @@ Cache invalidation via `evictConnection()` / `invalidateUserCache()` on every wr
 - **25s SSE heartbeat** prevents Render's 30s proxy timeout.
 - **Voice uploads stored locally** on server filesystem — lost on Render redeploy without persistent disk.
 - **APK is 126MB** — exceeds GitHub's 100MB limit. Never commit to git.
+
+---
+
+## 15. Design Engineering & Symmetrical Theme Architecture
+
+### 15.1 Emil Kowalski Design Engineering (`emil-design-eng`)
+- **Tactile Active Press Feedback**: All buttons, links, filter pills, request cards, and interactive elements feature `:active { transform: scale(0.96); }` with Emil's custom easing `--ease-out-emil` (`cubic-bezier(0.23, 1, 0.32, 1)`).
+- **Scale Entrance Rule**: Modals and toasts enter from `scale(0.95)` to `scale(1)` with opacity (never `scale(0)`).
+- **Glassmorphism & Depth**: Layered backdrop blurs (`backdrop-blur-md` & `backdrop-blur-xl`), subdued semi-transparent borders (`border-outline-variant/30`), and soft ambient glow shadows.
+
+### 15.2 Symmetrical Theme Engine (Dark / Light Mode)
+- **Unified Handlers**: `applyTheme(isDark)` and `toggleTheme()` in `public/js/shared.js` drive theme changes cleanly across all pages.
+- **No Dirty Inline Background Overrides**: `applyTheme()` clears any leftover `style.backgroundColor` on `document.documentElement` and `document.body` so CSS rules take effect cleanly without dark background leaks or split-color states.
+- **Synchronized Root Classes**: Symmetrical `.dark` class added to both `html` and `body`. Light mode resets explicitly handled by `html:not(.dark)` and `body:not(.dark)`.
+
+### 15.3 Mobile Viewport Responsiveness
+- **Fluid Viewport Scaling**: Avatar image heights (`clamp(180px, 28vh, 290px)`) and container heights (`clamp(200px, 30vh, 320px)`) scale dynamically on compact viewports (<780px & <680px).
+- **Bottom Navigation Clearance**: `<body class="pb-24 md:pb-6">` ensures connection buttons and content are never obscured by fixed mobile navbars on any device.
