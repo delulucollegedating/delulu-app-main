@@ -466,7 +466,6 @@ Cache invalidation via `evictConnection()` / `invalidateUserCache()` on every wr
 - **`sameSite: 'none'`** required in production for Capacitor WebView cross-origin cookies.
 - **`X-Accel-Buffering: no`** required on SSE responses to prevent Nginx buffering.
 - **25s SSE heartbeat** prevents Render's 30s proxy timeout.
-- **Voice uploads stored locally** on server filesystem — lost on Render redeploy without persistent disk.
 - **APK is 126MB** — exceeds GitHub's 100MB limit. Never commit to git.
 
 ---
