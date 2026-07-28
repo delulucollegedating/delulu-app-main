@@ -266,6 +266,8 @@ async function loadDiscovery(options = {}) {
     // Build URL with optional gender filter query param
     const genderParam = (activeGenderFilter && activeGenderFilter !== 'all') ? `?gender=${activeGenderFilter}` : '';
     const data = await apiCall(`/api/discover${genderParam}`);
+    lastDiscoveryLoadAt = Date.now();
+    userHasActiveChat = !!data.hasActiveConnection; // Sync active connection status from server
     const newProfiles = data.profiles || [];
     
     // Compare incoming profile IDs with current deck to prevent unnecessary DOM resets & jumping avatars

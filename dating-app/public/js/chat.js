@@ -2389,6 +2389,10 @@ function wireEndChatConfirm() {
       closeModal();
       try {
         await apiCall('/api/connections/end', 'POST', { connection_id: currentConnId });
+        try {
+          sessionStorage.removeItem('discover_profiles');
+          localStorage.removeItem('discover_profiles');
+        } catch (e) {}
         window.location.href = 'discover.html';
       } catch(err) { showToast(err.message, 'error'); }
     };
