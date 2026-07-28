@@ -632,8 +632,21 @@ body {
   overflow: visible;
   flex-grow: 1;
   flex-shrink: 1;
-  min-height: 340px;
-  max-height: 420px;
+  min-height: clamp(210px, 32vh, 320px);
+  max-height: 380px;
+}
+
+@media (max-height: 780px) {
+  #avatar-3d-container {
+    min-height: 220px !important;
+    max-height: 280px !important;
+  }
+}
+@media (max-height: 680px) {
+  #avatar-3d-container {
+    min-height: 180px !important;
+    max-height: 230px !important;
+  }
 }
 
 /* ===== Fallback Card Styles ===== */

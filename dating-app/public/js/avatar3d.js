@@ -43,7 +43,7 @@ function initAvatarScene(containerId, profiles) {
     position: relative;
     width: 100%;
     height: 100%;
-    min-height: 340px;
+    min-height: clamp(200px, 30vh, 320px);
     overflow: visible;
   `;
 
@@ -75,7 +75,8 @@ function initAvatarScene(containerId, profiles) {
       img.alt = profile.username || '';
       img.draggable = false;
       img.style.cssText = `
-        height: 300px;
+        height: clamp(180px, 28vh, 290px);
+        max-height: 290px;
         width: auto;
         object-fit: contain;
         display: block;
