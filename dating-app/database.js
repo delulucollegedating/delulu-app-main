@@ -619,9 +619,18 @@ const connectionOps = {
 
   async getConnectedUserIds(userId) {
     const firestore = getDB();
+    // Only exclude users with ACTIVE or PENDING connections — not ended/rejected ones.
+    // This allows two users to reconnect on Discover after their chat ends ("Not Vibing").
+    const activeOrPendingStatuses = ['pending', 'accepted', 'revealed'];
     const [snap1, snap2] = await Promise.all([
-      firestore.collection('connections').where('from_user_id', '==', Number(userId)).get(),
-      firestore.collection('connections').where('to_user_id', '==', Number(userId)).get()
+      firestore.collection('connections')
+        .where('from_user_id', '==', Number(userId))
+        .where('status', 'in', activeOrPendingStatuses)
+        .get(),
+      firestore.collection('connections')
+        .where('to_user_id', '==', Number(userId))
+        .where('status', 'in', activeOrPendingStatuses)
+        .get()
     ]);
     
     const ids = [];

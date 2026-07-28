@@ -16,7 +16,10 @@ function initUserStream() {
     // Reset backoff on successful message
     _sseBackoffMs = 2000;
 
-    if (data.type === 'message') {
+    if (data.type === 'chat_ended') {
+      // Refresh the messages list instantly when a chat is ended
+      loadMessagesList({ skipRecent: false });
+    } else if (data.type === 'message') {
       // Update chat list row in-place
       updateChatListItem({
         connectionId: data.connectionId,

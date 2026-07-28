@@ -1445,11 +1445,28 @@ app.post('/api/connections/end', requireAuth, async (req, res) => {
     console.error('Failed to clean up messages on chat end:', e);
   }
 
+  const endedMsg = 'Oops! Bad Luck... The other person was not vibing or ended the chat. This chat has ended and messages have been cleared.';
+
+  // Notify BOTH users' chat SSE streams instantly (connection page redirect)
   connectionEmitter.emit(`update:${connection_id}`, {
     type: 'ended',
     reason: 'not_vibing',
-    message: 'Oops! Bad Luck... The other person was not vibing or ended the chat. This chat has ended and messages have been cleared.'
+    message: endedMsg
   });
+
+  // Also notify BOTH users' messages-list SSE streams so the conversation row
+  // disappears / refreshes in real-time on messages.html without needing a manual reload.
+  const enderId = Number(req.session.userId);
+  const otherId = result.otherId ? Number(result.otherId) : null;
+
+  const chatEndedEvent = {
+    type: 'chat_ended',
+    connectionId: Number(connection_id)
+  };
+  userEmitter.emit(`user:${enderId}`, chatEndedEvent);
+  if (otherId) {
+    userEmitter.emit(`user:${otherId}`, chatEndedEvent);
+  }
 
   res.json(result);
 });  // Submit face reveal (Day 10)
