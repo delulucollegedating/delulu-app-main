@@ -130,8 +130,20 @@ if (!process.env.SESSION_SECRET) {
 // Trust proxy for when running behind nginx/render/heroku
 app.set('trust proxy', 1);
 
-// Enable Gzip/Brotli response compression
-app.use(compression());
+// Enable Gzip/Brotli response compression for JSON, HTML, CSS, JS and text API responses
+app.use(compression({
+  threshold: 512, // Compress responses above 512 bytes
+  filter: (req, res) => {
+    if (req.headers['x-no-compression']) {
+      return false;
+    }
+    // Skip compressing Server-Sent Event (SSE) streams to prevent buffering realtime events
+    if (req.headers.accept && req.headers.accept.includes('text/event-stream')) {
+      return false;
+    }
+    return compression.filter(req, res);
+  }
+}));
 
 // HTTP → HTTPS redirect in production (must run before helmet or any route)
 // Skip redirect when testing with supertest (no x-forwarded-proto header expected)

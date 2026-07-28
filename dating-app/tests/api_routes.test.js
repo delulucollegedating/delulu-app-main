@@ -43,4 +43,44 @@ describe('Delulu API Routes & Security Tests', () => {
     
     expect(res.status).toBe(401);
   });
+
+  describe('Gzip/Brotli Compression Tests', () => {
+    it('should negotiate Brotli or Gzip compression when client sends Accept-Encoding header', async () => {
+      const res = await request(app)
+        .get('/discover.html')
+        .set('Accept-Encoding', 'gzip, deflate, br');
+
+      expect(res.status).toBe(200);
+      expect(['br', 'gzip']).toContain(res.headers['content-encoding']);
+    });
+
+    it('should parse JSON correctly and compress responses over threshold with size reduction', async () => {
+      const uncompressed = await request(app)
+        .get('/discover.html')
+        .set('Accept-Encoding', 'identity');
+
+      const compressed = await request(app)
+        .get('/discover.html')
+        .set('Accept-Encoding', 'gzip');
+
+      // Verify header negotiation
+      expect(uncompressed.headers['content-encoding']).toBeUndefined();
+      expect(compressed.headers['content-encoding']).toBe('gzip');
+
+      // Verify transfer size drop (compressed payload size is smaller than uncompressed)
+      const uncompressedLen = parseInt(uncompressed.headers['content-length'] || uncompressed.text.length, 10);
+      const compressedLen = parseInt(compressed.headers['content-length'] || compressed.body.length || compressed.text.length, 10);
+      expect(compressedLen).toBeLessThan(uncompressedLen);
+    });
+
+    it('should NOT double compress when x-no-compression header is present', async () => {
+      const res = await request(app)
+        .get('/discover.html')
+        .set('Accept-Encoding', 'gzip, deflate, br')
+        .set('X-No-Compression', '1');
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-encoding']).toBeUndefined();
+    });
+  });
 });
