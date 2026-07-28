@@ -88,9 +88,9 @@ function applyGenderFilterUI(filter) {
     const isActive = key === filter;
     btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
     if (isActive) {
-      btn.className = 'discover-filter-btn px-4 py-1.5 rounded-full text-xs font-bold border transition-all duration-200 bg-primary text-white border-primary shadow-sm scale-105';
+      btn.className = 'discover-filter-btn px-4.5 py-1.5 rounded-full text-xs font-bold border transition-all duration-200 bg-primary text-white border-primary shadow-md cursor-pointer scale-105';
     } else {
-      btn.className = 'discover-filter-btn px-4 py-1.5 rounded-full text-xs font-bold border transition-all duration-200 bg-surface text-on-surface-variant border-outline-variant hover:border-primary hover:text-primary';
+      btn.className = 'discover-filter-btn px-4 py-1.5 rounded-full text-xs font-medium border transition-all duration-200 bg-surface-container-lowest/80 backdrop-blur-md text-on-surface-variant border-outline-variant/40 hover:border-primary/40 hover:text-primary cursor-pointer';
     }
   });
 }
