@@ -1,21 +1,29 @@
+/* ── Native Safe Area Notch & Status Bar Clearance ── */
 :root {
-  --header-h: 5rem;
-  --header-h-md: 6rem;
-  --bottomnav-h: 4.5rem;
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --header-h: calc(4.5rem + env(safe-area-inset-top, 0px));
+  --header-h-md: calc(5.5rem + env(safe-area-inset-top, 0px));
+  --bottomnav-h: calc(4.5rem + env(safe-area-inset-bottom, 0px));
 }
 
-/* Ensure hidden elements are ALWAYS hidden, even if CDN script is delayed */
-.hidden {
-  display: none;
+#global-header {
+  padding-top: calc(0.75rem + env(safe-area-inset-top, 0px)) !important;
 }
 
-/* ── Page entry — smooth 180ms fade-in on every navigation ── */
-@keyframes delulu-page-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
+.chat-topbar {
+  padding-top: calc(0.75rem + env(safe-area-inset-top, 0px)) !important;
 }
+
 body {
   animation: delulu-page-in 180ms ease-out both;
+  padding-top: calc(4.5rem + env(safe-area-inset-top, 0px)) !important;
+}
+
+@media (min-width: 768px) {
+  body {
+    padding-top: calc(5.5rem + env(safe-area-inset-top, 0px)) !important;
+  }
 }
 
 /* ── Emil Kowalski Design Engineering Micro-Interactions ── */
