@@ -367,6 +367,11 @@ if (process.env.SUPABASE_DB_URL) {
       await pgClient.query('REVOKE ALL ON TABLE public.session FROM anon, authenticated;');
     } catch (e) {
       // Table may not exist yet on first boot or RLS already active
+    }
+    try {
+      await pgClient.query("ALTER FUNCTION public.set_updated_at() SET search_path = '';");
+    } catch (e) {
+      // Function may not exist or search_path already set
     } finally {
       await pgClient.end().catch(() => {});
     }
