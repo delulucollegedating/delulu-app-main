@@ -20,8 +20,13 @@ body {
   padding-top: calc(4.5rem + env(safe-area-inset-top, 0px)) !important;
 }
 
+/* Chat page handles its top clearance via .chat-topbar — clear body top padding to avoid double gaps */
+body.chat-page {
+  padding-top: 0 !important;
+}
+
 @media (min-width: 768px) {
-  body {
+  body:not(.chat-page) {
     padding-top: calc(5.5rem + env(safe-area-inset-top, 0px)) !important;
   }
 }

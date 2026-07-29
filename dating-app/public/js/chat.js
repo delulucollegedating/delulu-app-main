@@ -2027,16 +2027,32 @@ function showMessageMenu(e, msg, bubbleEl) {
   const existing = document.getElementById('message-action-menu');
   if (existing) existing.remove();
 
+  const isMe = Number(msg.sender_id) === Number(currentUser.id);
   const menu = document.createElement('div');
   menu.id = 'message-action-menu';
-  menu.className = 'fixed bg-surface shadow-lg rounded-2xl p-2 border border-outline-variant/30 z-50 flex flex-col gap-2 scale-95 opacity-0 transition-all duration-150 ease-out';
+  menu.className = 'fixed bg-surface shadow-xl rounded-2xl p-2 border border-outline-variant/30 z-50 flex flex-col gap-2 scale-95 opacity-0 transition-all duration-150 ease-out';
   
   const rect = btn.getBoundingClientRect();
-  menu.style.top = `${rect.bottom + window.scrollY + 5}px`;
-  if (Number(msg.sender_id) === Number(currentUser.id)) {
-    menu.style.right = `${window.innerWidth - rect.right}px`;
+  const menuHeight = isMe ? 95 : 50;
+  const menuWidth = 190;
+  const viewportH = window.innerHeight;
+  const viewportW = window.innerWidth;
+
+  // If button is near bottom of viewport, position menu ABOVE the button so it doesn't get cut off by input bar
+  const spaceBelow = viewportH - rect.bottom - 75;
+  if (spaceBelow < menuHeight && rect.top > menuHeight + 10) {
+    menu.style.top = `${Math.max(10, rect.top - menuHeight - 6)}px`;
   } else {
-    menu.style.left = `${rect.left}px`;
+    menu.style.top = `${Math.min(viewportH - menuHeight - 80, rect.bottom + 6)}px`;
+  }
+
+  // Ensure horizontal bounds keep popover on-screen with safe margin
+  if (isMe) {
+    const rightMargin = Math.max(12, Math.min(viewportW - rect.right, viewportW - menuWidth - 12));
+    menu.style.right = `${rightMargin}px`;
+  } else {
+    const leftMargin = Math.max(12, Math.min(rect.left, viewportW - menuWidth - 12));
+    menu.style.left = `${leftMargin}px`;
   }
 
   const emojiRow = document.createElement('div');
