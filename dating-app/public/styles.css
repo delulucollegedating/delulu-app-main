@@ -15,19 +15,29 @@
   padding-top: calc(0.75rem + env(safe-area-inset-top, 0px)) !important;
 }
 
+/* Mobile: body padding for pages with global header */
 body {
   animation: delulu-page-in 180ms ease-out both;
   padding-top: calc(4.5rem + env(safe-area-inset-top, 0px)) !important;
 }
 
-/* Chat page handles its top clearance via .chat-topbar — clear body top padding to avoid double gaps */
+/* Mobile: chat page hides global header and handles its own top clearance via .chat-topbar */
 body.chat-page {
   padding-top: 0 !important;
 }
 
 @media (min-width: 768px) {
-  body:not(.chat-page) {
+  /* On desktop, global header is visible on ALL pages including chat.html */
+  body, body.chat-page {
     padding-top: calc(5.5rem + env(safe-area-inset-top, 0px)) !important;
+  }
+
+  body.chat-page .chat-topbar {
+    padding-top: 0.75rem !important;
+  }
+
+  body.chat-page #app-root {
+    height: calc(100dvh - 6rem - env(safe-area-inset-top, 0px)) !important;
   }
 }
 
