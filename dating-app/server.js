@@ -370,8 +370,9 @@ if (process.env.SUPABASE_DB_URL) {
     }
     try {
       await pgClient.query("ALTER FUNCTION public.set_updated_at() SET search_path = '';");
+      await pgClient.query("REVOKE EXECUTE ON FUNCTION public.set_updated_at() FROM PUBLIC, anon, authenticated;");
     } catch (e) {
-      // Function may not exist or search_path already set
+      // Function may not exist or permissions already revoked
     } finally {
       await pgClient.end().catch(() => {});
     }
