@@ -357,6 +357,20 @@ if (process.env.SUPABASE_DB_URL) {
     ttl: 30 * 24 * 60 * 60 // 30 days in seconds
   });
   console.log('Session store: Supabase Postgres (persistent across restarts)');
+
+  // Auto-enforce Row Level Security (RLS) & revoke public PostgREST permissions on public.session table
+  const { Client } = require('pg');
+  const pgClient = new Client({ connectionString: process.env.SUPABASE_DB_URL });
+  pgClient.connect().then(async () => {
+    try {
+      await pgClient.query('ALTER TABLE public.session ENABLE ROW LEVEL SECURITY;');
+      await pgClient.query('REVOKE ALL ON TABLE public.session FROM anon, authenticated;');
+    } catch (e) {
+      // Table may not exist yet on first boot or RLS already active
+    } finally {
+      await pgClient.end().catch(() => {});
+    }
+  }).catch(() => {});
 } else {
   // Fallback: in-memory (sessions lost on server restart — users will need to re-login after deploys)
   const MemoryStore = require('memorystore')(session);
