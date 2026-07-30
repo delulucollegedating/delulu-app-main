@@ -48,7 +48,7 @@
       }
     };
   </script>
-  <link href="styles.css?v=271" rel="stylesheet"/>
+  <link href="styles.css?v=272" rel="stylesheet"/>
 </head>
 <body class="bg-background text-on-background h-dvh overflow-hidden flex flex-col antialiased chat-page">
   
@@ -75,25 +75,20 @@
   <main class="flex flex-col w-full px-0 md:px-6 h-[100dvh] md:h-[calc(100dvh-var(--header-h-md))] relative" id="app-root">
     <div class="flex flex-col w-full h-full md:rounded-2xl bg-surface-container-lowest shadow-sm border border-outline-variant/20 overflow-hidden relative">
       
-      <!-- Scrapbook Header Strip -->
-      <div class="flex items-center justify-between px-3 py-1 bg-[#FAF4EB]/80 border-b border-dashed border-[#EADBCE] z-10">
-        <div class="flex items-center gap-2">
-          <span class="text-[12px] font-serif italic text-[#8C6255] opacity-85">overheard on delulu 🤫</span>
-        </div>
-        <div id="delulu-day-badge" class="delulu-day-counter-badge">
-          <span id="delulu-day-text">Day 1/10</span>
-        </div>
-      </div>
-
       <header class="chat-topbar z-10" aria-label="Conversation controls">
         <div class="chat-topbar-main">
           <a href="messages.html" class="chat-icon-button" aria-label="Back to chats">
             <span class="material-symbols-outlined text-xl">arrow_back</span>
           </a>
           <button id="chat-avatar" class="chat-partner-avatar" type="button" aria-label="Open profile"></button>
-          <button id="chat-name" class="chat-partner-details min-w-0 flex-1 text-left" type="button">
-            <span class="chat-partner-name">...</span>
-            <span id="chat-status" class="chat-partner-status">Connecting…</span>
+          <button id="chat-name" class="chat-partner-details min-w-0 flex-1 text-left flex items-center gap-2" type="button">
+            <div class="min-w-0 flex-1">
+              <span class="chat-partner-name truncate block">...</span>
+              <span id="chat-status" class="chat-partner-status">Connecting…</span>
+            </div>
+            <div id="delulu-day-badge" class="delulu-day-counter-badge shrink-0">
+              <span id="delulu-day-text">Day 1/7</span>
+            </div>
           </button>
         </div>
         <div class="chat-action-row" aria-label="Chat actions">
@@ -352,6 +347,6 @@
   <script src="js/shared.js?v=259"></script>
   <script src="js/chat-cache.js?v=245"></script>
   <script src="js/crypto.js"></script>
-  <script src="js/chat.js?v=271"></script>
+  <script src="js/chat.js?v=272"></script>
 </body>
 </html>
