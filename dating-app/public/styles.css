@@ -1513,17 +1513,18 @@ body.dark .chat-composer:focus-within { background: #303234; border-color: rgba(
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 20px;
+    gap: 16px;
     padding: 10px 16px;
   }
-  .chat-topbar-main { flex: 1 1 auto; max-width: 520px; padding-right: 0; }
+  .chat-topbar-main { flex: 0 1 auto; max-width: none; padding-right: 0; }
   .chat-action-row {
     flex: 0 0 auto;
+    margin-left: auto;
     padding: 0;
     overflow: visible;
   }
   .chat-action-chip { min-height: 36px; }
-  .chat-more-button { position: static; flex: 0 0 40px; }
+  .chat-more-button { position: static; flex: 0 0 40px; margin-left: 4px; }
   .chat-composer-shell { padding: 10px 16px; }
   .chat-composer { max-width: 960px; margin: 0 auto; }
 }
