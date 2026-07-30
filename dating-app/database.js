@@ -1392,6 +1392,42 @@ const messageOps = {
     }
   },
 
+  // ── BULK INSERT MESSAGES ──────────────────────────────────────────────────
+  // Single multi-row insert statement with chunking for high throughput & minimum round trips
+  async bulkSend(messagesList) {
+    if (!Array.isArray(messagesList) || messagesList.length === 0) return [];
+    try {
+      const supabase = getSupabase();
+      const BATCH_SIZE = 100; // Chunk into 100 rows per batch to avoid oversized payload limits
+      const insertedResults = [];
+
+      for (let i = 0; i < messagesList.length; i += BATCH_SIZE) {
+        const chunk = messagesList.slice(i, i + BATCH_SIZE).map(m => ({
+          connection_id:  Number(m.connectionId || m.connection_id),
+          sender_id:      Number(m.senderId || m.sender_id),
+          content:        m.content,
+          reactions:      m.reactions || {},
+          is_voice:       Number(m.isVoice || m.is_voice || 0),
+          voice_duration: Number(m.voiceDuration || m.voice_duration || 0),
+          is_encrypted:   Number(m.isEncrypted || m.is_encrypted || 0),
+          iv:             m.iv || null
+        }));
+
+        const { data, error } = await supabase
+          .from('messages')
+          .insert(chunk)
+          .select();
+
+        if (error) throw error;
+        if (data) insertedResults.push(...data);
+      }
+      return insertedResults;
+    } catch (err) {
+      console.error('messageOps.bulkSend error:', err.message);
+      throw new Error('Failed to bulk send messages');
+    }
+  },
+
   // ── TOGGLE REACTION ──────────────────────────────────────────────────────────
   // Single read + single write against Supabase 'messages' reactions jsonb column.
   // Moved from Firestore msgRef.get() → msgRef.update({ reactions }).

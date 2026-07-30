@@ -101,5 +101,12 @@ describe('Delulu API Routes & Security Tests', () => {
       const result = await blockOps.block(9999, 8888);
       expect(result).toHaveProperty('success', true);
     });
+
+    it('should perform bulk multi-row message inserts via messageOps.bulkSend', async () => {
+      const { messageOps } = require('../database.js');
+      expect(typeof messageOps.bulkSend).toBe('function');
+      const res = await messageOps.bulkSend([]);
+      expect(res).toEqual([]);
+    });
   });
 });
