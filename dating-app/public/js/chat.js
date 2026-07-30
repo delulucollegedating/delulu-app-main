@@ -1545,7 +1545,7 @@ function updateChatStatus(c) {
     // Days 1-9: Show countdown to Day 10 Face Reveal
     const daysUntilFace = Math.max(1, Math.ceil((faceRevealAt - now) / (24 * 60 * 60 * 1000)));
     if (statusEl && !isPartnerOnline) {
-      statusEl.innerHTML = `<span class="text-on-surface-variant/80"><span class="material-symbols-outlined text-[12px] align-middle mr-0.5">lock</span> Face reveal in ${daysUntilFace}d</span>`;
+      statusEl.innerHTML = `<span class="text-on-surface-variant/80">Face reveal in ${daysUntilFace}d</span>`;
     }
   } else if (c.status === 'revealed') {
     if (statusEl) statusEl.innerHTML = `<span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold"><span class="material-symbols-outlined text-[14px]">videocam</span> Meeting ready! <a href="#" onclick="showMeetingModal('${c.meeting_code}'); return false;" class="underline font-bold">Join</a></span>`;
