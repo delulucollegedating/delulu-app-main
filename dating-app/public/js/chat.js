@@ -1363,7 +1363,7 @@ async function loadChatInfo() {
     // Display lock icon next to name if encrypted
     const partnerNameEl = document.getElementById('chat-partner-name') || document.querySelector('.chat-partner-name');
     if (partnerNameEl) {
-      partnerNameEl.innerHTML = `${escapeHtml(c.other_username)} ${isE2EEActive ? '<span class="material-symbols-outlined text-[15px] text-green-600 align-middle ml-1" title="End-to-End Encrypted" style="font-variation-settings: \'FILL\' 1">lock</span>' : ''}`;
+      partnerNameEl.textContent = c.other_username;
     }
     const chatAvatarEl = document.getElementById('chat-avatar');
     if (chatAvatarEl) {
@@ -2232,9 +2232,6 @@ async function appendMessage(m, scrollToBottom = true) {
     const p = document.createElement('p');
     p.className = 'text-[15px] leading-relaxed break-words [overflow-wrap:anywhere] [word-break:break-word] whitespace-pre-wrap';
     p.textContent = displayContent;
-    if (isEncrypted) {
-      p.innerHTML += ` <span class="material-symbols-outlined text-[12px] text-green-600 self-center" title="End-to-End Encrypted">lock</span>`;
-    }
     inner.appendChild(p);
   }
   
