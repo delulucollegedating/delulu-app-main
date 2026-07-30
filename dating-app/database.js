@@ -264,13 +264,19 @@ const userOps = {
     
     const isUserActive = await connectionOps.hasActiveConnection(userId);
     
-    // Fetch blocked users involving this user
-    const blockedSnapshotFrom = await firestore.collection('blocked_users').where('from_user_id', '==', Number(userId)).get();
-    const blockedSnapshotTo = await firestore.collection('blocked_users').where('to_user_id', '==', Number(userId)).get();
-    
+    // Fetch blocked users involving this user safely
     const blockedIds = [];
-    blockedSnapshotFrom.forEach(doc => blockedIds.push(doc.data().to_user_id));
-    blockedSnapshotTo.forEach(doc => blockedIds.push(doc.data().from_user_id));
+    try {
+      const numId = Number(userId);
+      const [blockedFrom, blockedTo] = await Promise.all([
+        firestore.collection('blocked_users').where('from_user_id', '==', numId).get(),
+        firestore.collection('blocked_users').where('to_user_id', '==', numId).get()
+      ]);
+      blockedFrom.forEach(doc => blockedIds.push(doc.data().to_user_id));
+      blockedTo.forEach(doc => blockedIds.push(doc.data().from_user_id));
+    } catch (bErr) {
+      console.warn('Blocked users fetch error in discover:', bErr.message);
+    }
     
     const allExclude = [...new Set([...excludeIds, ...blockedIds, Number(userId)])];
     
@@ -639,23 +645,42 @@ const connectionOps = {
 
   async getConnectedUserIds(userId) {
     const firestore = getDB();
-    // Only exclude users with ACTIVE or PENDING connections — not ended/rejected ones.
-    // This allows two users to reconnect on Discover after their chat ends ("Not Vibing").
     const activeOrPendingStatuses = ['pending', 'accepted', 'revealed'];
-    const [snap1, snap2] = await Promise.all([
-      firestore.collection('connections')
-        .where('from_user_id', '==', Number(userId))
-        .where('status', 'in', activeOrPendingStatuses)
-        .get(),
-      firestore.collection('connections')
-        .where('to_user_id', '==', Number(userId))
-        .where('status', 'in', activeOrPendingStatuses)
-        .get()
-    ]);
-    
+    const numId = Number(userId);
     const ids = [];
-    snap1.forEach(doc => ids.push(doc.data().to_user_id));
-    snap2.forEach(doc => ids.push(doc.data().from_user_id));
+
+    try {
+      const [snap1, snap2] = await Promise.all([
+        firestore.collection('connections')
+          .where('from_user_id', '==', numId)
+          .where('status', 'in', activeOrPendingStatuses)
+          .get(),
+        firestore.collection('connections')
+          .where('to_user_id', '==', numId)
+          .where('status', 'in', activeOrPendingStatuses)
+          .get()
+      ]);
+      snap1.forEach(doc => ids.push(doc.data().to_user_id));
+      snap2.forEach(doc => ids.push(doc.data().from_user_id));
+    } catch (err) {
+      console.warn('Firestore composite index missing for getConnectedUserIds — falling back to in-memory filter.');
+      try {
+        const [snap1, snap2] = await Promise.all([
+          firestore.collection('connections').where('from_user_id', '==', numId).get(),
+          firestore.collection('connections').where('to_user_id', '==', numId).get()
+        ]);
+        snap1.forEach(doc => {
+          const d = doc.data();
+          if (activeOrPendingStatuses.includes(d.status)) ids.push(d.to_user_id);
+        });
+        snap2.forEach(doc => {
+          const d = doc.data();
+          if (activeOrPendingStatuses.includes(d.status)) ids.push(d.from_user_id);
+        });
+      } catch (fallbackErr) {
+        console.error('getConnectedUserIds fallback error:', fallbackErr);
+      }
+    }
     return [...new Set(ids)];
   },
 
@@ -812,18 +837,34 @@ const connectionOps = {
   async getActiveConnections(userId) {
     const firestore = getDB();
     const activeStatuses = ACTIVE_CONNECTION_STATUSES;
-    const [snap1, snap2] = await Promise.all([
-      firestore.collection('connections')
-        .where('from_user_id', '==', Number(userId))
-        .where('status', 'in', activeStatuses)
-        .get(),
-      firestore.collection('connections')
-        .where('to_user_id', '==', Number(userId))
-        .where('status', 'in', activeStatuses)
-        .get()
-    ]);
+    const numId = Number(userId);
+    let connections = [];
 
-    const connections = [...snap1.docs, ...snap2.docs].map(doc => doc.data());
+    try {
+      const [snap1, snap2] = await Promise.all([
+        firestore.collection('connections')
+          .where('from_user_id', '==', numId)
+          .where('status', 'in', activeStatuses)
+          .get(),
+        firestore.collection('connections')
+          .where('to_user_id', '==', numId)
+          .where('status', 'in', activeStatuses)
+          .get()
+      ]);
+      connections = [...snap1.docs, ...snap2.docs].map(doc => doc.data());
+    } catch (err) {
+      console.warn('Firestore composite index missing for getActiveConnections — falling back to in-memory filter.');
+      try {
+        const [snap1, snap2] = await Promise.all([
+          firestore.collection('connections').where('from_user_id', '==', numId).get(),
+          firestore.collection('connections').where('to_user_id', '==', numId).get()
+        ]);
+        const docs = [...snap1.docs, ...snap2.docs];
+        connections = docs.map(doc => doc.data()).filter(d => activeStatuses.includes(d.status));
+      } catch (fallbackErr) {
+        console.error('getActiveConnections fallback error:', fallbackErr);
+      }
+    }
     const active = (await mapWithConcurrency(connections, 6, async (conn) => {
       const otherId = conn.from_user_id === Number(userId) ? conn.to_user_id : conn.from_user_id;
       const [otherUser, lastMsg] = await Promise.all([
