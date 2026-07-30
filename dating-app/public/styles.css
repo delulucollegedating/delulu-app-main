@@ -15,6 +15,26 @@
   padding-top: calc(0.75rem + env(safe-area-inset-top, 0px)) !important;
 }
 
+/* ── Mobile Bottom Navigation Bar Safe Area Clearance & Touch Targets ── */
+#mobile-nav {
+  padding-top: 0.65rem !important;
+  padding-bottom: max(0.85rem, calc(0.65rem + env(safe-area-inset-bottom, 0px))) !important;
+  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.06) !important;
+}
+
+#mobile-nav .nav-link {
+  min-height: 46px !important;
+  min-width: 48px !important;
+  justify-content: center !important;
+  -webkit-tap-highlight-color: transparent !important;
+}
+
+@media (max-width: 767px) {
+  body:not(.chat-page) {
+    padding-bottom: calc(4.75rem + env(safe-area-inset-bottom, 0px)) !important;
+  }
+}
+
 /* Mobile: body padding for pages with global header */
 body {
   animation: delulu-page-in 180ms ease-out both;
