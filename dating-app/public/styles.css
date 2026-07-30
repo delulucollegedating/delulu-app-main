@@ -1078,7 +1078,7 @@ body.dark .chat-page #app-root > div {
   right: 28px;
   width: 75px;
   height: 22px;
-  background: repeating-linear-gradient(-45deg, #FF6F61, #FF6F61 8px, #E85F52 8px, #E85F52 16px);
+  background: repeating-linear-gradient(-45deg, #A53B29, #A53B29 8px, #8F2F1F 8px, #8F2F1F 16px);
   opacity: 0.88;
   transform: rotate(3deg);
   box-shadow: 0 2px 6px rgba(0,0,0,0.08);
@@ -1091,14 +1091,14 @@ body.dark .chat-page #app-root > div {
   display: inline-flex;
   align-items: center;
   padding: 3px 12px;
-  background: #FF6F61;
+  background: #A53B29;
   color: #FFFFFF;
   border-radius: 999px;
   font-family: 'Plus Jakarta Sans', sans-serif;
   font-weight: 800;
   font-size: 11px;
   letter-spacing: 0.05em;
-  box-shadow: 0 2px 6px rgba(255,111,97,0.25);
+  box-shadow: 0 2px 6px rgba(165,59,41,0.25);
 }
 
 /* ── Scrapbook Message Bubbles ── */
@@ -1136,12 +1136,12 @@ body.dark .msg-bubble-received {
   box-shadow: -4px 4px 0px #4A3A35, 0 3px 10px rgba(0, 0, 0, 0.25) !important;
 }
 
-/* Outgoing Bubble — Rich Coral Colour (#FF6F61) with 3D Offset Shadow */
+/* Outgoing Bubble — Official Delulu Logo Brand Color (#A53B29) with 3D Offset Shadow */
 .msg-bubble-sent {
-  background: #FF6F61 !important;
+  background: #A53B29 !important;
   color: #FFFFFF !important;
-  border: 1px solid #E85F52 !important;
-  box-shadow: 4px 4px 0px #D94E42, 0 3px 10px rgba(232, 95, 82, 0.20) !important;
+  border: 1px solid #8F2F1F !important;
+  box-shadow: 4px 4px 0px #752316, 0 3px 10px rgba(165, 59, 41, 0.20) !important;
   border-radius: 18px 18px 4px 18px !important;
 }
 
