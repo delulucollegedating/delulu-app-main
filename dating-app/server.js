@@ -1165,70 +1165,88 @@ app.put('/api/users/me', requireAuth, async (req, res) => {
 
 // Discover profiles
 app.get('/api/discover', requireAuth, async (req, res) => {
-  const user = await userOps.getById(req.session.userId);
-  if (!user) return res.status(404).json({ error: 'User not found' });
+  try {
+    const user = await userOps.getById(req.session.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
 
-  // Optional ?gender=male|female filter chosen by the user on the discover page.
-  // If absent or 'all', pass null so getDiscoverable returns everyone in the ecosystem.
-  const rawGender = req.query.gender;
-  const genderFilter = (rawGender === 'male' || rawGender === 'female') ? rawGender : null;
+    // Optional ?gender=male|female filter chosen by the user on the discover page.
+    const rawGender = req.query.gender;
+    const genderFilter = (rawGender === 'male' || rawGender === 'female') ? rawGender : null;
 
-  // Get IDs of users already connected with (active/pending only)
-  const excludeIds = await connectionOps.getConnectedUserIds(req.session.userId);
-  const result = await userOps.getDiscoverable(req.session.userId, genderFilter, excludeIds);
-  const profiles = result.profiles || [];
-  const hasActiveConnection = !!result.hasActiveConnection;
+    // Get IDs of users already connected with (active/pending only)
+    const excludeIds = await connectionOps.getConnectedUserIds(req.session.userId);
+    const result = await userOps.getDiscoverable(req.session.userId, genderFilter, excludeIds);
+    const profiles = (result && result.profiles) || [];
+    const hasActiveConnection = !!(result && result.hasActiveConnection);
 
-  // Map profiles and calculate hobby matches (case-insensitive)
-  const userHobbies = Array.isArray(user.hobbies) ? user.hobbies : JSON.parse(user.hobbies || '[]');
-  const userHobbiesLower = userHobbies.map(h => String(h).toLowerCase());
-  const mappedProfiles = profiles.map(p => {
-    const profileHobbies = Array.isArray(p.hobbies) ? p.hobbies : JSON.parse(p.hobbies || '[]');
-    const profileHobbiesLower = profileHobbies.map(h => String(h).toLowerCase());
-    const matchingHobbiesLower = userHobbiesLower.filter(h => profileHobbiesLower.includes(h));
-    // Map back to original user display strings for matching_hobbies
-    const matchingHobbies = matchingHobbiesLower.map(lh => userHobbies[userHobbiesLower.indexOf(lh)] || lh);
-    const matchCount = matchingHobbies.length;
-    return {
-      id: p.id,
-      username: p.username,
-      bio: p.bio,
-      hobbies: profileHobbies,
-      matching_hobbies: matchingHobbies,
-      match_count: matchCount,
-      avatar: {
-        idle: p.avatar ? (() => {
-          const match = p.avatar.match(/^(male|female)_(\d+)$/);
-          if (match) {
-            const num = parseInt(match[2], 10);
-            if (num < 10 && !match[2].startsWith('0')) {
-              return `/avatars/${p.gender}/${match[1]}_0${num}/idle.png`;
+    // Map profiles and calculate hobby matches (case-insensitive)
+    let userHobbies = [];
+    try {
+      userHobbies = Array.isArray(user.hobbies) ? user.hobbies : JSON.parse(user.hobbies || '[]');
+    } catch (e) {
+      userHobbies = [];
+    }
+    const userHobbiesLower = userHobbies.map(h => String(h).toLowerCase());
+
+    const mappedProfiles = profiles.map(p => {
+      let profileHobbies = [];
+      try {
+        profileHobbies = Array.isArray(p.hobbies) ? p.hobbies : JSON.parse(p.hobbies || '[]');
+      } catch (e) {
+        profileHobbies = [];
+      }
+      const profileHobbiesLower = profileHobbies.map(h => String(h).toLowerCase());
+      const matchingHobbiesLower = userHobbiesLower.filter(h => profileHobbiesLower.includes(h));
+      const matchingHobbies = matchingHobbiesLower.map(lh => userHobbies[userHobbiesLower.indexOf(lh)] || lh);
+      const matchCount = matchingHobbies.length;
+
+      const avatarStr = (p.avatar && typeof p.avatar === 'string') ? p.avatar : null;
+      const genderStr = p.gender || 'other';
+
+      return {
+        id: p.id,
+        username: p.username || 'Student',
+        bio: p.bio || '',
+        hobbies: profileHobbies,
+        matching_hobbies: matchingHobbies,
+        match_count: matchCount,
+        avatar: {
+          idle: avatarStr ? (() => {
+            const match = avatarStr.match(/^(male|female)_(\d+)$/);
+            if (match) {
+              const num = parseInt(match[2], 10);
+              if (num < 10 && !match[2].startsWith('0')) {
+                return `/avatars/${genderStr}/${match[1]}_0${num}/idle.png`;
+              }
             }
-          }
-          return `/avatars/${p.gender}/${p.avatar}/idle.png`;
-        })() : null,
-        wave: p.avatar ? (() => {
-          const match = p.avatar.match(/^(male|female)_(\d+)$/);
-          if (match) {
-            const num = parseInt(match[2], 10);
-            if (num < 10 && !match[2].startsWith('0')) {
-              return `/avatars/${p.gender}/${match[1]}_0${num}/wave.png`;
+            return `/avatars/${genderStr}/${avatarStr}/idle.png`;
+          })() : null,
+          wave: avatarStr ? (() => {
+            const match = avatarStr.match(/^(male|female)_(\d+)$/);
+            if (match) {
+              const num = parseInt(match[2], 10);
+              if (num < 10 && !match[2].startsWith('0')) {
+                return `/avatars/${genderStr}/${match[1]}_0${num}/wave.png`;
+              }
             }
-          }
-          return `/avatars/${p.gender}/${p.avatar}/wave.png`;
-        })() : null
-      },
-      gender: p.gender
-    };
-  });
+            return `/avatars/${genderStr}/${avatarStr}/wave.png`;
+          })() : null
+        },
+        gender: genderStr
+      };
+    });
 
-  // Sort by match count descending (most matching hobbies first), then stable tie-breaker by ID
-  mappedProfiles.sort((a, b) => {
-    if (b.match_count !== a.match_count) return b.match_count - a.match_count;
-    return a.id - b.id;
-  });
+    // Sort by match count descending (most matching hobbies first), then stable tie-breaker by ID
+    mappedProfiles.sort((a, b) => {
+      if (b.match_count !== a.match_count) return b.match_count - a.match_count;
+      return a.id - b.id;
+    });
 
-  res.json({ profiles: mappedProfiles, hasActiveConnection });
+    res.json({ profiles: mappedProfiles, hasActiveConnection });
+  } catch (err) {
+    console.error('GET /api/discover error:', err);
+    res.status(500).json({ error: 'Failed to load discover feed', details: err.message });
+  }
 });
 
 // Send connection request

@@ -280,7 +280,7 @@ const userOps = {
     let allEcosystemUsers = null;
 
     if (cachedEntry && (Date.now() - cachedEntry.timestamp < ECOSYSTEM_CACHE_TTL)) {
-      allEcosystemUsers = cachedEntry.data;
+      allEcosystemUsers = cachedEntry.data.map(u => ({ ...u }));
     } else {
       let snapshot;
       try {
