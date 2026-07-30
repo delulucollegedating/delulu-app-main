@@ -162,6 +162,23 @@ function invalidateUserCache(id) {
   userByIdCache.delete(id);
 }
 
+// Ecosystem candidates cache (reduces Firestore reads on /api/discover)
+const ecosystemCandidatesCache = new Map();
+const ECOSYSTEM_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+function getEcosystemCandidatesCacheKey(ecosystem, genderFilter) {
+  return `${ecosystem}:${genderFilter || 'all'}`;
+}
+
+function invalidateEcosystemCache(ecosystem) {
+  // Invalidate all cache entries for this ecosystem (both gender-filtered and unfiltered)
+  for (const [key] of ecosystemCandidatesCache) {
+    if (key.startsWith(`${ecosystem}:`)) {
+      ecosystemCandidatesCache.delete(key);
+    }
+  }
+}
+
 // User operations
 const userOps = {
   async create(username, gender, passcodeHash, bio, hobbies, avatar) {
