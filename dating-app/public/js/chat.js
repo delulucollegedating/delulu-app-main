@@ -1361,9 +1361,9 @@ async function loadChatInfo() {
     }
     
     // Display lock icon next to name if encrypted
-    const chatNameEl = document.getElementById('chat-name');
-    if (chatNameEl) {
-      chatNameEl.innerHTML = `<span class="chat-partner-name">${escapeHtml(c.other_username)} ${isE2EEActive ? '<span class="material-symbols-outlined text-[15px] text-green-600 align-middle ml-1" title="End-to-End Encrypted" style="font-variation-settings: \'FILL\' 1">lock</span>' : ''}</span>`;
+    const partnerNameEl = document.getElementById('chat-partner-name') || document.querySelector('.chat-partner-name');
+    if (partnerNameEl) {
+      partnerNameEl.innerHTML = `${escapeHtml(c.other_username)} ${isE2EEActive ? '<span class="material-symbols-outlined text-[15px] text-green-600 align-middle ml-1" title="End-to-End Encrypted" style="font-variation-settings: \'FILL\' 1">lock</span>' : ''}`;
     }
     const chatAvatarEl = document.getElementById('chat-avatar');
     if (chatAvatarEl) {
@@ -1391,8 +1391,8 @@ async function loadChatInfo() {
       body: JSON.stringify({ message: err.message, stack: err.stack, path: window.location.href, context: 'loadChatInfo catch' })
     }).catch(() => {});
     
-    const chatNameEl = document.getElementById('chat-name');
-    if (chatNameEl) chatNameEl.textContent = 'Chat unavailable';
+    const partnerNameEl = document.getElementById('chat-partner-name') || document.querySelector('.chat-partner-name');
+    if (partnerNameEl) partnerNameEl.textContent = 'Chat unavailable';
     const statusEl = document.getElementById('chat-status');
     if (statusEl) statusEl.textContent = err.message || 'Something went wrong loading this chat.';
     const cont = document.getElementById('chat-messages');
