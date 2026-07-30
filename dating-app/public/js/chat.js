@@ -2215,6 +2215,16 @@ async function appendMessage(m, scrollToBottom = true) {
   const inner = document.createElement('div');
   inner.className = `msg-bubble ${isMe ? 'msg-bubble-sent' : 'msg-bubble-received'} msg-tail min-w-0 relative`;
   
+  // Add Anonymous scrapbook header tag for first message in group
+  if (!_isGrouped) {
+    const anonTag = document.createElement('div');
+    anonTag.className = `msg-anon-tag ${isMe ? 'justify-end' : 'justify-start'}`;
+    anonTag.innerHTML = isMe 
+      ? '<span>ANONYMOUS</span> <span class="msg-pin-dot"></span> <span>👻</span>'
+      : '<span>👻</span> <span class="msg-pin-dot"></span> <span>ANONYMOUS</span>';
+    inner.appendChild(anonTag);
+  }
+  
   if (m.deleted_at !== null && m.deleted_at !== undefined) {
     const p = document.createElement('p');
     p.className = 'text-[15px] italic opacity-70 break-words';

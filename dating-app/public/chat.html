@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://cdn.tailwindcss.com">
   <link rel="dns-prefetch" href="//fonts.googleapis.com">
   <link rel="dns-prefetch" href="//cdn.tailwindcss.com">
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..700;1,400..700&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet"/>
   <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
   
   <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
@@ -40,15 +40,15 @@
             "primary-fixed-dim": "#ffb4a6", "tertiary": "#615e5b"
           },
           borderRadius: { DEFAULT: "1rem", lg: "2rem", xl: "3rem", full: "9999px" },
-          fontFamily: { sans: ["Plus Jakarta Sans", "sans-serif"] }
+          fontFamily: { 
+            sans: ["Plus Jakarta Sans", "sans-serif"],
+            serif: ["Playfair Display", "Georgia", "serif"]
+          }
         }
       }
     };
   </script>
-  <link rel="stylesheet" href="styles.css?v=267">
-  <style>
-    /* Hide navbars on mobile when in a chat for better UX, or keep them. We'll keep global header hidden on chat on mobile. */
-  </style>
+  <link href="styles.css?v=268" rel="stylesheet"/>
 </head>
 <body class="bg-background text-on-background h-dvh overflow-hidden flex flex-col antialiased chat-page">
   
@@ -74,6 +74,20 @@
 
   <main class="flex flex-col w-full px-0 md:px-6 h-[100dvh] md:h-[calc(100dvh-var(--header-h-md))] relative" id="app-root">
     <div class="flex flex-col w-full h-full md:rounded-2xl bg-surface-container-lowest shadow-sm border border-outline-variant/20 overflow-hidden relative">
+      
+      <!-- Scrapbook Header Strip -->
+      <div class="flex items-center justify-between px-3 py-1 bg-[#FAF4EB]/80 border-b border-dashed border-[#EADBCE] z-10">
+        <div class="delulu-sticker-badge">
+          <span>delulu</span> <span class="text-[#C45B54]">♥</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-[12px] font-serif italic text-[#8C6255] opacity-85 hidden sm:inline">overheard on delulu 🤫</span>
+          <div id="delulu-day-badge" class="delulu-day-counter-badge">
+            <span id="delulu-day-text">Day 1/10</span>
+          </div>
+        </div>
+      </div>
+
       <header class="chat-topbar z-10" aria-label="Conversation controls">
         <div class="chat-topbar-main">
           <a href="messages.html" class="chat-icon-button" aria-label="Back to chats">
@@ -90,7 +104,7 @@
             <span class="material-symbols-outlined text-[18px]">casino</span>
             <span>Icebreaker</span>
           </button>
-<button id="btn-identity-reveal" class="chat-action-chip chat-action-chip-reveal hidden" type="button">
+          <button id="btn-identity-reveal" class="chat-action-chip chat-action-chip-reveal hidden" type="button">
             <span class="material-symbols-outlined text-[18px]">lock_open</span>
             <span>Reveal</span>
           </button>
@@ -341,6 +355,6 @@
   <script src="js/shared.js?v=259"></script>
   <script src="js/chat-cache.js?v=245"></script>
   <script src="js/crypto.js"></script>
-  <script src="js/chat.js?v=266"></script>
+  <script src="js/chat.js?v=268"></script>
 </body>
 </html>
