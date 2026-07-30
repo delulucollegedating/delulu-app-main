@@ -239,17 +239,21 @@ const userOps = {
   },
 
   async update(id, fields) {
-    const allowed = ['bio', 'hobbies', 'avatar'];
     const updatePayload = {};
+    const allowed = ['bio', 'hobbies', 'avatar', 'fcm_tokens'];
     for (const key of allowed) {
       if (fields[key] !== undefined) {
         updatePayload[key] = fields[key];
       }
     }
     if (Object.keys(updatePayload).length === 0) return;
+    const oldUser = await this.getById(id);
     await getDB().collection('users').doc(String(id)).update(updatePayload);
     // Invalidate cache on update
     invalidateUserCache(id);
+    if (oldUser && oldUser.ecosystem) {
+      invalidateEcosystemCache(oldUser.ecosystem);
+    }
   },
 
   // Get discoverable profiles (filtered by ecosystem)
@@ -270,39 +274,39 @@ const userOps = {
     
     const allExclude = [...new Set([...excludeIds, ...blockedIds, Number(userId)])];
     
-    // genderFilter can be 'male', 'female', or null (= show all genders)
-    // This is now controlled by the user's filter preference on the discover page,
-    // NOT auto-derived from the viewer's own gender.
+    // Check ecosystem candidates fragment cache to eliminate duplicate database query load
+    const cacheKey = getEcosystemCandidatesCacheKey(userEcosystem, genderFilter);
+    const cachedEntry = ecosystemCandidatesCache.get(cacheKey);
+    let allEcosystemUsers = null;
 
-    // Try composite query first (ecosystem + gender) which requires a Firestore composite index.
-    // If the index doesn't exist, fall back to querying by ecosystem only and filtering in memory.
-    let snapshot;
-    try {
-      let query = firestore.collection('users').where('ecosystem', '==', userEcosystem);
-      if (genderFilter) {
-        query = query.where('gender', '==', genderFilter);
-      }
-      snapshot = await query.get();
-    } catch (indexErr) {
-      // Composite index not found — fall back to ecosystem-only query with in-memory gender filter
-      console.warn('Firestore composite index missing for discover query — falling back to in-memory filter. Create the index in Firebase Console for better performance.');
-      const ecoQuery = firestore.collection('users').where('ecosystem', '==', userEcosystem);
-      const ecoSnapshot = await ecoQuery.get();
-      // Filter by gender in-memory
-      const filteredDocs = [];
-      ecoSnapshot.forEach(doc => {
-        const u = doc.data();
-        if (!genderFilter || u.gender === genderFilter) {
-          filteredDocs.push(doc);
+    if (cachedEntry && (Date.now() - cachedEntry.timestamp < ECOSYSTEM_CACHE_TTL)) {
+      allEcosystemUsers = cachedEntry.data;
+    } else {
+      let snapshot;
+      try {
+        let query = firestore.collection('users').where('ecosystem', '==', userEcosystem);
+        if (genderFilter) {
+          query = query.where('gender', '==', genderFilter);
         }
-      });
-      snapshot = { forEach(fn) { filteredDocs.forEach(fn); }, empty: filteredDocs.length === 0 };
-    }
-    const discoverable = [];
-    snapshot.forEach(doc => {
-      const u = doc.data();
-      if (!allExclude.includes(u.id)) {
-        discoverable.push({
+        snapshot = await query.get();
+      } catch (indexErr) {
+        console.warn('Firestore composite index missing for discover query — falling back to in-memory filter.');
+        const ecoQuery = firestore.collection('users').where('ecosystem', '==', userEcosystem);
+        const ecoSnapshot = await ecoQuery.get();
+        const filteredDocs = [];
+        ecoSnapshot.forEach(doc => {
+          const u = doc.data();
+          if (!genderFilter || u.gender === genderFilter) {
+            filteredDocs.push(doc);
+          }
+        });
+        snapshot = { forEach(fn) { filteredDocs.forEach(fn); }, empty: filteredDocs.length === 0 };
+      }
+
+      allEcosystemUsers = [];
+      snapshot.forEach(doc => {
+        const u = doc.data();
+        allEcosystemUsers.push({
           id: u.id,
           username: u.username,
           bio: u.bio,
@@ -310,8 +314,13 @@ const userOps = {
           avatar: u.avatar,
           gender: u.gender
         });
-      }
-    });
+      });
+
+      ecosystemCandidatesCache.set(cacheKey, { data: allEcosystemUsers, timestamp: Date.now() });
+    }
+
+    // Dynamic Hole Hydration: Apply user-specific exclusions per viewer
+    const discoverable = allEcosystemUsers.filter(u => !allExclude.includes(u.id));
 
     // Smart Hobby Compatibility & Fairness Prioritization Algorithm
     const currentUserHobbies = Array.isArray(userDoc?.hobbies)
