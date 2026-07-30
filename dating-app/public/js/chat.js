@@ -2204,7 +2204,7 @@ async function appendMessage(m, scrollToBottom = true) {
   const div = document.createElement('div');
   const _rowSpacing = _isGrouped
     ? 'msg-row-grouped'
-    : (isSenderChange ? 'msg-row-new-sender' : 'mt-2');
+    : (isSenderChange ? 'msg-row-new-sender' : 'mt-3.5');
   div.className = `flex group items-end gap-2 ${isMe ? 'justify-end pl-10' : 'justify-start pr-10'} w-full fade-in ${_rowSpacing}`;
   if (m.id)    div.setAttribute('data-msg-id', m.id);
   if (m.tempId) div.id = m.tempId;
@@ -2214,16 +2214,6 @@ async function appendMessage(m, scrollToBottom = true) {
 
   const inner = document.createElement('div');
   inner.className = `msg-bubble ${isMe ? 'msg-bubble-sent' : 'msg-bubble-received'} msg-tail min-w-0 relative`;
-  
-  // Add Anonymous scrapbook header tag for first message in group
-  if (!_isGrouped) {
-    const anonTag = document.createElement('div');
-    anonTag.className = `msg-anon-tag ${isMe ? 'justify-end' : 'justify-start'}`;
-    anonTag.innerHTML = isMe 
-      ? '<span>ANONYMOUS</span> <span class="msg-pin-dot"></span> <span>👻</span>'
-      : '<span>👻</span> <span class="msg-pin-dot"></span> <span>ANONYMOUS</span>';
-    inner.appendChild(anonTag);
-  }
   
   if (m.deleted_at !== null && m.deleted_at !== undefined) {
     const p = document.createElement('p');
