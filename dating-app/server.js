@@ -157,6 +157,11 @@ app.use(compression({
     if (req.headers.accept && req.headers.accept.includes('text/event-stream')) {
       return false;
     }
+    // Avoid double-compressing already-compressed media types (png, jpeg, webp, mp3, mp4, zip, gz, pdf)
+    const contentType = res.getHeader('Content-Type') || '';
+    if (typeof contentType === 'string' && /image\/(png|jpeg|jpg|webp|gif)|video\/|audio\/|application\/(zip|gzip|x-gzip|pdf)/i.test(contentType)) {
+      return false;
+    }
     return compression.filter(req, res);
   }
 }));

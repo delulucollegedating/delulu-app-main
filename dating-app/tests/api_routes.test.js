@@ -82,6 +82,16 @@ describe('Delulu API Routes & Security Tests', () => {
       expect(res.status).toBe(200);
       expect(res.headers['content-encoding']).toBeUndefined();
     });
+
+    it('should skip compression for Server-Sent Events text/event-stream', async () => {
+      const res = await request(app)
+        .get('/discover.html')
+        .set('Accept-Encoding', 'gzip, deflate, br')
+        .set('Accept', 'text/event-stream');
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-encoding']).toBeUndefined();
+    });
   });
 
   describe('Batched Write Operations & Bulk Performance', () => {
