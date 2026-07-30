@@ -2665,10 +2665,21 @@ function openIcebreakerModal() {
       startGame(game);
     };
   });
-}
+let isStartingIcebreaker = false;
 
 async function startGame(gameType) {
-  const questions = GAME_QUESTIONS[gameType] || GAME_QUESTIONS['would-you-rather'];
+  // Guard: if an active game card already exists or creation is in progress, lock double taps
+  const existingCard = document.querySelector('[id^="game-"]');
+  if (existingCard && gameType !== 'question') {
+    showToast('An icebreaker game is already active!');
+    closeModal();
+    return;
+  }
+  if (isStartingIcebreaker) return;
+  isStartingIcebreaker = true;
+
+  try {
+    const questions = GAME_QUESTIONS[gameType] || GAME_QUESTIONS['would-you-rather'];
   const q = questions[Math.floor(Math.random() * questions.length)];
   
   if (gameType === 'question') {
@@ -2814,10 +2825,13 @@ async function startGame(gameType) {
         to_user_id: otherUserId,
         active_game: activeGame
       };
-      syncActiveGame(fakeConn);
     }
+  } catch (err) {
+    console.error('Error starting icebreaker:', err);
+  } finally {
+    isStartingIcebreaker = false;
+    closeModal();
   }
-  closeModal();
 }
 
 function syncActiveGame(c) {

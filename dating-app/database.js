@@ -1159,15 +1159,36 @@ const connectionOps = {
   async startGame(connectionId, gameType, question) {
     const firestore = getDB();
     const connDocRef = firestore.collection('connections').doc(String(connectionId));
-    const payload = {
-      game_type: gameType,
-      question,
-      answers: {},
-      created_at: new Date().toISOString()
-    };
-    await connDocRef.update({ active_game: payload });
+    let finalPayload = null;
+
+    await firestore.runTransaction(async (transaction) => {
+      const doc = await transaction.get(connDocRef);
+      if (!doc.exists) throw new Error('Connection not found');
+      const conn = doc.data() || {};
+      const existingGame = conn.active_game || null;
+
+      // Deduplication lock: If an active game already exists and was created within 30s
+      // and hasn't been answered by both users, retain the existing game!
+      if (existingGame && existingGame.created_at) {
+        const gameAgeMs = Date.now() - new Date(existingGame.created_at).getTime();
+        const answersCount = Object.keys(existingGame.answers || {}).length;
+        if (gameAgeMs < 30000 && answersCount < 2) {
+          finalPayload = existingGame;
+          return;
+        }
+      }
+
+      finalPayload = {
+        game_type: gameType,
+        question,
+        answers: {},
+        created_at: new Date().toISOString()
+      };
+      transaction.update(connDocRef, { active_game: finalPayload });
+    });
+
     evictConnection(connectionId); // cache invalidation — active_game field set
-    return payload;
+    return finalPayload;
   },
 
   async submitGameAnswer(connectionId, userId, answer) {
