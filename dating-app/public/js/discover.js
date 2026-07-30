@@ -336,6 +336,8 @@ async function loadDiscovery(options = {}) {
     init3DScene();
   } catch (err) {
     console.error(err);
+    // Re-throw on append so loadMoreDiscover's catch can restore the UI
+    if (options.append) throw err;
   } finally {
     discoveryLoading = false;
   }
@@ -525,6 +527,30 @@ window.connectFallback = async (index, btn) => {
 };
 
 // ── Pagination: Load More ────────────────────────────────────────────────────
+function showDiscoverSkeletons(count = 6) {
+  const container = document.getElementById('avatar-3d-container');
+  if (!container) return;
+  // Destroy 3D scene so skeletons replace it cleanly
+  if (typeof destroyAvatarScene === 'function') destroyAvatarScene();
+  
+  const cards = Array.from({ length: count }, () => `
+    <div class="discover-skeleton-card">
+      <div class="discover-skeleton-avatar shimmer-block"></div>
+      <div class="discover-skeleton-line shimmer-block" style="width:65%"></div>
+      <div class="discover-skeleton-line shimmer-block" style="width:85%"></div>
+      <div class="discover-skeleton-line short shimmer-block"></div>
+      <div class="flex gap-2 justify-center mt-4">
+        <div class="discover-skeleton-chip shimmer-block"></div>
+        <div class="discover-skeleton-chip shimmer-block"></div>
+        <div class="discover-skeleton-chip shimmer-block"></div>
+      </div>
+    </div>
+  `).join('');
+  
+  container.innerHTML = `<div class="discover-skeleton-rail">${cards}</div>`;
+  container.classList.remove('hidden');
+}
+
 function showLoadMoreButton() {
   const btn = document.getElementById('btn-load-more');
   if (!btn) return;
@@ -548,18 +574,35 @@ window.loadMoreDiscover = async function () {
     return;
   }
   
-  discoverPage++;
+  const nextPage = discoverPage + 1; // defer commit until success
+  // Show shimmer skeleton cards while loading
+  showDiscoverSkeletons(6);
   // Show loading state on button
   const btn = document.getElementById('btn-load-more');
   if (btn) {
     btn.disabled = true;
     btn.innerHTML = '<span class="material-symbols-outlined text-lg animate-spin">refresh</span> Loading...';
   }
-  await loadDiscovery({ append: true });
-  // Restore button text after load
-  if (btn) {
-    btn.disabled = false;
-    btn.innerHTML = '<span class="material-symbols-outlined text-lg">expand_more</span> View More';
+  
+  try {
+    discoverPage = nextPage;
+    await loadDiscovery({ append: true });
+  } catch (err) {
+    // API failure — restore the previous scene and button, roll back page
+    console.error('Load more failed, restoring UI:', err);
+    discoverPage--;
+    if (discoverProfiles && discoverProfiles.length > 0) {
+      init3DScene();
+    }
+    if (window.showToast) {
+      showToast('Failed to load more profiles', 'error');
+    }
+  } finally {
+    // Always restore button to ready state
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<span class="material-symbols-outlined text-lg">expand_more</span> View More';
+    }
   }
 };
 

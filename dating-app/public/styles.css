@@ -1019,6 +1019,82 @@ textarea:focus-visible {
   transform: translateZ(0);
 }
 
+/* ===== Discover Skeleton Cards (Shimmer Loading) ===== */
+.discover-skeleton-rail {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 24px;
+  padding: 0 32px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  height: 100%;
+  width: 100%;
+}
+.discover-skeleton-rail::-webkit-scrollbar { display: none; }
+
+.discover-skeleton-card {
+  flex: 0 0 256px;
+  height: 420px;
+  border-radius: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--surface-container-high, #eae8e7);
+  border: 1px solid var(--outline-variant, #dec0ba);
+  animation: discover-skeleton-in 0.35s ease-out both;
+}
+.discover-skeleton-card:nth-child(2) { animation-delay: 0.05s; }
+.discover-skeleton-card:nth-child(3) { animation-delay: 0.10s; }
+.discover-skeleton-card:nth-child(4) { animation-delay: 0.15s; }
+.discover-skeleton-card:nth-child(5) { animation-delay: 0.20s; }
+.discover-skeleton-card:nth-child(6) { animation-delay: 0.25s; }
+
+@keyframes discover-skeleton-in {
+  from { opacity: 0; transform: scale(0.92) translateY(8px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.discover-skeleton-avatar {
+  width: 160px;
+  height: 160px;
+  border-radius: 16px;
+  margin-bottom: 16px;
+}
+.discover-skeleton-line {
+  height: 12px;
+  border-radius: 8px;
+  margin-top: 10px;
+  width: 80%;
+}
+.discover-skeleton-line.short { width: 55%; }
+.discover-skeleton-chip {
+  width: 54px;
+  height: 26px;
+  border-radius: 999px;
+  margin-top: 12px;
+}
+.discover-skeleton-chip + .discover-skeleton-chip {
+  margin-left: 6px;
+}
+
+.shimmer-block {
+  background: linear-gradient(90deg,
+    var(--surface-container-low, #f0eded) 25%,
+    var(--surface-container-high, #e4e2e1) 50%,
+    var(--surface-container-low, #f0eded) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+body.dark .shimmer-block {
+  background: linear-gradient(90deg, #2f3133 25%, #404244 50%, #2f3133 75%);
+  background-size: 200% 100%;
+}
+
 /* ===== Chat Infinite Scroll — Load More Indicator ===== */
 @keyframes spin {
   from { transform: rotate(0deg); }
