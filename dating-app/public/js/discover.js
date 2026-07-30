@@ -195,6 +195,8 @@ function removeProfileAt(index) {
       currentIndex = Math.min(index, discoverProfiles.length - 1);
       window.updateAvatarScene(currentIndex);
     }
+    // Update nav buttons + "View More" button visibility
+    updateNavButtons();
   } else {
     // Empty state
     if (typeof destroyAvatarScene === 'function') {
@@ -226,6 +228,9 @@ function updateNavButtons() {
   document.getElementById('btn-scroll-left').style.pointerEvents = currentIndex <= 0 ? 'none' : 'auto';
   document.getElementById('btn-scroll-right').style.opacity = currentIndex >= discoverProfiles.length - 1 ? '0.3' : '1';
   document.getElementById('btn-scroll-right').style.pointerEvents = currentIndex >= discoverProfiles.length - 1 ? 'none' : 'auto';
+  
+  // Show "View More" only when user reaches the last card AND more profiles exist
+  showLoadMoreButton();
 }
 
 function updateProfileOverlay(index) {
@@ -520,13 +525,26 @@ window.connectFallback = async (index, btn) => {
 function showLoadMoreButton() {
   const btn = document.getElementById('btn-load-more');
   if (!btn) return;
-  btn.classList.toggle('hidden', !discoverHasMore);
+  // Only show button when user is on the last card AND server says more exist
+  const isAtLastCard = discoverProfiles.length > 0 && currentIndex >= discoverProfiles.length - 1;
+  btn.classList.toggle('hidden', !(discoverHasMore && isAtLastCard));
 }
 
 window.loadMoreDiscover = async function () {
   if (discoveryLoading || !discoverHasMore) return;
   discoverPage++;
+  // Show loading state on button
+  const btn = document.getElementById('btn-load-more');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="material-symbols-outlined text-lg animate-spin">refresh</span> Loading...';
+  }
   await loadDiscovery({ append: true });
+  // Restore button text after load
+  if (btn) {
+    btn.disabled = false;
+    btn.innerHTML = '<span class="material-symbols-outlined text-lg">expand_more</span> View More';
+  }
 };
 
 // Expose for avatar3d.js to call
