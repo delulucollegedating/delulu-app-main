@@ -525,13 +525,26 @@ window.connectFallback = async (index, btn) => {
 function showLoadMoreButton() {
   const btn = document.getElementById('btn-load-more');
   if (!btn) return;
-  // Only show button when user is on the last card AND server says more exist
+  // Show button whenever user is on the last card (regardless of hasMore)
+  // Even if no more profiles exist now, the button appears — clicking it
+  // will show a toast if there's truly nothing more to load.
   const isAtLastCard = discoverProfiles.length > 0 && currentIndex >= discoverProfiles.length - 1;
-  btn.classList.toggle('hidden', !(discoverHasMore && isAtLastCard));
+  btn.classList.toggle('hidden', !isAtLastCard);
 }
 
 window.loadMoreDiscover = async function () {
-  if (discoveryLoading || !discoverHasMore) return;
+  if (discoveryLoading) return;
+  
+  // If server says there are no more profiles, show a friendly message
+  if (!discoverHasMore) {
+    if (window.showToast) {
+      showToast('No more profiles to show', 'info');
+    }
+    const btn = document.getElementById('btn-load-more');
+    if (btn) btn.classList.add('hidden');
+    return;
+  }
+  
   discoverPage++;
   // Show loading state on button
   const btn = document.getElementById('btn-load-more');
