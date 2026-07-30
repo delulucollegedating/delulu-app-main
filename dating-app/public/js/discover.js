@@ -10,6 +10,7 @@ let activeGenderFilter = localStorage.getItem('delulu_discover_gender_filter') |
 let discoverPage = 1;
 let discoverHasMore = false;
 let discoverTotalCount = 0;
+let discoverAllLoaded = false;
 const DISCOVER_PAGE_SIZE = 15;
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -119,6 +120,7 @@ function setGenderFilter(filter) {
   discoverPage = 1;
   discoverHasMore = false;
   discoverTotalCount = 0;
+  discoverAllLoaded = false;
   showLoadMoreButton();
   loadDiscovery();
 }
@@ -291,6 +293,7 @@ async function loadDiscovery(options = {}) {
     discoverPage = data.page || pageToLoad;
     discoverHasMore = data.hasMore;
     discoverTotalCount = data.totalCount || 0;
+    discoverAllLoaded = false; // Reset on every successful fetch
     
     const newProfiles = data.profiles || [];
     
@@ -526,10 +529,9 @@ function showLoadMoreButton() {
   const btn = document.getElementById('btn-load-more');
   if (!btn) return;
   // Show button whenever user is on the last card (regardless of hasMore)
-  // Even if no more profiles exist now, the button appears — clicking it
-  // will show a toast if there's truly nothing more to load.
+  // Unless the user has already exhausted all profiles (discoverAllLoaded flag)
   const isAtLastCard = discoverProfiles.length > 0 && currentIndex >= discoverProfiles.length - 1;
-  btn.classList.toggle('hidden', !isAtLastCard);
+  btn.classList.toggle('hidden', !isAtLastCard || discoverAllLoaded);
 }
 
 window.loadMoreDiscover = async function () {
@@ -540,6 +542,7 @@ window.loadMoreDiscover = async function () {
     if (window.showToast) {
       showToast('No more profiles to show', 'info');
     }
+    discoverAllLoaded = true;
     const btn = document.getElementById('btn-load-more');
     if (btn) btn.classList.add('hidden');
     return;
