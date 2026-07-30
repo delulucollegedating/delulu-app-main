@@ -328,14 +328,19 @@ const userOps = {
       allEcosystemUsers = [];
       snapshotDocs.forEach(doc => {
         const u = typeof doc.data === 'function' ? doc.data() : doc;
-        allEcosystemUsers.push({
-          id: u.id,
-          username: u.username,
-          bio: u.bio,
-          hobbies: u.hobbies,
-          avatar: u.avatar,
-          gender: u.gender
-        });
+        const docId = doc.id ? (isNaN(doc.id) ? doc.id : Number(doc.id)) : null;
+        const uid = (u && u.id !== undefined && u.id !== null) ? Number(u.id) : docId;
+        if (uid) {
+          allEcosystemUsers.push({
+            id: uid,
+            username: u.username || 'Student',
+            bio: u.bio || '',
+            hobbies: u.hobbies || [],
+            avatar: u.avatar || null,
+            gender: u.gender || 'other',
+            ecosystem: u.ecosystem || 'rishihood'
+          });
+        }
       });
 
       ecosystemCandidatesCache.set(cacheKey, { data: allEcosystemUsers, timestamp: Date.now() });
