@@ -1505,13 +1505,13 @@ function updateChatStatus(c) {
     const chatStarted = c.chat_started_at ? new Date(c.chat_started_at).getTime() : now;
     const daysSinceChatStarted = Math.floor((now - chatStarted) / (24 * 60 * 60 * 1000));
     
-    const identityRevealAt = c.identity_reveal_available_at ? new Date(c.identity_reveal_available_at).getTime() : null;
-    const faceRevealAt = c.face_reveal_available_at ? new Date(c.face_reveal_available_at).getTime() : null;
-    const isIdentityRevealDue = identityRevealAt ? now >= identityRevealAt : false;
-    const isFaceRevealDue = faceRevealAt ? now >= faceRevealAt : false;
+    const faceRevealAt = c.face_reveal_available_at 
+      ? new Date(c.face_reveal_available_at).getTime() 
+      : (chatStarted + 10 * 24 * 60 * 60 * 1000);
+    const isFaceRevealDue = now >= faceRevealAt;
     
-    // Both agreed to any reveal — show meeting
-    if (c.both_face_revealed || c.both_identity_revealed) {
+    // Both agreed to face reveal — show meeting
+    if (c.both_face_revealed) {
       if (c.meeting_code && !document.getElementById('modal-google-meet').classList.contains('scale-100')) {
         showMeetingModal(c.meeting_code);
       }
@@ -1521,14 +1521,14 @@ function updateChatStatus(c) {
       return;
     }
     
-    // Face reveal (Day 10) takes priority over identity reveal
+    // Day 10: Face reveal available
     if (isFaceRevealDue) {
       if (faceRevealBtn) {
         faceRevealBtn.classList.remove('hidden');
         faceRevealBtn.textContent = c.my_face_reveal === 0 ? "Let's Meet" : 'Waiting...';
         faceRevealBtn.disabled = c.my_face_reveal === 1;
       }
-      if (c.my_face_reveal === 0 && c.my_identity_reveal === 0) {
+      if (c.my_face_reveal === 0) {
         const faceModal = document.getElementById('modal-face-reveal');
         if (faceModal && !faceModal.classList.contains('scale-100')) {
           openModal(faceModal.id);
@@ -1537,44 +1537,17 @@ function updateChatStatus(c) {
       if (statusEl) {
         statusEl.textContent = c.my_face_reveal === 1
           ? 'Waiting for partner to reveal...'
-          : `Day ${daysSinceChatStarted} - Face reveal available!`;
+          : `Day 10 - Face reveal available!`;
       }
       return;
     }
     
-    // Identity reveal (Day 7) — show identity reveal modal
-    if (isIdentityRevealDue) {
-      if (identityRevealBtn) {
-        identityRevealBtn.classList.remove('hidden');
-        identityRevealBtn.textContent = c.my_identity_reveal === 0 ? "Reveal" : 'Waiting...';
-        identityRevealBtn.disabled = c.my_identity_reveal === 1;
-      }
-      // Auto-show the identity reveal modal (with the right state)
-      if (c.my_identity_reveal === 0) {
-        updateIdentityRevealModal(c);
-        const idModal = document.getElementById('modal-identity-reveal');
-        if (idModal && !idModal.classList.contains('scale-100')) {
-          openModal('modal-identity-reveal');
-        }
-      }
-      if (statusEl) {
-        if (c.my_identity_reveal === 1) {
-          statusEl.textContent = 'Waiting for partner to reveal...';
-        } else {
-          const daysUntilFace = faceRevealAt ? Math.ceil((faceRevealAt - now) / (24 * 60 * 60 * 1000)) : 3;
-          statusEl.innerHTML = `<span class="text-on-surface-variant/80">Identity reveal ready! Face reveal in ${daysUntilFace}d</span>`;
-        }
-      }
-      return;
-    }
-    
-    // Before Day 7: Show countdown to identity reveal
-    const daysUntilIdentity = identityRevealAt ? Math.ceil((identityRevealAt - now) / (24 * 60 * 60 * 1000)) : 7;
+    // Days 1-9: Show countdown to Day 10 Face Reveal
+    const daysUntilFace = Math.max(1, Math.ceil((faceRevealAt - now) / (24 * 60 * 60 * 1000)));
     if (statusEl && !isPartnerOnline) {
-      statusEl.innerHTML = `<span class="text-on-surface-variant/80"><span class="material-symbols-outlined text-[12px] align-middle mr-0.5">lock</span> Identity reveal in ${daysUntilIdentity}d</span>`;
+      statusEl.innerHTML = `<span class="text-on-surface-variant/80"><span class="material-symbols-outlined text-[12px] align-middle mr-0.5">lock</span> Face reveal in ${daysUntilFace}d</span>`;
     }
   } else if (c.status === 'revealed') {
-    // Both already revealed — meeting ready (both_face_revealed or both_identity_revealed handles this above)
     if (statusEl) statusEl.innerHTML = `<span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold"><span class="material-symbols-outlined text-[14px]">videocam</span> Meeting ready! <a href="#" onclick="showMeetingModal('${c.meeting_code}'); return false;" class="underline font-bold">Join</a></span>`;
   } else {
     if (statusEl) statusEl.textContent = c.status;
