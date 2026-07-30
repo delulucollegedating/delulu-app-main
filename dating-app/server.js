@@ -1163,11 +1163,15 @@ app.put('/api/users/me', requireAuth, async (req, res) => {
   res.json({ success: true, user: safeUser });
 });
 
-// Discover profiles
+// Discover profiles (paginated — 15 per page by default)
 app.get('/api/discover', requireAuth, async (req, res) => {
   try {
     const user = await userOps.getById(req.session.userId);
     if (!user) return res.status(404).json({ error: 'User not found' });
+
+    // Pagination params: ?page=1&limit=15
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 15));
 
     // Optional ?gender=male|female filter chosen by the user on the discover page.
     const rawGender = req.query.gender;
@@ -1242,7 +1246,20 @@ app.get('/api/discover', requireAuth, async (req, res) => {
       return String(a.id || '').localeCompare(String(b.id || ''));
     });
 
-    res.json({ profiles: mappedProfiles, hasActiveConnection });
+    // Paginate: slice the sorted list
+    const start = (page - 1) * limit;
+    const paginatedProfiles = mappedProfiles.slice(start, start + limit);
+    const totalCount = mappedProfiles.length;
+    const hasMore = start + limit < totalCount;
+
+    res.json({
+      profiles: paginatedProfiles,
+      hasActiveConnection,
+      page,
+      limit,
+      hasMore,
+      totalCount
+    });
   } catch (err) {
     console.error('GET /api/discover error:', err);
     res.status(500).json({ error: 'Failed to load discover feed', details: err.message });

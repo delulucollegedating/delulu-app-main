@@ -6,6 +6,12 @@ let lastDiscoveryLoadAt = 0;
 let userHasActiveChat = false;
 let activeGenderFilter = localStorage.getItem('delulu_discover_gender_filter') || 'all';
 
+// Pagination state
+let discoverPage = 1;
+let discoverHasMore = false;
+let discoverTotalCount = 0;
+const DISCOVER_PAGE_SIZE = 15;
+
 document.addEventListener('DOMContentLoaded', async () => {
   await requireAuth();
   await loadDiscovery();
@@ -109,6 +115,11 @@ function setGenderFilter(filter) {
   } catch (e) {}
   discoverProfiles = [];
   currentIndex = 0;
+  // Reset pagination state
+  discoverPage = 1;
+  discoverHasMore = false;
+  discoverTotalCount = 0;
+  showLoadMoreButton();
   loadDiscovery();
 }
 
@@ -263,36 +274,42 @@ async function loadDiscovery(options = {}) {
 
   discoveryLoading = true;
   try {
-    // Build URL with optional gender filter query param
-    const genderParam = (activeGenderFilter && activeGenderFilter !== 'all') ? `?gender=${activeGenderFilter}` : '';
+    // Build URL with optional gender filter and pagination params
+    const pageToLoad = options.append ? discoverPage : 1;
+    const genderParam = (activeGenderFilter && activeGenderFilter !== 'all')
+      ? `?gender=${activeGenderFilter}&page=${pageToLoad}&limit=${DISCOVER_PAGE_SIZE}`
+      : `?page=${pageToLoad}&limit=${DISCOVER_PAGE_SIZE}`;
     const data = await apiCall(`/api/discover${genderParam}`);
     lastDiscoveryLoadAt = Date.now();
     userHasActiveChat = !!data.hasActiveConnection; // Sync active connection status from server
+    
+    discoverPage = data.page || pageToLoad;
+    discoverHasMore = data.hasMore;
+    discoverTotalCount = data.totalCount || 0;
+    
     const newProfiles = data.profiles || [];
     
-    // Compare incoming profile IDs with current deck to prevent unnecessary DOM resets & jumping avatars
-    const currentIds = (discoverProfiles || []).map(p => p.id).join(',');
-    const newIds = newProfiles.map(p => p.id).join(',');
-    const deckUnchanged = (currentIds === newIds && currentIds.length > 0);
-
-    discoverProfiles = newProfiles;
+    if (options.append && discoverProfiles.length > 0) {
+      // Append mode: deduplicate and add to existing deck
+      const existingIds = new Set(discoverProfiles.map(p => p.id));
+      const freshProfiles = newProfiles.filter(p => !existingIds.has(p.id));
+      if (freshProfiles.length > 0) {
+        discoverProfiles.push(...freshProfiles);
+      }
+    } else {
+      // Normal mode: replace entire deck
+      discoverProfiles = newProfiles;
+    }
     
     // Cache profiles for instant zero-latency loading
     try {
       sessionStorage.setItem('discover_profiles', JSON.stringify(discoverProfiles));
       localStorage.setItem('discover_profiles', JSON.stringify(discoverProfiles));
     } catch (e) {}
-    
-    // If profile deck is unchanged and already rendered, do NOT tear down or re-render 3D scene!
-    if (deckUnchanged) {
-      if (currentIndex >= discoverProfiles.length) {
-        currentIndex = Math.max(0, discoverProfiles.length - 1);
-      }
-      updateProfileOverlay(currentIndex);
-      updateNavButtons();
-      return;
-    }
 
+    // Show/hide Load More button
+    showLoadMoreButton();
+    
     // Show profile overlay immediately
     if (discoverProfiles.length > 0) {
       const overlay = document.getElementById('profile-overlay');
@@ -497,6 +514,19 @@ window.connectFallback = async (index, btn) => {
     btn.textContent = 'Connect';
     btn.disabled = false;
   }
+};
+
+// ── Pagination: Load More ────────────────────────────────────────────────────
+function showLoadMoreButton() {
+  const btn = document.getElementById('btn-load-more');
+  if (!btn) return;
+  btn.classList.toggle('hidden', !discoverHasMore);
+}
+
+window.loadMoreDiscover = async function () {
+  if (discoveryLoading || !discoverHasMore) return;
+  discoverPage++;
+  await loadDiscovery({ append: true });
 };
 
 // Expose for avatar3d.js to call

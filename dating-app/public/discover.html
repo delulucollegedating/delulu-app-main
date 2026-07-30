@@ -195,6 +195,15 @@
         </div>
       </div>
 
+      <!-- Load More Button (shows when there are more paginated profiles) -->
+      <button id="btn-load-more"
+        onclick="loadMoreDiscover()"
+        class="hidden mx-auto mt-4 px-6 py-3 rounded-full bg-surface/90 backdrop-blur-lg shadow-md border border-outline-variant/30 text-primary font-bold text-sm hover:scale-105 active:scale-95 transition-all cursor-pointer flex items-center gap-2 hover:shadow-xl"
+        aria-label="Load more profiles">
+        <span class="material-symbols-outlined text-lg">expand_more</span>
+        View More
+      </button>
+
       <!-- Scroll Buttons -->
       <button id="btn-scroll-left" class="fixed left-4 top-1/2 z-40 w-12 h-12 rounded-full bg-surface/90 backdrop-blur-lg shadow-xl border border-outline-variant/30 flex items-center justify-center text-primary hover:scale-110 active:scale-95 transition-all hover:shadow-2xl cursor-pointer" aria-label="Previous profile">
         <span class="material-symbols-outlined text-3xl">chevron_left</span>
