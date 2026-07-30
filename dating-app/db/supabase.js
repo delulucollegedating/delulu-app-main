@@ -1,14 +1,22 @@
 /**
  * db/supabase.js
- * Server-side only Supabase client.
+ * Server-side only Supabase client with CircuitBreaker fault isolation.
  * Uses the SERVICE_ROLE_KEY — NEVER the anon key.
  * Never import this file in any client-side (public/) code.
  */
 'use strict';
 
 const { createClient } = require('@supabase/supabase-js');
+const CircuitBreaker = require('../utils/circuitBreaker');
 
 let _client = null;
+
+const supabaseBreaker = new CircuitBreaker('SupabaseDB', {
+  timeoutMs: 6000,       // Abort queries hanging over 6s
+  failureThreshold: 5,   // Trip circuit after 5 consecutive database failures
+  resetTimeoutMs: 10000, // Fast-fail for 10s before probing recovery
+  maxConcurrent: 25      // Cap simultaneous database calls to prevent socket/thread exhaustion
+});
 
 function getSupabase() {
   if (_client) return _client;
@@ -34,4 +42,4 @@ function getSupabase() {
   return _client;
 }
 
-module.exports = { getSupabase };
+module.exports = { getSupabase, supabaseBreaker };

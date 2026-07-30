@@ -1327,7 +1327,7 @@ const connectionOps = {
 // Message operations — backed by Supabase Postgres (NOT Firestore)
 // The Firestore connection doc (ownership/permission check) is still used
 // by connectionOps.getConnection() in every route handler BEFORE these run.
-const { getSupabase } = require('./db/supabase');
+const { getSupabase, supabaseBreaker } = require('./db/supabase');
 
 const messageOps = {
   // ── INSERT ──────────────────────────────────────────────────────────────────
@@ -1509,16 +1509,18 @@ const messageOps = {
   // Moved from Firestore unordered collection scan → Supabase ordered query.
   async getForConnection(connectionId) {
     try {
-      const supabase = getSupabase();
-      const { data, error } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('connection_id', Number(connectionId))
-        .is('deleted_at', null)
-        .order('created_at', { ascending: true });
+      return await supabaseBreaker.execute(async () => {
+        const supabase = getSupabase();
+        const { data, error } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('connection_id', Number(connectionId))
+          .is('deleted_at', null)
+          .order('created_at', { ascending: true });
 
-      if (error) throw error;
-      return data || [];
+        if (error) throw error;
+        return data || [];
+      }, () => []);
     } catch (err) {
       console.error('messageOps.getForConnection error:', err.message);
       return [];
