@@ -2665,6 +2665,8 @@ function openIcebreakerModal() {
       startGame(game);
     };
   });
+}
+
 let isStartingIcebreaker = false;
 
 async function startGame(gameType) {
@@ -2820,6 +2822,7 @@ async function startGame(gameType) {
       };
       syncActiveGame(fakeConn);
     }
+  }
   } catch (err) {
     console.error('Error starting icebreaker:', err);
     showToast(err.message || 'Could not start the icebreaker. Please try again.', 'error');
