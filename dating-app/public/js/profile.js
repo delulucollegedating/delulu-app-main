@@ -74,25 +74,42 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
+    // Capture backup state for graceful rollback on error
+    const backupUser = JSON.parse(JSON.stringify(currentUser));
+
+    // Optimistic UI update: update local user state & header avatar immediately
+    currentUser.bio = bio;
+    currentUser.hobbies = hobbies;
+    currentUser.avatar = avatar;
+    try {
+      window.localStorage.setItem('cached_user', JSON.stringify(currentUser));
+    } catch (e) {}
+
+    document.getElementById('prof-avatar').innerHTML = getAvatarHtml(currentUser.username, currentUser.avatar, {
+      className: 'absolute w-[180%] max-w-none left-[-40%] top-[-25%]'
+    });
+    updateHeaderAvatar();
+
+    msgEl.textContent = 'Profile updated successfully!';
+    msgEl.className = 'text-sm font-semibold text-primary';
+    msgEl.classList.remove('hidden');
+
     try {
       await apiCall('/api/users/me', 'PUT', { bio, hobbies, avatar });
-      msgEl.textContent = 'Profile updated successfully!';
-      msgEl.className = 'text-sm font-semibold text-primary';
-      msgEl.classList.remove('hidden');
-      
-      // Update local state and avatar
-      currentUser.bio = bio;
-      currentUser.hobbies = hobbies;
-      currentUser.avatar = avatar;
-      window.localStorage.setItem('cached_user', JSON.stringify(currentUser));
+      setTimeout(() => { msgEl.classList.add('hidden'); msgEl.textContent = ''; }, 3000);
+    } catch(err) {
+      // Graceful Rollback: restore previous profile state on failure
+      currentUser = backupUser;
+      try {
+        window.localStorage.setItem('cached_user', JSON.stringify(currentUser));
+      } catch (e) {}
+
       document.getElementById('prof-avatar').innerHTML = getAvatarHtml(currentUser.username, currentUser.avatar, {
         className: 'absolute w-[180%] max-w-none left-[-40%] top-[-25%]'
       });
       updateHeaderAvatar();
-      
-      setTimeout(() => { msgEl.classList.add('hidden'); msgEl.textContent = ''; }, 3000);
-    } catch(err) {
-      msgEl.textContent = err.message;
+
+      msgEl.textContent = `Failed to save profile: ${err.message}`;
       msgEl.className = 'text-sm font-semibold text-error';
       msgEl.classList.remove('hidden');
     }
