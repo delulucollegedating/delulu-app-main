@@ -2808,15 +2808,8 @@ async function startGame(gameType) {
     });
   } else {
     // STEP 1: Save game to Firestore FIRST
-    let activeGame;
-    try {
-      const result = await apiCall(`/api/connections/${currentConnId}/start-game`, 'POST', { game_type: gameType, question: q });
-      activeGame = result.active_game; // includes created_at from Firestore
-    } catch (err) {
-      console.error('Failed to start persistent game:', err);
-      showToast(err.message || 'Could not start the icebreaker. Please try again.', 'error');
-      return;
-    }
+    const result = await apiCall(`/api/connections/${currentConnId}/start-game`, 'POST', { game_type: gameType, question: q });
+    const activeGame = result.active_game; // includes created_at from Firestore
     
     // Render locally from the API response so the starter sees the card instantly.
     if (otherUserId) {
@@ -2825,9 +2818,11 @@ async function startGame(gameType) {
         to_user_id: otherUserId,
         active_game: activeGame
       };
+      syncActiveGame(fakeConn);
     }
   } catch (err) {
     console.error('Error starting icebreaker:', err);
+    showToast(err.message || 'Could not start the icebreaker. Please try again.', 'error');
   } finally {
     isStartingIcebreaker = false;
     closeModal();
