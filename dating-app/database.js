@@ -288,30 +288,46 @@ const userOps = {
     if (cachedEntry && (Date.now() - cachedEntry.timestamp < ECOSYSTEM_CACHE_TTL)) {
       allEcosystemUsers = cachedEntry.data.map(u => ({ ...u }));
     } else {
-      let snapshot;
+      let snapshotDocs = [];
       try {
         let query = firestore.collection('users').where('ecosystem', '==', userEcosystem);
         if (genderFilter) {
           query = query.where('gender', '==', genderFilter);
         }
-        snapshot = await query.get();
+        const snap = await query.get();
+        snap.forEach(d => snapshotDocs.push(d));
       } catch (indexErr) {
-        console.warn('Firestore composite index missing for discover query — falling back to in-memory filter.');
-        const ecoQuery = firestore.collection('users').where('ecosystem', '==', userEcosystem);
-        const ecoSnapshot = await ecoQuery.get();
-        const filteredDocs = [];
-        ecoSnapshot.forEach(doc => {
-          const u = doc.data();
-          if (!genderFilter || u.gender === genderFilter) {
-            filteredDocs.push(doc);
+        console.warn('Firestore discover query index fallback 1: fetching ecosystem users.');
+        try {
+          const ecoQuery = firestore.collection('users').where('ecosystem', '==', userEcosystem);
+          const ecoSnap = await ecoQuery.get();
+          ecoSnap.forEach(doc => {
+            const u = doc.data();
+            if (!genderFilter || u.gender === genderFilter) {
+              snapshotDocs.push(doc);
+            }
+          });
+        } catch (ecoErr) {
+          console.warn('Firestore discover query index fallback 2: fetching all users.');
+          try {
+            const allSnap = await firestore.collection('users').get();
+            allSnap.forEach(doc => {
+              const u = doc.data();
+              const ecoMatch = (u.ecosystem || 'rishihood') === userEcosystem;
+              const genderMatch = !genderFilter || u.gender === genderFilter;
+              if (ecoMatch && genderMatch) {
+                snapshotDocs.push(doc);
+              }
+            });
+          } catch (allErr) {
+            console.error('All discover queries failed:', allErr);
           }
-        });
-        snapshot = { forEach(fn) { filteredDocs.forEach(fn); }, empty: filteredDocs.length === 0 };
+        }
       }
 
       allEcosystemUsers = [];
-      snapshot.forEach(doc => {
-        const u = doc.data();
+      snapshotDocs.forEach(doc => {
+        const u = typeof doc.data === 'function' ? doc.data() : doc;
         allEcosystemUsers.push({
           id: u.id,
           username: u.username,

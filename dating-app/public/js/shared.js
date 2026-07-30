@@ -239,14 +239,27 @@ function getAvatarHtml(username, avatar, options = {}) {
   const loadingAttr = lazy ? 'loading="lazy"' : '';
   const safeUsername = escapeHtml(username || '');
   if (avatar) {
-    // Determine path based on if it's the new object or old string format
     let src = '';
     if (typeof avatar === 'object' && avatar.idle) {
       src = avatar.idle;
-    } else {
-      src = `/avatars/${avatar}.png`;
+    } else if (typeof avatar === 'string') {
+      if (avatar.startsWith('/avatars/') || avatar.startsWith('http') || avatar.startsWith('data:')) {
+        src = avatar;
+      } else {
+        const match = avatar.match(/^(male|female)_(\d+)$/);
+        if (match) {
+          const gender = match[1];
+          const num = parseInt(match[2], 10);
+          const numStr = num < 10 ? `0${num}` : `${num}`;
+          src = `/avatars/${gender}/${gender}_${numStr}/idle.png`;
+        } else {
+          src = `/avatars/${avatar}`;
+        }
+      }
     }
-    return `<span class="avatar-circle-wrapper"><img src="${src}" alt="${safeUsername}" class="${className}" ${loadingAttr}></span>`;
+    if (src) {
+      return `<span class="avatar-circle-wrapper"><img src="${src}" alt="${safeUsername}" class="${className}" ${loadingAttr}></span>`;
+    }
   }
   const initial = safeUsername ? safeUsername.charAt(0).toUpperCase() : '?';
   return `<div class="w-full h-full bg-gradient-to-br from-primary-container to-secondary-container text-white flex items-center justify-center font-bold text-3xl">${initial}</div>`;
