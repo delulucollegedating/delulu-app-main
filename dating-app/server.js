@@ -1078,14 +1078,14 @@ app.post('/api/users/login', authLimiter, async (req, res) => {
     const DUMMY_HASH = '$2b$10$tM2a690L85N6x/2j68g2ae1f68ae1f68ae1f68ae1f68ae1f68ae';
     let match = false;
     
-    if (user) {
+    if (user && user.passcode_hash) {
       match = await bcrypt.compare(password, user.passcode_hash);
     } else {
       // Execute dummy compare to match processor runtime cycles
       await bcrypt.compare(password, DUMMY_HASH);
     }
 
-    if (!user || !match) {
+    if (!user || !match || !user.id) {
       return res.status(401).json({ error: 'Incorrect username/email or password' });
     }
 
@@ -1098,7 +1098,7 @@ app.post('/api/users/login', authLimiter, async (req, res) => {
     res.json({ success: true, user: safeUser, token });
   } catch (err) {
     console.error('Login error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Internal server error', details: err.message });
   }
 });
 

@@ -238,14 +238,22 @@ const userOps = {
   
   async getByUsername(username) {
     if (!username) return null;
-    const snapshot = await getDB().collection('users').where('username', '==', username).limit(1).get();
-    return snapshot.empty ? null : snapshot.docs[0].data();
+    const snap = await getDB().collection('users').where('username', '==', String(username).trim()).limit(1).get();
+    if (snap.empty) return null;
+    const doc = snap.docs[0];
+    const data = doc.data();
+    const docId = doc.id ? (isNaN(doc.id) ? doc.id : Number(doc.id)) : null;
+    return { ...data, id: data.id || docId };
   },
 
   async getByEmail(email) {
     if (!email) return null;
-    const snapshot = await getDB().collection('users').where('email', '==', email).limit(1).get();
-    return snapshot.empty ? null : snapshot.docs[0].data();
+    const snap = await getDB().collection('users').where('email', '==', String(email).toLowerCase().trim()).limit(1).get();
+    if (snap.empty) return null;
+    const doc = snap.docs[0];
+    const data = doc.data();
+    const docId = doc.id ? (isNaN(doc.id) ? doc.id : Number(doc.id)) : null;
+    return { ...data, id: data.id || docId };
   },
 
   async linkEmailToUser(userId, email) {
