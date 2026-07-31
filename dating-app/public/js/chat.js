@@ -464,7 +464,7 @@ async function initializeChat() {
   }
   
   const urlParams = new URLSearchParams(window.location.search);
-  const connId = urlParams.get('id');
+  const connId = urlParams.get('id') || urlParams.get('connection');
   if (!connId) {
     window.location.href = 'messages.html';
     return;
