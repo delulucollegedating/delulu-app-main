@@ -290,6 +290,8 @@ function setupLogout() {
   const btn = document.getElementById('logout-btn');
   if (btn) {
     btn.onclick = async () => {
+      const deviceId = getOrCreateDeviceId();
+      await apiCall(`/api/devices/${deviceId}`, 'DELETE').catch(() => {});
       window.localStorage.removeItem('cached_user');
       window.localStorage.removeItem('auth_token');
       window.localStorage.removeItem('e2ee_private_key');
@@ -508,26 +510,56 @@ function showSkeleton(containerId, count = 3, type = 'line') {
   }
 }
 
-// ===== Push & Native Local Notification Subscription =====
+function getOrCreateDeviceId() {
+  let deviceId = localStorage.getItem('delulu_device_id');
+  if (!deviceId) {
+    deviceId = 'dev_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9);
+    localStorage.setItem('delulu_device_id', deviceId);
+  }
+  return deviceId;
+}
+
+// ===== Push & Native FCM Notification Subscription =====
 async function initPushNotifications() {
-  // 1. Native Capacitor Local Notifications (Android / iOS native app)
-  if (window.Capacitor && window.Capacitor.isPluginAvailable && window.Capacitor.isPluginAvailable('LocalNotifications')) {
+  const deviceId = getOrCreateDeviceId();
+
+  // 1. Native Capacitor FCM Push Notifications (Android / iOS native app)
+  if (window.Capacitor && window.Capacitor.isPluginAvailable && window.Capacitor.isPluginAvailable('PushNotifications')) {
     try {
-      const LocalNotifications = window.Capacitor.Plugins.LocalNotifications;
-      if (LocalNotifications && typeof LocalNotifications.requestPermissions === 'function') {
-        await LocalNotifications.requestPermissions().catch(() => {});
-        if (!window.__capacitorNotificationListenerSet) {
-          window.__capacitorNotificationListenerSet = true;
-          LocalNotifications.addListener('localNotificationActionPerformed', (action) => {
-            const targetUrl = action.notification?.extra?.url;
-            if (targetUrl) {
-              window.location.replace(targetUrl);
+      const PushNotifications = window.Capacitor.Plugins.PushNotifications;
+      if (PushNotifications && typeof PushNotifications.requestPermissions === 'function') {
+        let perm = await PushNotifications.requestPermissions().catch(() => ({ receive: 'denied' }));
+        if (perm && (perm.receive === 'granted' || perm.display === 'granted')) {
+          await PushNotifications.register().catch(() => {});
+        }
+
+        if (!window.__capacitorPushListenerSet) {
+          window.__capacitorPushListenerSet = true;
+
+          PushNotifications.addListener('registration', async (token) => {
+            if (token && token.value) {
+              await apiCall('/api/devices/register', 'POST', {
+                deviceId,
+                platform: 'android_fcm',
+                token: token.value,
+                app_version: '1.0.0'
+              }).catch(() => {});
+            }
+          }).catch(() => {});
+
+          PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
+            const data = action.notification?.data || {};
+            const connId = data.connectionId || data.connection_id;
+            if (connId) {
+              window.location.href = `chat.html?connection=${connId}`;
+            } else if (data.url) {
+              window.location.href = data.url;
             }
           }).catch(() => {});
         }
       }
     } catch (e) {
-      console.warn('[Capacitor] Local notifications setup safely bypassed:', e.message);
+      console.warn('[Capacitor] Push notifications setup safely bypassed:', e.message);
     }
   }
 
@@ -555,11 +587,7 @@ async function initPushNotifications() {
     let sub = await reg.pushManager.getSubscription();
     
     if (sub) {
-      // Re-register subscription with server on every init to handle VAPID key rotation.
-      // The server will update the record; if the subscription is stale, it will
-      // be removed when push delivery fails with a 410 Gone response.
       await apiCall('/api/push/subscribe', 'POST', { subscription: sub.toJSON() }).catch(() => {
-        // If re-registration fails, unsubscribe and re-subscribe fresh
         sub.unsubscribe();
         sub = null;
       });
@@ -571,7 +599,16 @@ async function initPushNotifications() {
         applicationServerKey: keyData.publicKey
       });
       await apiCall('/api/push/subscribe', 'POST', { subscription: sub.toJSON() });
-      console.log('Web Push notifications enabled');
+    }
+
+    if (sub) {
+      await apiCall('/api/devices/register', 'POST', {
+        deviceId,
+        platform: 'web_push',
+        web_push_subscription: sub.toJSON(),
+        app_version: '1.0.0'
+      }).catch(() => {});
+      console.log('Web Push device registered');
     }
   } catch (err) {
     console.log('Push notification setup deferred:', err.message);

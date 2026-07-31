@@ -39,6 +39,8 @@ const connectionEmitter = new EventEmitter();
 const userEmitter = new EventEmitter(); // Per-user SSE stream (messages list page)
 userEmitter.setMaxListeners(200); // Allow many concurrent user SSE connections
 
+const notificationDispatcher = require('./services/notificationDispatcher');
+
 const session = require('express-session');
 const compression = require('compression');
 const PgSession = require('connect-pg-simple')(session);
@@ -1972,8 +1974,22 @@ app.post('/api/messages/send', requireAuth, async (req, res) => {
     senderName: senderUser.username || 'Someone'
   });
 
-  // Send push notification to the other user (for background/closed app)
-  sendPushNotification(otherUserId, 'New message', displayContent, `chat.html?id=${connection_id}`);
+  // Dispatch push notification to the receiver across platform channels (FCM for Android app, Web Push for browser)
+  notificationDispatcher.dispatchNotification(
+    otherUserId,
+    connection_id,
+    {
+      title: senderUser.username || 'Classmate',
+      body: displayContent,
+      senderId,
+      senderName: senderUser.username || 'Classmate',
+      messageId: msg.id,
+      type: 'chat_message',
+      createdAt: msg.created_at,
+      url: `/chat.html?connection=${connection_id}`
+    },
+    (recId, connId) => activeRoomUsers.get(String(connId))?.has(Number(recId))
+  ).catch(err => console.warn('Push notification dispatch error:', err.message));
 
   // Update last_message_at on the connection doc (fire-and-forget is fine — non-critical metadata)
   const firestore = getDB();
@@ -2107,6 +2123,40 @@ async function sendPushNotification(userId, title, body, url = '/messages') {
     return false;
   });
 }
+
+// ===== Multi-Transport Device Token Management (FCM & Web Push) =====
+
+// Register or upsert a device token for the logged-in user
+app.post('/api/devices/register', requireAuth, async (req, res) => {
+  const { deviceId, platform, token, fcm_token, web_push_subscription, app_version, device_model } = req.body;
+  if (!deviceId) {
+    return res.status(400).json({ error: 'Missing deviceId' });
+  }
+
+  const result = await notificationDispatcher.registerDevice(req.session.userId, {
+    deviceId,
+    platform: platform || 'android_fcm',
+    token: token || fcm_token,
+    web_push_subscription,
+    app_version,
+    device_model
+  });
+
+  if (result.error) {
+    return res.status(400).json(result);
+  }
+  res.json(result);
+});
+
+// Delete/unregister a device token on logout
+app.delete('/api/devices/:deviceId', requireAuth, async (req, res) => {
+  const { deviceId } = req.params;
+  if (!deviceId) return res.status(400).json({ error: 'Missing deviceId' });
+
+  const result = await notificationDispatcher.unregisterDevice(req.session.userId, deviceId);
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
 
 const ALLOWED_REACTIONS = ['😂', '😢', '❤️', '👍', '😮'];
 
