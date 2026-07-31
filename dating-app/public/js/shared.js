@@ -550,10 +550,17 @@ async function initPushNotifications() {
           PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
             const data = action.notification?.data || {};
             const connId = data.connectionId || data.connection_id;
+            const notifType = data.type;
+            const targetUrl = data.url;
+            
             if (connId) {
               window.location.href = `chat.html?id=${connId}`;
-            } else if (data.url) {
-              window.location.href = data.url;
+            } else if (notifType === 'connection_request' || notifType === 'connection_accepted') {
+              window.location.href = 'requests.html';
+            } else if (targetUrl && targetUrl !== '/') {
+              window.location.href = targetUrl.startsWith('/') ? targetUrl.substring(1) : targetUrl;
+            } else {
+              window.location.href = 'messages.html';
             }
           }).catch(() => {});
         }

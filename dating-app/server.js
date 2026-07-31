@@ -2103,10 +2103,18 @@ async function sendPushNotification(userId, title, body, url = '/messages') {
             const message = {
               token,
               notification: { title, body },
-              data: { url: url || '/chat.html' },
+              data: {
+                title: String(title),
+                body: String(body),
+                url: String(url || '/messages.html')
+              },
               android: {
                 priority: 'high',
                 notification: {
+                  title,
+                  body,
+                  icon: 'ic_stat_delulu',
+                  color: '#a53b29',
                   sound: 'default',
                   priority: 'high',
                   channelId: 'delulu_messages',

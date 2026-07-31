@@ -157,8 +157,16 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
     const messaging = getMessagingInstance();
     if (messaging) {
       const tokens = fcmDevices.map(d => d.fcm_token);
+      const notifTitle = String(payload.title || 'New Message');
+      const notifBody = String(payload.body || 'Someone sent you a message');
+      const targetUrl = payload.url || (connectionId ? `/chat.html?id=${connectionId}` : '/messages.html');
+
       const multicastMessage = {
         tokens,
+        notification: {
+          title: notifTitle,
+          body: notifBody
+        },
         data: {
           type: String(payload.type || 'chat_message'),
           connectionId: String(connectionId || ''),
@@ -166,18 +174,20 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
           senderName: String(payload.senderName || 'Classmate'),
           messageId: String(payload.messageId || ''),
           createdAt: String(payload.createdAt || new Date().toISOString()),
-          title: String(payload.title || 'New Message'),
-          body: String(payload.body || 'Someone sent you a message')
+          title: notifTitle,
+          body: notifBody,
+          url: targetUrl
         },
         android: {
           priority: 'high',
           notification: {
+            title: notifTitle,
+            body: notifBody,
             channelId: 'delulu_messages',
             icon: 'ic_stat_delulu',
             color: '#a53b29',
             sound: 'default',
-            tag: `conn_${connectionId}`,
-            clickAction: 'OPEN_CHAT'
+            tag: connectionId ? `conn_${connectionId}` : `notif_${Date.now()}`
           }
         }
       };
