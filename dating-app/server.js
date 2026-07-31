@@ -854,23 +854,28 @@ function requireActiveConnection(conn, res) {
 
 // Check if user is logged in (with cache)
 app.get('/api/session', async (req, res) => {
-  if (req.session.userId) {
-    const token = generateAuthToken(req.session.userId);
-    const cached = getCachedUser(req.session.userId);
-    if (cached) {
-      req.session.user = cached;
-      return res.json({ authenticated: true, user: cached, token });
+  try {
+    if (req.session && req.session.userId) {
+      const token = generateAuthToken(req.session.userId);
+      const cached = getCachedUser(req.session.userId);
+      if (cached) {
+        req.session.user = cached;
+        return res.json({ authenticated: true, user: cached, token });
+      }
+      
+      const user = await userOps.getById(req.session.userId);
+      if (user) {
+        const safeUser = sanitizeUser(user);
+        req.session.user = safeUser;
+        setCachedUser(req.session.userId, safeUser);
+        return res.json({ authenticated: true, user: safeUser, token });
+      }
     }
-    
-    const user = await userOps.getById(req.session.userId);
-    if (user) {
-      const safeUser = sanitizeUser(user);
-      req.session.user = safeUser;
-      setCachedUser(req.session.userId, safeUser);
-      return res.json({ authenticated: true, user: safeUser, token });
-    }
+    res.json({ authenticated: false });
+  } catch (err) {
+    console.error('GET /api/session error:', err);
+    res.status(500).json({ error: 'Failed to verify session', details: err.message });
   }
-  res.json({ authenticated: false });
 });
 
 // Helper to send transactional emails via Brevo HTTP API (protected by CircuitBreaker)

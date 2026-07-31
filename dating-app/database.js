@@ -229,11 +229,12 @@ const userOps = {
     if (cached) return cached;
     
     const doc = await getDB().collection('users').doc(String(id)).get();
-    const userData = doc.exists ? doc.data() : null;
-    if (userData) {
-      setCachedUserById(id, userData);
-    }
-    return userData;
+    if (!doc.exists) return null;
+    const userData = doc.data();
+    const docId = doc.id ? (isNaN(doc.id) ? doc.id : Number(doc.id)) : null;
+    const resolvedUser = { ...userData, id: userData.id || docId };
+    setCachedUserById(id, resolvedUser);
+    return resolvedUser;
   },
   
   async getByUsername(username) {
