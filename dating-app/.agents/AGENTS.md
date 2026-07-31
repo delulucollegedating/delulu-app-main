@@ -1,4 +1,4 @@
-# AGENTS.md — Delulu College Dating App
+# AGENTS.md — Delulu College Social Discovery App
 
 > **Purpose**: This file gives any AI agent (or developer) a complete mental model of the Delulu project — its architecture, data flows, algorithms, and rules — so no code needs to be read before making changes.
 
@@ -6,7 +6,15 @@
 
 ## 1. Project Overview
 
-**Delulu** is an anonymous college dating app where identities are **hidden by design**. Users connect based on interests, chat anonymously over a **10-day Slow Dating timeline**, and reveal their face/identity to meet on **Day 10**. Think of it as "Blind Dating + Slow Dating" built for college students.
+**Delulu** is a college-focused **social discovery and chat app** built for students from the same college/community. It is a safer, play-first "meet new people from your college" platform—not a swipe-first dating app.
+
+### Core Product Pillars:
+1. **Classmate Discovery**: Discover classmates from your university/community through profiles, hobbies, and gender filters.
+2. **"Say Hi" Connection Requests**: Send connection requests to classmates to initiate mutual connections.
+3. **Connected Chat Only**: Users can chat only after both users accept the connection request.
+4. **Icebreakers & Mini-Games**: Built-in interactive icebreakers (`would_you_rather`, `this_or_that`, `question`) start conversations naturally.
+5. **Time-Bound Chats & "Not Vibing"**: Keep chats active with optional "Not Vibing" termination to end unpromising chats gracefully.
+6. **Gradual Identity & Face Reveals**: Identities and avatars remain anonymous/hidden by design, gradually unlocking face/identity reveals on **Day 10** to encourage genuine conversation before judging by appearance.
 
 **Live URL**: https://delulu-college.onrender.com  
 **Android APK**: `public/delulu.apk` (served locally — too large for GitHub)  
