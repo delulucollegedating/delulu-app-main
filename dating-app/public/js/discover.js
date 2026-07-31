@@ -492,8 +492,9 @@ function renderFallbackCards() {
               <button data-fallback-action="dismiss" data-index="${i}" class="w-10 h-10 rounded-full bg-white shadow-md border border-outline-variant/20 flex items-center justify-center text-on-surface-variant hover:scale-110 transition-all">
                 <span class="material-symbols-outlined">close</span>
               </button>
-              <button data-fallback-action="connect" data-index="${i}" class="px-5 py-2 rounded-full bg-gradient-to-r from-primary to-primary-container text-white text-sm font-bold shadow-md hover:scale-105 transition-all">
-                <span class="material-symbols-outlined text-sm material-fill">favorite</span> Connect
+              <button data-fallback-action="connect" data-index="${i}" class="px-5 py-2 rounded-full bg-gradient-to-r from-primary to-primary-container text-white text-sm font-bold shadow-md hover:scale-105 transition-all flex items-center gap-1.5">
+                <img src="logo.png" class="w-4 h-4 rounded-md object-cover inline-block border border-white/30" alt="Delulu">
+                <span>Say Hi</span>
               </button>
             </div>
           </div>
