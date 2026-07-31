@@ -1986,7 +1986,7 @@ app.post('/api/messages/send', requireAuth, async (req, res) => {
       messageId: msg.id,
       type: 'chat_message',
       createdAt: msg.created_at,
-      url: `/chat.html?connection=${connection_id}`
+      url: `/chat.html?id=${connection_id}`
     },
     (recId, connId) => activeRoomUsers.get(String(connId))?.has(Number(recId))
   ).catch(err => console.warn('Push notification dispatch error:', err.message));

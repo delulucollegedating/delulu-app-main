@@ -551,7 +551,7 @@ async function initPushNotifications() {
             const data = action.notification?.data || {};
             const connId = data.connectionId || data.connection_id;
             if (connId) {
-              window.location.href = `chat.html?connection=${connId}`;
+              window.location.href = `chat.html?id=${connId}`;
             } else if (data.url) {
               window.location.href = data.url;
             }

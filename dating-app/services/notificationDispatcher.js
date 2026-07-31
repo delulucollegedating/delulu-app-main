@@ -136,7 +136,7 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
           receiverId,
           payload.title || 'New Message',
           payload.body || 'Someone sent you a message',
-          payload.url || `/chat.html?connection=${connectionId}`
+          payload.url || `/chat.html?id=${connectionId}`
         );
       }, (err) => {
         console.warn('Web push fallback circuit breaker caught error:', err.message);
@@ -224,7 +224,7 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
             receiverId,
             payload.title || 'New Message',
             payload.body || 'Someone sent you a message',
-            payload.url || `/chat.html?connection=${connectionId}`
+            payload.url || `/chat.html?id=${connectionId}`
           );
           dispatchResults.web++;
         }, (err) => {
