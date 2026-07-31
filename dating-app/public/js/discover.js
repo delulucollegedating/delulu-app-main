@@ -6,12 +6,15 @@ let lastDiscoveryLoadAt = 0;
 let userHasActiveChat = false;
 let activeGenderFilter = localStorage.getItem('delulu_discover_gender_filter') || 'all';
 
-// Pagination state
-let discoverPage = 1;
+// Cursor pagination state. The server owns the full ranked feed; the browser
+// only holds a small navigation window for the 3D carousel.
+let discoverNextCursor = null;
 let discoverHasMore = false;
 let discoverTotalCount = 0;
 let discoverAllLoaded = false;
 const DISCOVER_PAGE_SIZE = 15;
+const DISCOVER_MAX_WINDOW_SIZE = 45;
+const DISCOVER_BACKTRACK_SIZE = 15;
 
 document.addEventListener('DOMContentLoaded', async () => {
   await requireAuth();
@@ -117,7 +120,7 @@ function setGenderFilter(filter) {
   discoverProfiles = [];
   currentIndex = 0;
   // Reset pagination state
-  discoverPage = 1;
+  discoverNextCursor = null;
   discoverHasMore = false;
   discoverTotalCount = 0;
   discoverAllLoaded = false;
@@ -296,18 +299,19 @@ async function loadDiscovery(options = {}) {
 
   discoveryLoading = true;
   try {
-    // Build URL with optional gender filter and pagination params
-    const pageToLoad = options.page || (options.append ? discoverPage + 1 : 1);
+    // The opaque cursor continues the exact server-side feed without sending
+    // the browser's page number or reloading previously seen profiles.
+    if (options.append && !discoverNextCursor) return;
     const profileCountBeforeAppend = discoverProfiles.length;
-    const genderParam = (activeGenderFilter && activeGenderFilter !== 'all')
-      ? `?gender=${activeGenderFilter}&page=${pageToLoad}&limit=${DISCOVER_PAGE_SIZE}`
-      : `?page=${pageToLoad}&limit=${DISCOVER_PAGE_SIZE}`;
-    const data = await apiCall(`/api/discover${genderParam}`);
+    const params = new URLSearchParams({ limit: String(DISCOVER_PAGE_SIZE) });
+    if (activeGenderFilter && activeGenderFilter !== 'all') params.set('gender', activeGenderFilter);
+    if (options.append) params.set('cursor', discoverNextCursor);
+    const data = await fetchDiscoverPage(`/api/discover?${params.toString()}`);
     lastDiscoveryLoadAt = Date.now();
     userHasActiveChat = !!data.hasActiveConnection; // Sync active connection status from server
     
-    discoverPage = data.page || pageToLoad;
-    discoverHasMore = data.hasMore;
+    discoverNextCursor = data.nextCursor || null;
+    discoverHasMore = Boolean(data.hasMore && discoverNextCursor);
     discoverTotalCount = data.totalCount || 0;
     discoverAllLoaded = false; // Reset on every successful fetch
     
@@ -327,15 +331,6 @@ async function loadDiscovery(options = {}) {
       discoverProfiles = newProfiles;
     }
     
-    // Cache profiles for instant zero-latency loading
-    try {
-      sessionStorage.setItem('discover_profiles', JSON.stringify(discoverProfiles));
-      localStorage.setItem('discover_profiles', JSON.stringify(discoverProfiles));
-    } catch (e) {}
-
-    // Show/hide Load More button
-    showLoadMoreButton();
-    
     // Show profile overlay immediately
     if (discoverProfiles.length > 0) {
       const overlay = document.getElementById('profile-overlay');
@@ -344,6 +339,7 @@ async function loadDiscovery(options = {}) {
       // Loading another page starts at the first new person, never at profile one.
       if (options.append && options.focusFirstNew && appendedProfileCount > 0) {
         currentIndex = profileCountBeforeAppend;
+        trimDiscoverProfileWindow();
         updateProfileOverlay(currentIndex);
       } else if (options.preserveIndex && currentIndex > 0 && currentIndex < discoverProfiles.length) {
         updateProfileOverlay(currentIndex);
@@ -353,6 +349,12 @@ async function loadDiscovery(options = {}) {
       }
       updateNavButtons();
     }
+
+    // Cache only the bounded carousel window, never an unbounded list of users.
+    try {
+      sessionStorage.setItem('discover_profiles', JSON.stringify(discoverProfiles));
+      localStorage.setItem('discover_profiles', JSON.stringify(discoverProfiles));
+    } catch (e) {}
     
     init3DScene();
   } catch (err) {
@@ -362,6 +364,32 @@ async function loadDiscovery(options = {}) {
   } finally {
     discoveryLoading = false;
   }
+}
+
+async function fetchDiscoverPage(url, retriesRemaining = 1) {
+  try {
+    return await apiCall(url);
+  } catch (err) {
+    const message = String(err && err.message ? err.message : err).toLowerCase();
+    const shouldRetry = retriesRemaining > 0 && !message.includes('too many requests') && !message.includes('invalid discover continuation');
+    if (!shouldRetry) throw err;
+
+    // One short retry makes transient Render/Firebase hand-offs invisible without
+    // creating a retry storm or extra load from repeated button presses.
+    await new Promise(resolve => setTimeout(resolve, 500));
+    return fetchDiscoverPage(url, retriesRemaining - 1);
+  }
+}
+
+function trimDiscoverProfileWindow() {
+  const overflow = discoverProfiles.length - DISCOVER_MAX_WINDOW_SIZE;
+  if (overflow <= 0) return;
+
+  // Retain enough history for Back while releasing old avatar DOM nodes.
+  const removable = Math.min(overflow, Math.max(0, currentIndex - DISCOVER_BACKTRACK_SIZE));
+  if (removable <= 0) return;
+  discoverProfiles.splice(0, removable);
+  currentIndex -= removable;
 }
 
 function init3DScene() {
@@ -586,7 +614,7 @@ window.loadMoreDiscover = async function () {
   if (discoveryLoading) return;
   
   // If server says there are no more profiles, show a friendly message
-  if (!discoverHasMore) {
+  if (!discoverHasMore || !discoverNextCursor) {
     if (window.showToast) {
       showToast('No more profiles to show', 'info');
     }

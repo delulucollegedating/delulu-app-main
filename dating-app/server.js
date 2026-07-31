@@ -276,6 +276,75 @@ const discoverLimiter = rateLimit({
 const sessionCache = new Map();
 const CACHE_TTL = 30 * 1000; // 30 seconds
 
+// A viewer's Discover order is expensive to build (connections, blocks and
+// compatibility ranking). Keep that ordered snapshot briefly, then page it
+// with a signed cursor so pressing "View more" never re-runs the Firebase work.
+const discoverFeedCache = new Map();
+const DISCOVER_FEED_CACHE_TTL = 10 * 60 * 1000;
+const DISCOVER_FEED_CACHE_MAX = 500;
+
+function getDiscoverFeedCacheKey(userId, genderFilter) {
+  return `${Number(userId)}:${genderFilter || 'all'}`;
+}
+
+function getCachedDiscoverFeed(userId, genderFilter) {
+  const key = getDiscoverFeedCacheKey(userId, genderFilter);
+  const entry = discoverFeedCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp >= DISCOVER_FEED_CACHE_TTL) {
+    discoverFeedCache.delete(key);
+    return null;
+  }
+  return entry;
+}
+
+function setCachedDiscoverFeed(userId, genderFilter, feed) {
+  const key = getDiscoverFeedCacheKey(userId, genderFilter);
+  discoverFeedCache.set(key, { ...feed, timestamp: Date.now() });
+  if (discoverFeedCache.size > DISCOVER_FEED_CACHE_MAX) {
+    const oldestKey = discoverFeedCache.keys().next().value;
+    if (oldestKey) discoverFeedCache.delete(oldestKey);
+  }
+}
+
+function invalidateDiscoverFeed(userId = null) {
+  if (userId === null || userId === undefined) {
+    discoverFeedCache.clear();
+    return;
+  }
+  const idPrefix = `${Number(userId)}:`;
+  for (const key of discoverFeedCache.keys()) {
+    if (key.startsWith(idPrefix)) discoverFeedCache.delete(key);
+  }
+}
+
+function createDiscoverCursor(userId, genderFilter, start) {
+  const payload = JSON.stringify({ u: Number(userId), g: genderFilter || 'all', s: start });
+  const signature = crypto.createHmac('sha256', process.env.SESSION_SECRET).update(payload).digest('hex');
+  return Buffer.from(`${payload}.${signature}`).toString('base64url');
+}
+
+function readDiscoverCursor(cursor, userId, genderFilter) {
+  if (!cursor || typeof cursor !== 'string' || cursor.length > 1024) return null;
+  try {
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+    const separator = decoded.lastIndexOf('.');
+    if (separator < 1) return null;
+    const payload = decoded.slice(0, separator);
+    const signature = decoded.slice(separator + 1);
+    const expected = crypto.createHmac('sha256', process.env.SESSION_SECRET).update(payload).digest('hex');
+    const signatureBuffer = Buffer.from(signature, 'hex');
+    const expectedBuffer = Buffer.from(expected, 'hex');
+    if (signatureBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)) return null;
+
+    const data = JSON.parse(payload);
+    if (data.u !== Number(userId) || data.g !== (genderFilter || 'all') || !Number.isSafeInteger(data.s) || data.s < 0) return null;
+    return data.s;
+  } catch (err) {
+    return null;
+  }
+}
+
 function getCachedUser(userId) {
   const cached = sessionCache.get(userId);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
@@ -1160,104 +1229,112 @@ app.put('/api/users/me', requireAuth, async (req, res) => {
   req.session.user = safeUser;
   // Update in-memory session cache and req.session.user immediately
   setCachedUser(req.session.userId, safeUser);
+  // A changed bio/avatar/hobby can affect profile details and compatibility
+  // ordering in any viewer's cached Discover feed.
+  invalidateDiscoverFeed();
   res.json({ success: true, user: safeUser });
 });
 
-// Discover profiles (paginated — 15 per page by default)
+// Discover profiles (cursor-paginated — 15 per page by default)
 app.get('/api/discover', requireAuth, async (req, res) => {
   try {
-    const user = await userOps.getById(req.session.userId);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-
-    // Pagination params: ?page=1&limit=15
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    // Cursor is bound to the signed-in user and selected filter, preventing
+    // tampering while allowing a feed cache to be safely rebuilt after expiry.
     const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 15));
-
-    // Optional ?gender=male|female filter chosen by the user on the discover page.
     const rawGender = req.query.gender;
     const genderFilter = (rawGender === 'male' || rawGender === 'female') ? rawGender : null;
-
-    // Get IDs of users already connected with (active/pending only)
-    const excludeIds = await connectionOps.getConnectedUserIds(req.session.userId);
-    const result = await userOps.getDiscoverable(req.session.userId, genderFilter, excludeIds);
-    const profiles = (result && result.profiles) || [];
-    const hasActiveConnection = !!(result && result.hasActiveConnection);
-
-    // Map profiles and calculate hobby matches (case-insensitive)
-    let userHobbies = [];
-    try {
-      userHobbies = Array.isArray(user.hobbies) ? user.hobbies : JSON.parse(user.hobbies || '[]');
-    } catch (e) {
-      userHobbies = [];
+    const hasCursor = typeof req.query.cursor === 'string' && req.query.cursor.length > 0;
+    const start = hasCursor ? readDiscoverCursor(req.query.cursor, req.session.userId, genderFilter) : 0;
+    if (hasCursor && start === null) {
+      return res.status(400).json({ error: 'Invalid discover continuation. Please refresh the feed.' });
     }
-    const userHobbiesLower = userHobbies.map(h => String(h).toLowerCase());
 
-    const mappedProfiles = profiles.map(p => {
-      let profileHobbies = [];
+    let feed = getCachedDiscoverFeed(req.session.userId, genderFilter);
+    if (!feed) {
+      const user = await userOps.getById(req.session.userId);
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      // This Firebase-backed work runs once per viewer/filter cache window,
+      // rather than once for every continuation page.
+      const excludeIds = await connectionOps.getConnectedUserIds(req.session.userId);
+      const result = await userOps.getDiscoverable(req.session.userId, genderFilter, excludeIds);
+      const profiles = (result && result.profiles) || [];
+      let userHobbies = [];
       try {
-        profileHobbies = Array.isArray(p.hobbies) ? p.hobbies : JSON.parse(p.hobbies || '[]');
+        userHobbies = Array.isArray(user.hobbies) ? user.hobbies : JSON.parse(user.hobbies || '[]');
       } catch (e) {
-        profileHobbies = [];
+        userHobbies = [];
       }
-      const profileHobbiesLower = profileHobbies.map(h => String(h).toLowerCase());
-      const matchingHobbiesLower = userHobbiesLower.filter(h => profileHobbiesLower.includes(h));
-      const matchingHobbies = matchingHobbiesLower.map(lh => userHobbies[userHobbiesLower.indexOf(lh)] || lh);
-      const matchCount = matchingHobbies.length;
+      const userHobbiesLower = userHobbies.map(h => String(h).toLowerCase());
 
-      const avatarStr = (p.avatar && typeof p.avatar === 'string') ? p.avatar : null;
-      const genderStr = p.gender || 'other';
+      const mappedProfiles = profiles.map(p => {
+        let profileHobbies = [];
+        try {
+          profileHobbies = Array.isArray(p.hobbies) ? p.hobbies : JSON.parse(p.hobbies || '[]');
+        } catch (e) {
+          profileHobbies = [];
+        }
+        const profileHobbiesLower = profileHobbies.map(h => String(h).toLowerCase());
+        const matchingHobbiesLower = userHobbiesLower.filter(h => profileHobbiesLower.includes(h));
+        const matchingHobbies = matchingHobbiesLower.map(lh => userHobbies[userHobbiesLower.indexOf(lh)] || lh);
+        const matchCount = matchingHobbies.length;
 
-      return {
-        id: p.id,
-        username: p.username || 'Student',
-        bio: p.bio || '',
-        hobbies: profileHobbies,
-        matching_hobbies: matchingHobbies,
-        match_count: matchCount,
-        avatar: {
-          idle: avatarStr ? (() => {
-            const match = avatarStr.match(/^(male|female)_(\d+)$/);
-            if (match) {
-              const num = parseInt(match[2], 10);
-              if (num < 10 && !match[2].startsWith('0')) {
-                return `/avatars/${genderStr}/${match[1]}_0${num}/idle.png`;
+        const avatarStr = (p.avatar && typeof p.avatar === 'string') ? p.avatar : null;
+        const genderStr = p.gender || 'other';
+
+        return {
+          id: p.id,
+          username: p.username || 'Student',
+          bio: p.bio || '',
+          hobbies: profileHobbies,
+          matching_hobbies: matchingHobbies,
+          match_count: matchCount,
+          avatar: {
+            idle: avatarStr ? (() => {
+              const match = avatarStr.match(/^(male|female)_(\d+)$/);
+              if (match) {
+                const num = parseInt(match[2], 10);
+                if (num < 10 && !match[2].startsWith('0')) {
+                  return `/avatars/${genderStr}/${match[1]}_0${num}/idle.png`;
+                }
               }
-            }
-            return `/avatars/${genderStr}/${avatarStr}/idle.png`;
-          })() : null,
-          wave: avatarStr ? (() => {
-            const match = avatarStr.match(/^(male|female)_(\d+)$/);
-            if (match) {
-              const num = parseInt(match[2], 10);
-              if (num < 10 && !match[2].startsWith('0')) {
-                return `/avatars/${genderStr}/${match[1]}_0${num}/wave.png`;
+              return `/avatars/${genderStr}/${avatarStr}/idle.png`;
+            })() : null,
+            wave: avatarStr ? (() => {
+              const match = avatarStr.match(/^(male|female)_(\d+)$/);
+              if (match) {
+                const num = parseInt(match[2], 10);
+                if (num < 10 && !match[2].startsWith('0')) {
+                  return `/avatars/${genderStr}/${match[1]}_0${num}/wave.png`;
+                }
               }
-            }
-            return `/avatars/${genderStr}/${avatarStr}/wave.png`;
-          })() : null
-        },
-        gender: genderStr
-      };
-    });
+              return `/avatars/${genderStr}/${avatarStr}/wave.png`;
+            })() : null
+          },
+          gender: genderStr
+        };
+      });
 
-    // Sort by match count descending (most matching hobbies first), then stable tie-breaker by ID
-    mappedProfiles.sort((a, b) => {
-      if (b.match_count !== a.match_count) return b.match_count - a.match_count;
-      return String(a.id || '').localeCompare(String(b.id || ''));
-    });
+      mappedProfiles.sort((a, b) => {
+        if (b.match_count !== a.match_count) return b.match_count - a.match_count;
+        return String(a.id || '').localeCompare(String(b.id || ''));
+      });
+      feed = { profiles: mappedProfiles, hasActiveConnection: !!(result && result.hasActiveConnection) };
+      setCachedDiscoverFeed(req.session.userId, genderFilter, feed);
+    }
 
-    // Paginate: slice the sorted list
-    const start = (page - 1) * limit;
-    const paginatedProfiles = mappedProfiles.slice(start, start + limit);
-    const totalCount = mappedProfiles.length;
+    const paginatedProfiles = feed.profiles.slice(start, start + limit);
+    const totalCount = feed.profiles.length;
     const hasMore = start + limit < totalCount;
+    const nextCursor = hasMore ? createDiscoverCursor(req.session.userId, genderFilter, start + limit) : null;
 
     res.json({
       profiles: paginatedProfiles,
-      hasActiveConnection,
-      page,
+      hasActiveConnection: feed.hasActiveConnection,
+      page: Math.floor(start / limit) + 1,
       limit,
       hasMore,
+      nextCursor,
       totalCount
     });
   } catch (err) {
@@ -1281,6 +1358,8 @@ app.post('/api/connections/request', requireAuth, discoverLimiter, async (req, r
 
   const result = await connectionOps.sendRequest(req.session.userId, to_user_id);
   if (result.error) return res.status(400).json(result);
+  invalidateDiscoverFeed(req.session.userId);
+  invalidateDiscoverFeed(to_user_id);
   
   // Notify the target user about the connection request
   const reqUser = await userOps.getById(req.session.userId);
@@ -1297,6 +1376,7 @@ app.post('/api/connections/dismiss', requireAuth, discoverLimiter, async (req, r
   if (!to_user_id) return res.status(400).json({ error: 'Missing target user' });
   
   const result = await connectionOps.dismiss(req.session.userId, to_user_id);
+  invalidateDiscoverFeed(req.session.userId);
   res.json(result);
 });
 
@@ -1320,11 +1400,13 @@ app.post('/api/connections/respond', requireAuth, async (req, res) => {
   }
   const result = await connectionOps.respond(connection_id, req.session.userId, action);
   if (result.error) return res.status(400).json(result);
+  invalidateDiscoverFeed(req.session.userId);
   
   // Emit match-celebration event to the requester when their request is accepted
   if (action === 'accept') {
     const conn = await connectionOps.getConnectionById(connection_id);
     if (conn) {
+      invalidateDiscoverFeed(conn.from_user_id);
       const accepter = await userOps.getById(req.session.userId);
       const requester = await userOps.getById(conn.from_user_id);
       if (accepter && requester) {
@@ -1354,6 +1436,7 @@ app.delete('/api/connections/:id', requireAuth, async (req, res) => {
     if (result.error.includes('authorized')) return res.status(403).json(result);
     return res.status(400).json(result);
   }
+  invalidateDiscoverFeed(req.session.userId);
   res.json(result);
 });
 
@@ -1532,6 +1615,8 @@ app.post('/api/connections/end', requireAuth, async (req, res) => {
   evictConnectionAuth(connection_id); // Invalidate auth cache immediately
   const result = await connectionOps.endConnection(connection_id, req.session.userId);
   if (result.error) return res.status(400).json(result);
+  invalidateDiscoverFeed(req.session.userId);
+  if (result.otherId) invalidateDiscoverFeed(result.otherId);
 
   // Automatically delete all messages for this connection from Supabase Postgres
   const { getSupabase } = require('./db/supabase');
@@ -2274,4 +2359,9 @@ if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
   });
 }
 
-module.exports = { app, server };
+module.exports = {
+  app,
+  server,
+  // Kept private-by-convention; used by the focused cursor contract tests.
+  __discoverTestUtils: { createDiscoverCursor, readDiscoverCursor }
+};
