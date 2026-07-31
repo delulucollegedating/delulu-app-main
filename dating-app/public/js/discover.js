@@ -226,12 +226,25 @@ function navigateCards(dir) {
 }
 
 function updateNavButtons() {
-  document.getElementById('btn-scroll-left').style.opacity = currentIndex <= 0 ? '0.3' : '1';
-  document.getElementById('btn-scroll-left').style.pointerEvents = currentIndex <= 0 ? 'none' : 'auto';
-  document.getElementById('btn-scroll-right').style.opacity = currentIndex >= discoverProfiles.length - 1 ? '0.3' : '1';
-  document.getElementById('btn-scroll-right').style.pointerEvents = currentIndex >= discoverProfiles.length - 1 ? 'none' : 'auto';
-  
-  // Show "View More" only when user reaches the last card AND more profiles exist
+  const leftButton = document.getElementById('btn-scroll-left');
+  const rightButton = document.getElementById('btn-scroll-right');
+  const isAtFirstCard = currentIndex <= 0;
+  const isAtLastCard = discoverProfiles.length > 0 && currentIndex >= discoverProfiles.length - 1;
+
+  if (leftButton) {
+    leftButton.style.opacity = isAtFirstCard ? '0.3' : '1';
+    leftButton.style.pointerEvents = isAtFirstCard ? 'none' : 'auto';
+    leftButton.disabled = isAtFirstCard;
+  }
+
+  if (rightButton) {
+    // At a page boundary, View more takes the next arrow's place.
+    rightButton.classList.toggle('hidden', isAtLastCard && discoverHasMore);
+    rightButton.style.opacity = isAtLastCard ? '0.3' : '1';
+    rightButton.style.pointerEvents = isAtLastCard ? 'none' : 'auto';
+    rightButton.disabled = isAtLastCard;
+  }
+
   showLoadMoreButton();
 }
 
@@ -261,6 +274,8 @@ function updateProfileOverlay(index) {
 async function loadDiscovery(options = {}) {
   if (discoveryLoading) return;
   if (options.skipRecent && Date.now() - lastDiscoveryLoadAt < 60000) return;
+  // A visibility refresh must never collapse a deck that the user has paged through.
+  if (options.preserveIndex && discoverProfiles.length > 0) return;
 
   // Instant zero-latency render from local cache (eliminates skeleton waiting time)
   if (!discoverProfiles.length) {
@@ -282,7 +297,8 @@ async function loadDiscovery(options = {}) {
   discoveryLoading = true;
   try {
     // Build URL with optional gender filter and pagination params
-    const pageToLoad = options.append ? discoverPage : 1;
+    const pageToLoad = options.page || (options.append ? discoverPage + 1 : 1);
+    const profileCountBeforeAppend = discoverProfiles.length;
     const genderParam = (activeGenderFilter && activeGenderFilter !== 'all')
       ? `?gender=${activeGenderFilter}&page=${pageToLoad}&limit=${DISCOVER_PAGE_SIZE}`
       : `?page=${pageToLoad}&limit=${DISCOVER_PAGE_SIZE}`;
@@ -297,12 +313,14 @@ async function loadDiscovery(options = {}) {
     
     const newProfiles = data.profiles || [];
     
+    let appendedProfileCount = 0;
     if (options.append && discoverProfiles.length > 0) {
       // Append mode: deduplicate and add to existing deck
       const existingIds = new Set(discoverProfiles.map(p => p.id));
       const freshProfiles = newProfiles.filter(p => !existingIds.has(p.id));
       if (freshProfiles.length > 0) {
         discoverProfiles.push(...freshProfiles);
+        appendedProfileCount = freshProfiles.length;
       }
     } else {
       // Normal mode: replace entire deck
@@ -323,10 +341,13 @@ async function loadDiscovery(options = {}) {
       const overlay = document.getElementById('profile-overlay');
       if (overlay) overlay.classList.remove('hidden');
 
-      // preserveIndex: keep the user on the card they were viewing
-      if (options.preserveIndex && currentIndex > 0 && currentIndex < discoverProfiles.length) {
+      // Loading another page starts at the first new person, never at profile one.
+      if (options.append && options.focusFirstNew && appendedProfileCount > 0) {
+        currentIndex = profileCountBeforeAppend;
         updateProfileOverlay(currentIndex);
-      } else {
+      } else if (options.preserveIndex && currentIndex > 0 && currentIndex < discoverProfiles.length) {
+        updateProfileOverlay(currentIndex);
+      } else if (!options.append) {
         currentIndex = 0;
         updateProfileOverlay(0);
       }
@@ -554,10 +575,11 @@ function showDiscoverSkeletons(count = 6) {
 function showLoadMoreButton() {
   const btn = document.getElementById('btn-load-more');
   if (!btn) return;
-  // Show button whenever user is on the last card (regardless of hasMore)
-  // Unless the user has already exhausted all profiles (discoverAllLoaded flag)
+  // Only offer another page at the end of the current deck when one exists.
   const isAtLastCard = discoverProfiles.length > 0 && currentIndex >= discoverProfiles.length - 1;
-  btn.classList.toggle('hidden', !isAtLastCard || discoverAllLoaded);
+  const shouldShow = isAtLastCard && discoverHasMore && !discoverAllLoaded;
+  btn.classList.toggle('hidden', !shouldShow);
+  btn.setAttribute('aria-hidden', shouldShow ? 'false' : 'true');
 }
 
 window.loadMoreDiscover = async function () {
@@ -574,7 +596,6 @@ window.loadMoreDiscover = async function () {
     return;
   }
   
-  const nextPage = discoverPage + 1; // defer commit until success
   // Show shimmer skeleton cards while loading
   showDiscoverSkeletons(6);
   // Show loading state on button
@@ -585,12 +606,10 @@ window.loadMoreDiscover = async function () {
   }
   
   try {
-    discoverPage = nextPage;
-    await loadDiscovery({ append: true });
+    await loadDiscovery({ append: true, focusFirstNew: true });
   } catch (err) {
-    // API failure — restore the previous scene and button, roll back page
+    // API failure — restore the previous scene and button.
     console.error('Load more failed, restoring UI:', err);
-    discoverPage--;
     if (discoverProfiles && discoverProfiles.length > 0) {
       init3DScene();
     }

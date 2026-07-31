@@ -223,6 +223,9 @@ window.updateAvatarScene = function(index) {
   targetIndex = index;
   currentCenterIndex = index;
 
+  // Keep Discover's pagination and navigation controls in sync with swipes.
+  if (typeof window.setCurrentIndex === 'function') window.setCurrentIndex(index);
+
   applyLayout(index);
 
   if (typeof window.updateProfileOverlay === 'function') window.updateProfileOverlay(index);
