@@ -6,7 +6,7 @@
 
 ## 1. Project Overview
 
-**Delulu** is an anonymous college dating app where identities are **hidden by design**. Users connect based on interests, chat anonymously, and only reveal their real identity after building a genuine connection over 7+ days. Think of it as "Blind Dating + Slow Dating" built for college students.
+**Delulu** is an anonymous college dating app where identities are **hidden by design**. Users connect based on interests, chat anonymously over a **10-day Slow Dating timeline**, and reveal their face/identity to meet on **Day 10**. Think of it as "Blind Dating + Slow Dating" built for college students.
 
 **Live URL**: https://delulu-college.onrender.com  
 **Android APK**: `public/delulu.apk` (served locally — too large for GitHub)  
@@ -19,6 +19,8 @@
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
 | Server | Express.js (Node 18+) | REST API + SSE + Socket.io |
+| Compression | `compression` (Gzip / Brotli) | Response compression for JSON/text $\ge 1\text{KB}$ |
+| Fault Resilience | `CircuitBreaker` (`utils/circuitBreaker.js`) | Protects Supabase DB, Brevo Email, and Push APIs |
 | Primary DB | Firebase Firestore | Users, connections, games |
 | Messages DB | Supabase Postgres | All chat messages (high write) |
 | Sessions | connect-pg-simple → Supabase | Persistent 30-day sessions |
@@ -39,14 +41,15 @@
 ```
 dating-app/
 ├── server.js           # All API routes (1800+ lines)
-├── database.js         # All Firestore + Supabase operations (1578 lines)
-├── db/supabase.js      # Supabase client (service-role, server-only)
+├── database.js         # All Firestore + Supabase operations (2000+ lines)
+├── db/supabase.js      # Supabase client (service-role, server-only) + supabaseBreaker
+├── utils/circuitBreaker.js # CircuitBreaker fault isolation wrapper
 ├── firestore.rules     # Firestore security rules
 ├── capacitor.config.json
 ├── android/            # Capacitor Android project
 └── public/
     ├── login.html       # Auth page (signup + OTP + login)
-    ├── discover.html    # Profile swiping (3D card carousel)
+    ├── discover.html    # Profile swiping (3D card carousel + pagination)
     ├── requests.html    # Pending/sent connection requests
     ├── messages.html    # Active chats list
     ├── chat.html        # Individual chat room
@@ -55,11 +58,11 @@ dating-app/
     └── js/
         ├── shared.js    # Global utilities, auth, socket mock, navigation
         ├── login.js     # Signup/login/OTP flow
-        ├── discover.js  # Discovery + connect/dismiss logic
+        ├── discover.js  # Discovery + pagination + connect/dismiss logic
         ├── requests.js  # Accept/reject request UI
         ├── messages.js  # Chat list + per-user SSE stream
-        ├── chat.js      # Full chat room (messages, games, reveal, voice)
-        ├── profile.js   # Profile edit
+        ├── chat.js      # Full chat room (messages, games, 10-day reveal, voice)
+        ├── profile.js   # Profile edit with optimistic rollback
         ├── crypto.js    # E2EE (Web Crypto API — AES-GCM + ECDH)
         ├── chat-cache.js # IndexedDB message cache (Dexie.js)
         └── avatar3d.js  # Three.js 3D avatar carousel for discover page
@@ -99,16 +102,12 @@ dating-app/
   status: "pending"|"accepted"|"rejected"|"expired"|"revealed",
   created_at: ISO8601,
   chat_started_at: ISO8601|null,
-  // Identity reveal (Day 7+)
-  identity_reveal_available_at: ISO8601|null,
-  from_identity_reveal: 0|1,
-  to_identity_reveal: 0|1,
-  meeting_code: String|null,   // Google Meet code when both agree
-  // Face reveal (Day 10+)
+  // 10-Day Face Reveal / Let's Meet
   face_reveal_available_at: ISO8601|null,
   from_face_reveal: 0|1,
   to_face_reveal: 0|1,
   face_reveal_declined_by: Number|null,
+  meeting_code: String|null,   // Google Meet code when both agree
   // Read receipts
   from_last_read_at: ISO8601|null,
   to_last_read_at: ISO8601|null,
@@ -186,41 +185,31 @@ function getEcosystem(email) {
 
 **Discovery query** always filters by `ecosystem === userEcosystem`. This is the core isolation mechanism.
 
-### 5.2 Discovery Algorithm & Gender Filter (UPDATED)
+### 5.2 Discovery Algorithm, Ecosystem Sharding & Pagination (UPDATED)
 The discover page shows profiles filtered by:
 1. **Same ecosystem** as the viewer (mandatory college isolation)
-2. **Inclusive Gender Filter**: Users can discover and send connection requests to **any user** in their ecosystem regardless of gender. An interactive UI filter bar (`All`, `Male`, `Female`) lets users choose their view preference (defaults to `All`, persisted in `localStorage`). Passed to server as `/api/discover?gender=male|female|all`.
-3. **Exclude**: Active/pending connected users, blocked users, self
-4. **Deterministic Hobby Compatibility & Priority Ranking**:
-   - **Shared Hobbies**: +10 points per matching hobby
-   - **Bio Completeness**: +5 points for bios >10 characters
-   - **Deterministic Tie-Breaker**: User `ID` ascending (eliminates random jitter, ensuring 100% stable profile order across re-fetches)
-5. **Smart Deck Diffing & Stability**: `public/js/discover.js` compares incoming profile IDs with the current deck; if unchanged, it avoids 3D scene DOM teardown so avatars never jump, flicker, or reset under the user's hands.
-6. **Reconnection Allowed**: Users with `rejected` or `ended` connection status ("Not Vibing") are **NOT** excluded, so former connections can rediscover each other once their previous chat has ended.
+2. **Paginated Feed (15 profiles per page)**: `GET /api/discover?page=1&limit=15`. Slices the personalized candidate pool. The UI shows a floating **View More** button at the end of each batch to load additional profiles smoothly.
+3. **Ecosystem Sharded In-Memory Candidates Cache**: Shared ecosystem candidates are cached in memory (`ecosystemCandidatesCache`, 5 min TTL) to eliminate database read load during high concurrent traffic.
+4. **Dynamic Hole Hydration**: Viewer-specific exclusions (already connected users, blocked users, self) and case-insensitive hobby compatibility scores are computed dynamically per request without mutating the cached candidate pool.
+5. **Deterministic Tie-Breaker**: Sorted by hobby compatibility score descending, then `String(a.id).localeCompare(String(b.id))` as a stable tie-breaker.
+6. **Multi-Tiered Query Fallback**: If a composite Firestore query fails or an index is missing, discovery automatically falls back through 3 levels of in-memory filtering, guaranteeing **0 server crashes (HTTP 500)**.
+7. **Reconnection Allowed**: Users with `rejected` or `ended` connection status ("Not Vibing") are **NOT** excluded, allowing former connections to rediscover each other once their previous chat has ended.
 
-The `getDiscoverable(userId, genderFilter, excludeIds)` method in `database.js` handles this. `excludeIds` is populated from `getConnectedUserIds()` — which filters only for users with active or pending connections (`pending`, `accepted`, `revealed`).
-
-### 5.3 Connection Lifecycle (CRITICAL — DO NOT CHANGE)
+### 5.3 Connection Lifecycle (10-DAY SLOW DATING)
 ```
 [Discover] → Send Request (status: "pending")
     ↓
 [Requests page] → Accept → status: "accepted"
     - chat_started_at = NOW
-    - identity_reveal_available_at = NOW + 7 days
     - face_reveal_available_at = NOW + 10 days
     ↓
-[Chat] Day 0-6: Anonymous chat only
+[Chat] Day 1-9: Anonymous chat only
+    - Status subtext displays: "Face reveal in Xd"
     ↓
-[Chat] Day 7+: Identity Reveal button appears
-    - Both users must click to agree
-    - Firestore transaction ensures atomicity
-    - If both agree → meeting_code generated → Google Meet link
+[Chat] Day 10+: Face Reveal & Let's Meet button unlocks
+    - Both users click "Let's Meet" to reveal face & identity
+    - If both agree → meeting_code generated → Google Meet video room
     - status changes to "revealed"
-    ↓
-[Chat] Day 10+: Face Reveal button appears
-    - Both must agree within the window
-    - If either declines → other user gets notification
-    - If window passes without both agreeing → status: "expired" (sweepExpired)
 ```
 
 **Either user can end the chat at any time** with "Not Vibing" button → status: "rejected", ended_reason: "not_vibing". Ending a chat instantly clears messages from Supabase Postgres, releases exclusive 1-to-1 active connection locks, and broadcasts `ended` (chat room) and `chat_ended` (messages list) SSE events to both users.
@@ -228,34 +217,18 @@ The `getDiscoverable(userId, genderFilter, excludeIds)` method in `database.js` 
 ### 5.4 Connection Expiry Sweep (Background Job)
 `connectionOps.sweepExpired()` runs on a schedule (every 24h):
 - Connections where `face_reveal_available_at < NOW` AND NOT both agreed → status: "expired"
-- Connections where `identity_reveal_available_at < NOW` AND neither agreed → status: "expired"
 
 ### 5.5 Icebreak Game Algorithm (CRITICAL — DO NOT CHANGE)
-Three game types: `would_you_rather`, `truth_or_dare`, `hot_takes`.
-
-State machine:
-```
-No game → Start game → active_game written to Firestore connection doc
-    ↓
-User A answers → answers[userA_id] stored in active_game.answers
-    ↓
-User B answers → bothAnswered=true → SSE/socket broadcasts answers to both
-    ↓
-30-second delay → /api/connections/:id/game/clear → active_game: null
-```
-
-Game state is stored **inline on the connection document** as `active_game`. This is intentional — it avoids a separate collection and ensures atomic updates via Firestore transactions.
+Three game types: `would_you_rather`, `this_or_that`, `question`.
+Atomic transaction locks in `connectionOps.startGame` and client deduplication (`isStartingIcebreaker`) prevent simultaneous tap desynchronization between both users.
 
 ### 5.6 E2EE Algorithm
 Using Web Crypto API (browser-native):
-
 1. **Key Generation**: On registration, generate ECDH P-256 key pair
 2. **Key Storage**: Public key → Firestore `users/{id}.public_key`; private key → AES-GCM encrypted with user password via PBKDF2 (100,000 iterations) → `users/{id}.encrypted_private_key`
 3. **Shared Secret**: When chat opens, derive ECDH shared secret from own private key + partner's public key
 4. **Encryption**: AES-GCM with random 128-bit IV; ciphertext in `content`, IV stored separately
 5. **Flag**: `is_encrypted: 1` on encrypted messages
-
-E2EE is opt-in and only active when both users have public keys. Plain-text fallback otherwise.
 
 ---
 
@@ -267,64 +240,18 @@ E2EE is opt-in and only active when both users have public keys. Plain-text fall
 ### 6.1 Per-Connection SSE (`/api/connections/:id/stream`)
 - Client opens `EventSource` when entering a chat room
 - Server uses `connectionEmitter` (Node.js EventEmitter) to push events
-- Event types:
-  - `message` — new message; **contains full `msg` object** (zero extra fetch needed)
-  - `read` — other user read messages; `readAt` timestamp included
-  - `typing` — 100% in-memory typing indicator (`isTyping: true/false`, 0 DB cost)
-  - `presence` — 100% in-memory live online/offline status (`status: 'online'/'offline'`, 0 DB cost)
-  - `game` — game state changed
-  - `info` — chat info refresh
-  - `ended` — chat ended by other user ("Not Vibing")
+- Event types: `message`, `read`, `typing`, `presence`, `game`, `info`, `ended`
 - Heartbeat every 25s prevents Render proxy timeout
-- Reconnect uses exponential backoff (2s → 4s → 8s → 16s → 30s cap)
 
 ### 6.2 Per-User SSE (`/api/user/stream`)
 - Client opens on messages list page
 - Server uses `userEmitter` to push events
-- Events: 
-  - `{ type: 'message', connectionId, lastMessage, lastMessageTime, senderId, senderName }`
-  - `{ type: 'chat_ended', connectionId }`
-- Client calls `updateChatListItem()` for instant message list updates, or `loadMessagesList()` when a `chat_ended` event arrives
-- Displays rich Telegram-style top toasts (`showRichToast({ senderName, preview, connectionId })`) when new messages arrive from other chats
-- Updates browser tab title with unread badge count (`setTitleUnread(count)` → `(3) Delulu`), auto-cleared when tab gains focus
-
-### 6.3 Message Delivery Flow (WhatsApp-like)
-```
-User sends message
-→ POST /api/messages/send → saved to Supabase
-→ connectionEmitter emits: { type: 'message', msg: fullMessageObject }
-→ userEmitter emits to other user: { type: 'message', connectionId, ... }
-→ sendPushNotification() called for other user
-→ Receiver's SSE fires immediately
-→ Client appends message directly (ZERO extra HTTP round-trip)
-```
-
-### 6.4 Read Receipt Flow
-```
-User opens chat → markMessagesAsRead()
-→ POST /api/messages/:connectionId/read
-→ Server updates from_last_read_at / to_last_read_at in Firestore
-→ connectionEmitter emits: { type: 'read', readAt }
-→ Sender's SSE fires → blue double-tick appears instantly
-```
+- Displays rich Telegram-style top toasts (`showRichToast`) and updates browser tab title with unread badge count (`(3) Delulu`)
 
 ---
 
 ## 7. Authentication & Session
 
-### Registration Flow
-1. Enter college email → POST `/api/auth/send-verification-email` (Brevo OTP)
-2. Verify OTP → POST `/api/auth/verify-otp`
-3. Complete profile → POST `/api/auth/register`
-4. Session created, `cached_user` in localStorage
-
-### `requireAuth()` — Optimistic Cache Pattern
-1. Check `localStorage.cached_user`
-2. If exists → render immediately (optimistic, non-blocking)
-3. Background verify with server (3s timeout)
-4. If invalid → clear cache → redirect to login
-
-### Session Configuration
 - **Store**: Supabase Postgres (`connect-pg-simple`) — requires `SUPABASE_DB_URL` env var
 - **Fallback**: `memorystore` (sessions lost on restart) if no `SUPABASE_DB_URL`
 - **TTL**: 30 days, `rolling: true`
@@ -332,156 +259,25 @@ User opens chat → markMessagesAsRead()
 
 ---
 
-## 8. Push Notifications
-
-### Web Push
-1. `initPushNotifications()` → request permission → register SW → get VAPID key
-2. Subscription stored in Supabase `push_subscriptions`
-3. On new message → `sendPushNotification(userId, title, body, url)` via `web-push`
-
-### Native Android (`@capacitor/local-notifications`)
-- `showNativeNotification({ title, body, url, id })` in `shared.js`
-- Called from chat.js SSE handler when `document.hidden === true`
-- Called from messages.js SSE handler on incoming messages
-
----
-
-## 9. Android App (Capacitor)
-
-- **Config**: `capacitor.config.json` — `webDir: "public"`, server: `https://delulu-college.onrender.com`
-- **Plugins**: `@capacitor/app` (back button), `@capacitor/local-notifications`
-- **Back navigation**: `initNativeBackButton()` intercepts hardware back
-  - Chat → Messages → Discover → Exit (confirm dialog)
-- **Build**: `npx cap sync android` → `./gradlew assembleRelease`
-- **APK**: 126MB — gitignored, distribute via Google Drive
-
----
-
-## 10. Key API Endpoints
-
-### Auth
-- `POST /api/auth/send-verification-email` — send OTP
-- `POST /api/auth/verify-otp` — verify OTP
-- `POST /api/auth/register` — create account
-- `POST /api/auth/login` — login
-- `POST /api/auth/logout` — destroy session
-- `GET /api/session` — check auth status
-
-### Discovery
-- `GET /api/discover` — shuffled profiles (ecosystem filtered)
-- `POST /api/connections/request` — send connection request
-- `POST /api/connections/dismiss` — dismiss profile
-
-### Connections
-- `GET /api/connections/pending` — incoming requests
-- `GET /api/connections/sent` — outgoing requests
-- `POST /api/connections/:id/respond` — accept or reject
-- `POST /api/connections/end` — end active chat
-- `GET /api/connections/active` — all active chats
-
-### Chat
-- `GET /api/messages/:connectionId` — load messages (paginated)
-- `POST /api/messages/send` — send text
-- `POST /api/messages/upload-voice` — send voice note
-- `POST /api/messages/:id/react` — toggle emoji reaction
-- `DELETE /api/messages/:id` — soft-delete
-- `POST /api/messages/:connectionId/read` — mark as read
-- `GET /api/connections/:id/stream` — SSE for chat room
-- `GET /api/user/stream` — SSE for messages list
-
-### Games
-- `POST /api/connections/:id/game/start`
-- `POST /api/connections/:id/game/answer`
-- `POST /api/connections/:id/game/clear`
-
-### Reveals
-- `POST /api/connections/:id/identity-reveal`
-- `POST /api/connections/:id/face-reveal`
-- `POST /api/connections/:id/face-reveal/decline`
-- `GET /api/connections/:id/info`
-
-### Profile
-- `GET /api/profile`
-- `PUT /api/profile`
-
----
-
-## 11. Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `SESSION_SECRET` | ✅ | 48+ byte hex secret |
-| `FIREBASE_PROJECT_ID` | ✅ | Firebase project |
-| `FIREBASE_CLIENT_EMAIL` | ✅ | Service account email |
-| `FIREBASE_PRIVATE_KEY` | ✅ | Service account private key |
-| `SUPABASE_URL` | ✅ | Supabase project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | ✅ | Supabase service role key |
-| `SUPABASE_DB_URL` | Recommended | Postgres URI for persistent sessions |
-| `BREVO_API_KEY` | ✅ | OTP email sending |
-| `VAPID_PUBLIC_KEY` | Optional | Web push |
-| `VAPID_PRIVATE_KEY` | Optional | Web push |
-| `NODE_ENV` | Recommended | Set to `production` on Render |
-
----
-
-## 12. Caching Architecture
-
-### Server-Side (in-memory)
-| Cache | TTL | Purpose |
-|-------|-----|---------|
-| `userByIdCache` | 15s | User profile reads |
-| `_connCache` | 2 min | Connection auth checks |
-| `_lastMessageCache` | 15s | Last message per connection |
-| `sessionCache` | 30s | Session validation |
-
-Cache invalidation via `evictConnection()` / `invalidateUserCache()` on every write.
-
-### Client-Side
-- `localStorage.cached_user` — instant auth
-- IndexedDB (Dexie.js) — offline message cache
-- `chatListCache` array — in-memory for SSE-driven list updates
-
----
-
-## 13. Developer Rules (MUST FOLLOW)
+## 8. Developer Rules (MUST FOLLOW)
 
 1. **Never break ecosystem isolation** — discovery MUST filter by ecosystem
 2. **Never skip connection ownership checks** — `getConnection(connectionId, userId)` on every message route
 3. **Never inject raw HTML** — always `escapeHtml()` on user content
 4. **Socket.io is mocked** — `socket.isMock = true`. Don't add real socket client code
 5. **Firestore for relationships, Supabase for messages** — permanent architecture split
-6. **Reveal timeline is sacred** — Day 7 = identity reveal, Day 10 = face reveal
+6. **Timeline is 10 days** — Day 1-9 = anonymous countdown, Day 10 = Face Reveal / Let's Meet
 7. **No server-rendered HTML** — pure MPA with static HTML + vanilla JS
 8. **Run `npx cap sync android`** before building APK after any web change
 9. **APK is gitignored** — 126MB, distribute manually
-10. **`SUPABASE_DB_URL` required for persistent sessions** — without it, users log out on every Render restart
-11. **Strict Anonymity & Privacy** — No in-chat photo sharing or selfie photo verification. Identities remain 100% anonymous until mutual Day 7 / Day 10 consent.
+10. **Strict Anonymity & Privacy** — No in-chat photo sharing or selfie photo verification. Identities remain 100% anonymous until mutual Day 10 consent.
 
 ---
 
-## 14. Known Constraints & Gotchas
+## 9. Performance & Resilience Architecture
 
-- **Render free tier cold starts**: Server sleeps after 15min. First request ~30s. SSE keeps it warm for active users.
-- **Firestore composite index**: `(ecosystem + gender)` on `users` collection needed for discover. Falls back to in-memory filter if missing.
-- **`sameSite: 'none'`** required in production for Capacitor WebView cross-origin cookies.
-- **`X-Accel-Buffering: no`** required on SSE responses to prevent Nginx buffering.
-- **25s SSE heartbeat** prevents Render's 30s proxy timeout.
-- **APK is 126MB** — exceeds GitHub's 100MB limit. Never commit to git.
-
----
-
-## 15. Design Engineering & Symmetrical Theme Architecture
-
-### 15.1 Emil Kowalski Design Engineering (`emil-design-eng`)
-- **Tactile Active Press Feedback**: All buttons, links, filter pills, request cards, and interactive elements feature `:active { transform: scale(0.96); }` with Emil's custom easing `--ease-out-emil` (`cubic-bezier(0.23, 1, 0.32, 1)`).
-- **Scale Entrance Rule**: Modals and toasts enter from `scale(0.95)` to `scale(1)` with opacity (never `scale(0)`).
-- **Glassmorphism & Depth**: Layered backdrop blurs (`backdrop-blur-md` & `backdrop-blur-xl`), subdued semi-transparent borders (`border-outline-variant/30`), and soft ambient glow shadows.
-
-### 15.2 Symmetrical Theme Engine (Dark / Light Mode)
-- **Unified Handlers**: `applyTheme(isDark)` and `toggleTheme()` in `public/js/shared.js` drive theme changes cleanly across all pages.
-- **No Dirty Inline Background Overrides**: `applyTheme()` clears any leftover `style.backgroundColor` on `document.documentElement` and `document.body` so CSS rules take effect cleanly without dark background leaks or split-color states.
-- **Synchronized Root Classes**: Symmetrical `.dark` class added to both `html` and `body`. Light mode resets explicitly handled by `html:not(.dark)` and `body:not(.dark)`.
-
-### 15.3 Mobile Viewport Responsiveness
-- **Fluid Viewport Scaling**: Avatar image heights (`clamp(180px, 28vh, 290px)`) and container heights (`clamp(200px, 30vh, 320px)`) scale dynamically on compact viewports (<780px & <680px).
-- **Bottom Navigation Clearance**: `<body class="pb-24 md:pb-6">` ensures connection buttons and content are never obscured by fixed mobile navbars on any device.
+1. **API Response Compression**: Express middleware uses `compression` (Gzip/Brotli) for responses $\ge 1\text{KB}$, bypassing SSE streams and pre-compressed media.
+2. **CircuitBreaker Fault Isolation**: `utils/circuitBreaker.js` protects external dependencies (`supabaseBreaker`, `brevoBreaker`, `pushBreaker`) with state transitions, concurrency caps, timeouts, and fallbacks.
+3. **Multi-Row Batched Writes**: Supabase messages use chunked multi-row inserts (`messageOps.bulkSend`), and Firestore uses transaction chunking (`BATCH_LIMIT = 400`).
+4. **Optimistic UI & Rollback**: Local state and UI update instantly on user actions (profile edits, swipes, invites, emoji reactions, message deletes), backed by `backupUser` snapshot capture and graceful rollback on server error.
+5. **Ecosystem Candidate Fragment Caching**: Discover candidate pools are cached per ecosystem (`ecosystemCandidatesCache`, 5 min TTL) with dynamic viewer exclusion hydration.
