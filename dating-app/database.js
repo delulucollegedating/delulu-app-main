@@ -288,8 +288,6 @@ const userOps = {
     const userDoc = await this.getById(userId);
     const userEcosystem = userDoc?.ecosystem || 'rishihood';
     
-    const isUserActive = await connectionOps.hasActiveConnection(userId);
-    
     // Fetch blocked users involving this user safely
     const blockedIds = [];
     try {
@@ -408,7 +406,7 @@ const userOps = {
       if (diff !== 0) return diff;
       return a.id - b.id;
     });
-    return { profiles: sorted, hasActiveConnection: isUserActive };
+    return { profiles: sorted };
   }
 };
 
@@ -548,11 +546,6 @@ const connectionOps = {
     return !!connection && ACTIVE_CONNECTION_STATUSES.includes(connection.status);
   },
 
-  async hasActiveConnection(userId) {
-    const activeConns = await this.getActiveConnections(userId);
-    return !!(activeConns && activeConns.length > 0);
-  },
-
   async sendRequest(fromId, toId) {
     const firestore = getDB();
 
@@ -564,19 +557,6 @@ const connectionOps = {
       return { error: 'You cannot connect with this student.' };
     }
     
-    // Check if either user already has an active connection (Exclusive 1-to-1 Pairing Rule)
-    const [fromActive, toActive] = await Promise.all([
-      this.hasActiveConnection(fromId),
-      this.hasActiveConnection(toId)
-    ]);
-
-    if (fromActive) {
-      return { error: 'You are currently in an active 10-day chat! Finish your chat or tap Not Vibing before connecting with someone new.' };
-    }
-    if (toActive) {
-      return { error: 'This student is currently in an active 10-day chat with someone else.' };
-    }
-
     // Check if connection already exists in parallel
     const [snap1, snap2] = await Promise.all([
       firestore.collection('connections')
@@ -780,13 +760,6 @@ const connectionOps = {
   async respond(connectionId, userId, action) {
     const firestore = getDB();
     const connDocRef = firestore.collection('connections').doc(String(connectionId));
-    if (action === 'accept') {
-      // Existing pre-lock deployments may have active chats without a lock. This
-      // read prevents those users from accepting another pending request; new
-      // acceptances are protected against races by the transaction locks below.
-      const existingActive = await this.hasActiveConnection(userId);
-      if (existingActive) return { error: 'You are already in an active chat.' };
-    }
     let result;
     await firestore.runTransaction(async (transaction) => {
       const doc = await transaction.get(connDocRef);
@@ -810,16 +783,6 @@ const connectionOps = {
         return;
       }
 
-      // Lock both participants in the same transaction. This is the durable
-      // one-active-chat invariant; a competing acceptance retries and then sees
-      // the lock instead of creating a second active chat.
-      const lockRefs = [activeConnectionLockRef(conn.from_user_id), activeConnectionLockRef(conn.to_user_id)];
-      const lockDocs = await Promise.all(lockRefs.map(ref => transaction.get(ref)));
-      if (lockDocs.some(lockDoc => lockDoc.exists)) {
-        result = { error: 'One of you is already in an active chat.' };
-        return;
-      }
-
       const now = new Date();
       const identityRevealAvailable = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
       const faceRevealAvailable = new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000).toISOString();
@@ -837,10 +800,6 @@ const connectionOps = {
         face_reveal_declined_by: null,
         meeting_code: null
       });
-      lockRefs.forEach(ref => transaction.set(ref, {
-        connection_id: Number(connectionId),
-        created_at: now.toISOString()
-      }));
       result = {
         success: true,
         chat_started_at: now.toISOString(),
@@ -849,33 +808,7 @@ const connectionOps = {
         face_reveal_expires_at: faceRevealExpires
       };
     });
-    if (result?.success && action === 'accept') {
-      evictConnection(connectionId);
-      (async () => {
-        try {
-          const doc = await connDocRef.get();
-          if (doc.exists) {
-            const conn = doc.data();
-            const u1 = conn.from_user_id;
-            const u2 = conn.to_user_id;
-            const [pending1, pending2, pending3, pending4] = await Promise.all([
-              firestore.collection('connections').where('from_user_id', '==', u1).where('status', '==', 'pending').get(),
-              firestore.collection('connections').where('to_user_id', '==', u1).where('status', '==', 'pending').get(),
-              firestore.collection('connections').where('from_user_id', '==', u2).where('status', '==', 'pending').get(),
-              firestore.collection('connections').where('to_user_id', '==', u2).where('status', '==', 'pending').get()
-            ]);
-            const batch = firestore.batch();
-            const toReject = [...pending1.docs, ...pending2.docs, ...pending3.docs, ...pending4.docs];
-            toReject.forEach(d => {
-              if (Number(d.data().id) !== Number(connectionId)) {
-                batch.update(d.ref, { status: 'rejected', ended_reason: 'other_chat_accepted' });
-              }
-            });
-            await batch.commit();
-          }
-        } catch (e) {}
-      })();
-    } else if (result?.success) {
+    if (result?.success) {
       evictConnection(connectionId);
     }
     return result || { error: 'Unable to respond to this request' };

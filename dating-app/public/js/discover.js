@@ -3,7 +3,6 @@ let currentIndex = 0;
 let navTimeout = null;
 let discoveryLoading = false;
 let lastDiscoveryLoadAt = 0;
-let userHasActiveChat = false;
 let activeGenderFilter = localStorage.getItem('delulu_discover_gender_filter') || 'all';
 
 // Cursor pagination state. The server owns the full ranked feed; the browser
@@ -167,11 +166,6 @@ async function handleConnectCenter() {
   const idx = currentIndex;
   if (!profile) return;
   
-  if (userHasActiveChat) {
-    showToast("You are currently in an active 10-day chat! Finish your current chat or tap 'Not Vibing' before connecting with someone new.", 'error');
-    return;
-  }
-
   // Optimistic UI update: advance card deck & show toast immediately
   hapticMedium();
   removeProfileAt(idx);
@@ -308,7 +302,6 @@ async function loadDiscovery(options = {}) {
     if (options.append) params.set('cursor', discoverNextCursor);
     const data = await fetchDiscoverPage(`/api/discover?${params.toString()}`);
     lastDiscoveryLoadAt = Date.now();
-    userHasActiveChat = !!data.hasActiveConnection; // Sync active connection status from server
     
     discoverNextCursor = data.nextCursor || null;
     discoverHasMore = Boolean(data.hasMore && discoverNextCursor);

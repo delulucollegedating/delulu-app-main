@@ -882,6 +882,12 @@ async function initializeChat() {
     if (isSending) return; // prevent rapid double-tap duplicate
     const content = chatInput.value.trim();
     if (!content) return;
+    // Block abusive / forbidden content client-side (keeps the text in the input so the user can edit it)
+    if (hasForbiddenText(content)) {
+      showToast(FORBIDDEN_MESSAGE_ERROR, 'error');
+      chatInput.focus();
+      return;
+    }
     isSending = true;
     
     notifyTypingState(false);

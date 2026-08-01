@@ -220,7 +220,9 @@ The discover page shows profiles filtered by:
     - status changes to "revealed"
 ```
 
-**Either user can end the chat at any time** with "Not Vibing" button → status: "rejected", ended_reason: "not_vibing". Ending a chat instantly clears messages from Supabase Postgres, releases exclusive 1-to-1 active connection locks, and broadcasts `ended` (chat room) and `chat_ended` (messages list) SSE events to both users.
+**Either user can end the chat at any time** with "Not Vibing" button → status: "rejected", ended_reason: "not_vibing". Ending a chat instantly clears messages from Supabase Postgres and broadcasts `ended` (chat room) and `chat_ended` (messages list) SSE events to both users.
+
+**No exclusive pairing**: Users may send requests and hold multiple active chats with different classmates at the same time — there is no 1-to-1 active-chat restriction.
 
 ### 5.4 Connection Expiry Sweep (Background Job)
 `connectionOps.sweepExpired()` runs on a schedule (every 24h):
@@ -279,6 +281,7 @@ Using Web Crypto API (browser-native):
 8. **Run `npx cap sync android`** before building APK after any web change
 9. **APK is gitignored** — 126MB, distribute manually
 10. **Strict Anonymity & Privacy** — No in-chat photo sharing or selfie photo verification. Identities remain 100% anonymous until mutual Day 10 consent.
+11. **Chat content moderation** — Messages containing abusive words or the "rishihood" keyword are blocked (client + server). Two-tier case-insensitive matching via `utils/profanity.js` (client copy in `public/js/shared.js` — keep in sync): full abusive words are substring-matched (catches `$rishihood$` / `jsafhjakdrishihoodsdwd`), while short letter combos (`bc`/`mc`/`sex`/`gand`/...) are matched only as standalone words so innocent words like `mac`, `abc`, `McDonalds`, `Sussex`, `Gandalf` are never blocked. E2EE ciphertext is skipped server-side.
 
 ---
 

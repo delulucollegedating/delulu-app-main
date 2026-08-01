@@ -58,6 +58,7 @@ const { getDB, seedDemoUsers, userOps, connectionOps, messageOps, otpOps, invali
 const multer = require('multer');
 const fs = require('fs');
 const CircuitBreaker = require('./utils/circuitBreaker');
+const { hasForbiddenText, FORBIDDEN_MESSAGE_ERROR } = require('./utils/profanity');
 
 // Circuit breakers for external service isolation
 const brevoBreaker = new CircuitBreaker('BrevoEmailAPI', {
@@ -696,6 +697,13 @@ io.on('connection', async (socket) => {
     const { connectionId, content, is_encrypted, iv } = data;
     if (!connectionId || !content?.trim()) return;
 
+    // Reject abusive / forbidden content. E2EE ciphertext cannot be scanned, so
+    // encrypted messages are skipped here (the client blocks them pre-encryption).
+    if (!Number(is_encrypted) && hasForbiddenText(content)) {
+      socket.emit('message-blocked', { connectionId, error: FORBIDDEN_MESSAGE_ERROR });
+      return;
+    }
+
     // Verify user is part of this connection
     const conn = await connectionOps.getConnection(connectionId, userId);
     if (!conn || conn._dataIntegrityError || !connectionOps.isActive(conn)) return;
@@ -1326,7 +1334,7 @@ app.get('/api/discover', requireAuth, async (req, res) => {
         if (b.match_count !== a.match_count) return b.match_count - a.match_count;
         return String(a.id || '').localeCompare(String(b.id || ''));
       });
-      feed = { profiles: mappedProfiles, hasActiveConnection: !!(result && result.hasActiveConnection) };
+      feed = { profiles: mappedProfiles };
       setCachedDiscoverFeed(req.session.userId, genderFilter, feed);
     }
 
@@ -1337,7 +1345,6 @@ app.get('/api/discover', requireAuth, async (req, res) => {
 
     res.json({
       profiles: paginatedProfiles,
-      hasActiveConnection: feed.hasActiveConnection,
       page: Math.floor(start / limit) + 1,
       limit,
       hasMore,
@@ -1921,6 +1928,12 @@ app.post('/api/messages/send', requireAuth, async (req, res) => {
   const { connection_id, content, is_encrypted, iv, client_uuid } = req.body;
   if (!connection_id || !content?.trim()) {
     return res.status(400).json({ error: 'Missing connection_id or content' });
+  }
+
+  // Reject abusive / forbidden content. E2EE ciphertext cannot be scanned, so
+  // encrypted messages are skipped here (the client blocks them pre-encryption).
+  if (!Number(is_encrypted) && hasForbiddenText(sanitizeText(content))) {
+    return res.status(400).json({ error: FORBIDDEN_MESSAGE_ERROR });
   }
 
   const conn = await getCachedConnection(connection_id, req.session.userId);

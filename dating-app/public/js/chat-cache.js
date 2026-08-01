@@ -248,6 +248,11 @@ const outboxQueue = {
             body: JSON.stringify(payload)
           });
           const data = await res.json();
+          if (res.status === 400) {
+            // Permanently rejected (e.g. blocked/forbidden content) — drop, never retry
+            await outboxQueue.dequeue(item.client_uuid);
+            continue;
+          }
           if (res.ok && data.success) {
             await outboxQueue.dequeue(item.client_uuid);
             outboxQueue.notify('outbox-message-sent', { item, message: data.message });

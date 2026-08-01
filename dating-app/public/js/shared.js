@@ -56,6 +56,66 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// ===== Forbidden / abusive content filter (keep in sync with utils/profanity.js) =====
+// Two-tier case-insensitive matching:
+//   TIER 1 — FORBIDDEN_WORDS: full abusive words matched as SUBSTRINGS, so a
+//     banned token is caught even when embedded inside other letters/symbols:
+//       "$rishihood$", "jsafhjakdrishihoodsdwd", "abhenchodcd" -> blocked
+//   TIER 2 — FORBIDDEN_SHORT_TOKENS: short letter combos (bc/mc/sex/gand/...)
+//     matched ONLY as standalone words (word boundaries). Innocent words like
+//     "mac", "abc", "McDonalds", "Sussex", "Gandalf" are ALLOWED.
+const FORBIDDEN_WORDS = [
+  'rishihood',
+  'chutiya', 'chutiye', 'chutia', 'chutiyapanti',
+  'bhosdika', 'bhosdike', 'bhosda', 'bhosdi', 'bhosad', 'bhosari', 'bhosri',
+  'bhenchod', 'behenchod', 'behenchud', 'betichod',
+  'madarchod', 'maderchod', 'madarchot',
+  'gandu', 'gaandu',
+  'loda', 'lode', 'lodu', 'lund', 'lawda', 'lawde', 'lauda', 'laude', 'laundiya',
+  'chod', 'chodu', 'chudai', 'chudi', 'chuda',
+  'bsdk',
+  'suar', 'suwar', 'suala',
+  'harami', 'haramkhor', 'haramzada',
+  'kutta', 'kutte', 'kutiya', 'kutia', 'kutti',
+  'randi', 'tatti', 'tharki',
+  'bhadwa', 'bhadve', 'bhadwe',
+  'chinal', 'chudail', 'kamina', 'kamini', 'nalayak', 'nalla',
+  'jhaant', 'jhant', 'chakka', 'hijda', 'hijra',
+  'fuddu', 'fudu',
+  'bakchod', 'bakchodi',
+  'ma ki', 'maa ki', 'behen ki', 'bhen ki',
+  'fuck', 'bitch', 'cunt', 'dickhead', 'shit', 'asshole', 'whore', 'slut',
+  'pussy', 'bastard', 'motherfucker', 'nigger', 'porn', 'sexy'
+];
+
+// Short letter combos / ambiguous tokens — blocked ONLY as standalone words so
+// innocent words like "mac", "abc", "McDonalds", "Sussex", "Gandalf" or the
+// first name "Dick" are never blocked, while the standalone token still is.
+const FORBIDDEN_SHORT_TOKENS = ['bc', 'mc', 'bkl', 'bsd', 'mkc', 'gand', 'gaand', 'sex', 'dick'];
+
+// Pre-compiled word-boundary patterns (built once at load — no per-message overhead)
+const SHORT_TOKEN_PATTERNS = FORBIDDEN_SHORT_TOKENS.map(token => new RegExp(`\\b${token}\\b`));
+
+const FORBIDDEN_MESSAGE_ERROR = 'This message contains words that are not allowed. Please rephrase.';
+
+function findForbiddenText(text) {
+  if (typeof text !== 'string' || !text.trim()) return null;
+  const lower = text.toLowerCase();
+  // Tier 1: full abusive words — substring match (catches embedded variants)
+  for (const word of FORBIDDEN_WORDS) {
+    if (lower.includes(word)) return word;
+  }
+  // Tier 2: short letter combos — standalone word only (word-boundary match)
+  for (let i = 0; i < SHORT_TOKEN_PATTERNS.length; i++) {
+    if (SHORT_TOKEN_PATTERNS[i].test(lower)) return FORBIDDEN_SHORT_TOKENS[i];
+  }
+  return null;
+}
+
+function hasForbiddenText(text) {
+  return findForbiddenText(text) !== null;
+}
+
 // Ensure we have user data on protected routes (Optimistic Session Cache)
 // For Capacitor APK: session cookies may not persist from file:// origin,
 // so we rely on the auth_token in localStorage sent via Authorization header.
