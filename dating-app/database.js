@@ -845,6 +845,14 @@ const connectionOps = {
         console.error('getActiveConnections fallback error:', fallbackErr);
       }
     }
+    // Read receipt state is chat metadata, not relationship state. Keep it in
+    // Supabase with messages so opening a chat list does not read Firestore
+    // fields that are updated for every incoming message.
+    const receiptMap = await readReceiptOps.getForConnectionIds(
+      userId,
+      connections.map(conn => conn.id)
+    );
+
     const active = (await mapWithConcurrency(connections, 6, async (conn) => {
       const otherId = conn.from_user_id === Number(userId) ? conn.to_user_id : conn.from_user_id;
       const [otherUser, lastMsg] = await Promise.all([
@@ -854,7 +862,12 @@ const connectionOps = {
       if (!otherUser) return null;
 
       const isFrom = conn.from_user_id === Number(userId);
-      const myLastReadAt = isFrom ? conn.from_last_read_at : conn.to_last_read_at;
+      // `null` means the Supabase migration has not been applied yet, so retain
+      // the legacy Firestore fields during the rollout. Once migrated, an empty
+      // map entry correctly means that this user has not read the chat yet.
+      const myLastReadAt = receiptMap
+        ? (receiptMap.get(String(conn.id)) || null)
+        : (isFrom ? conn.from_last_read_at : conn.to_last_read_at);
 
       return {
         ...conn,
@@ -927,9 +940,10 @@ const connectionOps = {
     const otherId = conn.from_user_id === Number(userId) ? conn.to_user_id : conn.from_user_id;
     const myId    = conn.from_user_id === Number(userId) ? conn.from_user_id : conn.to_user_id;
 
-    const [otherUser, myUser] = await Promise.all([
+    const [otherUser, myUser, receiptMap] = await Promise.all([
       userOps.getById(otherId),
-      userOps.getById(myId)
+      userOps.getById(myId),
+      readReceiptOps.getForConnection(connectionId, [myId, otherId])
     ]);
 
     if (!otherUser || !myUser) {
@@ -939,6 +953,12 @@ const connectionOps = {
     }
 
     const isFrom = conn.from_user_id === Number(userId);
+    const myLastReadAt = receiptMap
+      ? (receiptMap.get(String(myId)) || null)
+      : (isFrom ? conn.from_last_read_at : conn.to_last_read_at);
+    const otherLastReadAt = receiptMap
+      ? (receiptMap.get(String(otherId)) || null)
+      : (isFrom ? conn.to_last_read_at : conn.from_last_read_at);
 
     return {
       ...conn,
@@ -950,8 +970,8 @@ const connectionOps = {
       other_user_id:     otherUser.id,
       other_public_key:  otherUser.public_key || null,
       my_user_id:        myUser.id,
-      my_last_read_at:   isFrom ? conn.from_last_read_at : conn.to_last_read_at,
-      other_last_read_at: isFrom ? conn.to_last_read_at : conn.from_last_read_at
+      my_last_read_at:   myLastReadAt,
+      other_last_read_at: otherLastReadAt
     };
   },
 
@@ -1359,6 +1379,126 @@ const connectionOps = {
 // by connectionOps.getConnection() in every route handler BEFORE these run.
 const { getSupabase, supabaseBreaker } = require('./db/supabase');
 
+// Read receipt writes are coalesced so a busy chat does not turn each incoming
+// message into a database mutation. The client also debounces the API calls;
+// this server-side guard covers multiple tabs and retrying clients.
+const READ_RECEIPT_MIN_WRITE_INTERVAL_MS = 10 * 1000;
+const READ_RECEIPT_CACHE_TTL_MS = 15 * 1000;
+const _readReceiptCache = new Map();
+
+function receiptCacheKey(connectionId, userId) {
+  return `${Number(connectionId)}:${Number(userId)}`;
+}
+
+function getCachedReceipt(connectionId, userId) {
+  const entry = _readReceiptCache.get(receiptCacheKey(connectionId, userId));
+  if (!entry || Date.now() - entry.cachedAt >= READ_RECEIPT_CACHE_TTL_MS) return undefined;
+  return entry.lastReadAt;
+}
+
+function setCachedReceipt(connectionId, userId, lastReadAt) {
+  const persistedAt = new Date(lastReadAt || 0).getTime();
+  _readReceiptCache.set(receiptCacheKey(connectionId, userId), {
+    lastReadAt: lastReadAt || null,
+    cachedAt: Date.now(),
+    // A cached database read must not suppress a new acknowledgement. Only a
+    // recent successful write is eligible for the 10-second coalescing window.
+    lastWriteAt: Number.isFinite(persistedAt) ? persistedAt : 0
+  });
+}
+
+const readReceiptOps = {
+  async getForConnection(connectionId, userIds) {
+    const ids = [...new Set((userIds || []).map(Number).filter(Number.isSafeInteger))];
+    const result = new Map();
+    if (!ids.length) return result;
+
+    const missingIds = ids.filter(userId => getCachedReceipt(connectionId, userId) === undefined);
+    ids.forEach(userId => {
+      const cached = getCachedReceipt(connectionId, userId);
+      if (cached !== undefined) result.set(String(userId), cached);
+    });
+    if (!missingIds.length) return result;
+
+    try {
+      const { data, error } = await getSupabase()
+        .from('chat_read_receipts')
+        .select('user_id, last_read_at')
+        .eq('connection_id', Number(connectionId))
+        .in('user_id', missingIds);
+      if (error) throw error;
+
+      const byUserId = new Map((data || []).map(row => [String(row.user_id), row.last_read_at]));
+      missingIds.forEach(userId => {
+        const lastReadAt = byUserId.get(String(userId)) || null;
+        setCachedReceipt(connectionId, userId, lastReadAt);
+        result.set(String(userId), lastReadAt);
+      });
+      return result;
+    } catch (err) {
+      // Returning null lets callers use the legacy fields until the SQL
+      // migration is applied; it avoids an outage during a rolling deploy.
+      console.warn('readReceiptOps.getForConnection fallback:', err.message);
+      return null;
+    }
+  },
+
+  async getForConnectionIds(userId, connectionIds) {
+    const ids = [...new Set((connectionIds || []).map(Number).filter(Number.isSafeInteger))];
+    const result = new Map();
+    if (!ids.length) return result;
+
+    const missingIds = ids.filter(connectionId => getCachedReceipt(connectionId, userId) === undefined);
+    ids.forEach(connectionId => {
+      const cached = getCachedReceipt(connectionId, userId);
+      if (cached !== undefined) result.set(String(connectionId), cached);
+    });
+    if (!missingIds.length) return result;
+
+    try {
+      const { data, error } = await getSupabase()
+        .from('chat_read_receipts')
+        .select('connection_id, last_read_at')
+        .eq('user_id', Number(userId))
+        .in('connection_id', missingIds);
+      if (error) throw error;
+
+      const byConnectionId = new Map((data || []).map(row => [String(row.connection_id), row.last_read_at]));
+      missingIds.forEach(connectionId => {
+        const lastReadAt = byConnectionId.get(String(connectionId)) || null;
+        setCachedReceipt(connectionId, userId, lastReadAt);
+        result.set(String(connectionId), lastReadAt);
+      });
+      return result;
+    } catch (err) {
+      console.warn('readReceiptOps.getForConnectionIds fallback:', err.message);
+      return null;
+    }
+  },
+
+  async markAsRead(connectionId, userId) {
+    const key = receiptCacheKey(connectionId, userId);
+    const existing = _readReceiptCache.get(key);
+    const nowMs = Date.now();
+    if (existing && nowMs - existing.lastWriteAt < READ_RECEIPT_MIN_WRITE_INTERVAL_MS) {
+      return { count: 0, readAt: existing.lastReadAt, coalesced: true };
+    }
+
+    const readAt = new Date(nowMs).toISOString();
+    const { error } = await getSupabase()
+      .from('chat_read_receipts')
+      .upsert({
+        connection_id: Number(connectionId),
+        user_id: Number(userId),
+        last_read_at: readAt
+      }, { onConflict: 'connection_id,user_id' });
+    if (error) throw error;
+
+    _readReceiptCache.set(key, { lastReadAt: readAt, cachedAt: nowMs, lastWriteAt: nowMs });
+    return { count: 1, readAt };
+  }
+};
+
 const messageOps = {
   // ── INSERT ──────────────────────────────────────────────────────────────────
   // Supabase table schema: id, connection_id, sender_id, content, reactions,
@@ -1393,11 +1533,24 @@ const messageOps = {
       };
       if (clientUuid) payload.client_uuid = clientUuid;
 
-      const { data, error } = await supabase
-        .from('messages')
-        .insert(payload)
-        .select()
-        .single();
+      const write = clientUuid
+        ? supabase
+          .from('messages')
+          // The unique index in the matching SQL migration makes a
+          // retry safe even when two requests race past the initial lookup.
+          .upsert(payload, {
+            onConflict: 'connection_id,sender_id,client_uuid',
+            ignoreDuplicates: true
+          })
+          .select()
+          .maybeSingle()
+        : supabase
+          .from('messages')
+          .insert(payload)
+          .select()
+          .single();
+
+      const { data, error } = await write;
 
       if (error) {
         if (error.code === 'PGRST204' || (error.message && error.message.includes('client_uuid'))) {
@@ -1412,6 +1565,21 @@ const messageOps = {
           return retryData;
         }
         throw error;
+      }
+
+      // ignoreDuplicates returns no row for the racing/retry request. Fetch
+      // the original message so callers can reconcile their optimistic bubble.
+      if (!data && clientUuid) {
+        const { data: existing, error: existingErr } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('connection_id', Number(connectionId))
+          .eq('sender_id', Number(senderId))
+          .eq('client_uuid', clientUuid)
+          .maybeSingle();
+        if (existingErr || !existing) throw existingErr || new Error('Message retry could not be reconciled');
+        setCachedLastMessage(connectionId, existing);
+        return existing;
       }
 
       setCachedLastMessage(connectionId, data);
@@ -1558,65 +1726,17 @@ const messageOps = {
   },
 
   // ── MARK AS READ ─────────────────────────────────────────────────────────────
-  // Ownership data (from_user_id, to_user_id) still lives on the Firestore
-  // connection doc, so we keep reading from there. The last-read timestamp
-  // is written back to Firestore (no changes to that Firestore field).
-  //
-  // NOTE: Cache eviction is intentionally SKIPPED here to minimize Firestore reads
-  // on active chats (where read markers update frequently). Real-time ticks are
-  // driven instantly by client Socket.io events ('messages-read'), so active sessions
-  // are unaffected. Stale read markers in the cache (up to 2 minutes) are only
-  // observable as minor cosmetic delays on cold page reload, which is acceptable.
-  //
-  // The unread message COUNT is now queried from Supabase instead of Firestore.
+  // Ownership is verified by the route before this is called. Read state lives
+  // beside messages in Supabase, which removes a Firestore write from the hot
+  // path for every received message.
   async markAsRead(connectionId, userId, verifiedConn = null) {
     try {
-      const firestore = getDB();
-      const supabase = getSupabase();
-      const now = new Date().toISOString();
-
-      const connRef = firestore.collection('connections').doc(String(connectionId));
-      let conn = verifiedConn;
-      if (!conn) {
-        const doc = await connRef.get();
-        if (!doc.exists) return { count: 0 };
-        conn = doc.data();
-      }
+      const conn = verifiedConn;
+      if (!conn) return { count: 0 };
       if (conn.from_user_id !== Number(userId) && conn.to_user_id !== Number(userId)) {
         return { count: 0 };
       }
-      const prevLastReadAt = conn.from_user_id === Number(userId)
-        ? conn.from_last_read_at
-        : conn.to_last_read_at;
-      const field = conn.from_user_id === Number(userId)
-        ? 'from_last_read_at'
-        : 'to_last_read_at';
-
-      // Update last-read timestamp on the Firestore connection doc (unchanged)
-      await connRef.update({ [field]: now });
-
-      // Count unread messages from the other user since the previous read marker
-      const otherId = conn.from_user_id === Number(userId)
-        ? conn.to_user_id
-        : conn.from_user_id;
-
-      let countQuery = supabase
-        .from('messages')
-        .select('id', { count: 'exact', head: true })
-        .eq('connection_id', Number(connectionId))
-        .eq('sender_id', Number(otherId))
-        .is('deleted_at', null);
-
-      if (prevLastReadAt) {
-        // gte (greater-or-equal) catches messages created at the exact same timestamp
-        // as the previous read marker, which gt would miss.
-        countQuery = countQuery.gte('created_at', prevLastReadAt);
-      }
-
-      const { count, error: countErr } = await countQuery;
-      if (countErr) throw countErr;
-
-      return { count: count || 0, readAt: now };
+      return await readReceiptOps.markAsRead(connectionId, userId);
     } catch (err) {
       console.error('messageOps.markAsRead error:', err.message);
       return { count: 0 };

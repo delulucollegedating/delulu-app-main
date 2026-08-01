@@ -1141,16 +1141,34 @@ window.addEventListener('beforeunload', cleanupChatResources);
 
 let _readInFlight = false;
 let _pendingReadMark = false;
+let _readReceiptDelayTimer = null;
+let _lastReadReceiptSentAt = 0;
+const READ_RECEIPT_MIN_INTERVAL_MS = 10 * 1000;
 
 function markMessagesAsRead() {
   // Do not acknowledge an entire thread just because it loaded in the
   // background; advance read state only at the live end of the conversation.
   if (!currentConnId || document.hidden || !hasUnreadMessagesInView || !isViewingLatestMessages()) return;
+
+  // A fast conversation can deliver several messages per second. Persist one
+  // acknowledgement at most every 10 seconds; the UI still updates instantly
+  // through SSE, so this has no visible delay for either participant.
+  const elapsed = Date.now() - _lastReadReceiptSentAt;
+  if (elapsed < READ_RECEIPT_MIN_INTERVAL_MS) {
+    if (!_readReceiptDelayTimer) {
+      _readReceiptDelayTimer = setTimeout(() => {
+        _readReceiptDelayTimer = null;
+        markMessagesAsRead();
+      }, READ_RECEIPT_MIN_INTERVAL_MS - elapsed);
+    }
+    return;
+  }
   if (_readInFlight) {
     _pendingReadMark = true;
     return;
   }
   _readInFlight = true;
+  _lastReadReceiptSentAt = Date.now();
 
   apiCall(`/api/messages/${currentConnId}/read`, 'POST')
     .then((data) => {

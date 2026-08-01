@@ -257,11 +257,58 @@ const otpLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// General API rate limit: 60 requests per minute
+// API limits are keyed by authenticated user, not just IP. A college Wi-Fi
+// network can put hundreds of students behind one public IP; an IP-only
+// limiter would block well-behaved users from one another during an event.
+function rateLimitIdentity(req) {
+  const userId = Number(req.session?.userId);
+  if (Number.isSafeInteger(userId) && userId > 0) return `user:${userId}`;
+  return `ip:${ipKeyGenerator(req.ip || req.socket?.remoteAddress || 'unknown')}`;
+}
+
+// General API rate limit. Unauthenticated traffic remains deliberately lower;
+// chat mutations also have their own tighter per-user limits below.
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 60,
+  max: (req) => Number(req.session?.userId) > 0 ? 300 : 60,
+  keyGenerator: rateLimitIdentity,
   message: { error: 'Too many requests. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const messageLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  keyGenerator: rateLimitIdentity,
+  message: { error: 'You are sending messages too quickly. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const typingLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  keyGenerator: rateLimitIdentity,
+  message: { error: 'Too many typing updates. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const gameLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  keyGenerator: rateLimitIdentity,
+  message: { error: 'Too many game actions. Please try again shortly.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const readReceiptLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 24,
+  keyGenerator: rateLimitIdentity,
+  message: { error: 'Too many read-receipt updates. Please slow down.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -1573,7 +1620,7 @@ app.get('/api/connections/:id/stream', requireAuth, async (req, res) => {
 });
 
 // Typing indicator endpoint (100% in-memory, 0 DB calls)
-app.post('/api/connections/:id/typing', requireAuth, async (req, res) => {
+app.post('/api/connections/:id/typing', requireAuth, typingLimiter, async (req, res) => {
   const connectionId = req.params.id;
   const userId = Number(req.session.userId);
   const { isTyping } = req.body;
@@ -1754,7 +1801,7 @@ app.post('/api/connections/end-after-decline', requireAuth, async (req, res) => 
 });
 
 // Start icebreaker game
-app.post('/api/connections/:id/start-game', requireAuth, async (req, res) => {
+app.post('/api/connections/:id/start-game', requireAuth, gameLimiter, async (req, res) => {
   const { game_type, question } = req.body;
   if (!game_type || !question) return res.status(400).json({ error: 'Missing game_type or question' });
   try {
@@ -1789,7 +1836,7 @@ app.post('/api/connections/:id/start-game', requireAuth, async (req, res) => {
 });
 
 // Answer icebreaker game
-app.post('/api/connections/:id/answer-game', requireAuth, async (req, res) => {
+app.post('/api/connections/:id/answer-game', requireAuth, gameLimiter, async (req, res) => {
   const { answer } = req.body;
   if (!answer) return res.status(400).json({ error: 'Missing answer' });
   try {
@@ -1829,7 +1876,7 @@ app.post('/api/connections/:id/answer-game', requireAuth, async (req, res) => {
 // via handleBothAnswered's setTimeout. Emitting status_change creates a race condition where
 // a stale clear-game event can arrive AFTER start-game has created a new game, causing
 // syncActiveGame to see active_game=null and remove the NEW game card.
-app.post('/api/connections/:id/clear-game', requireAuth, async (req, res) => {
+app.post('/api/connections/:id/clear-game', requireAuth, gameLimiter, async (req, res) => {
   const { game_created_at } = req.body;
   try {
     const conn = await connectionOps.getConnection(req.params.id, req.session.userId);
@@ -1893,7 +1940,7 @@ app.get('/api/messages/:connectionId', requireAuth, async (req, res) => {
 });
 
 // REST fallback for read receipts when Socket.io is disabled or unavailable.
-app.post('/api/messages/:connectionId/read', requireAuth, async (req, res) => {
+app.post('/api/messages/:connectionId/read', requireAuth, readReceiptLimiter, async (req, res) => {
   const conn = await connectionOps.getConnection(req.params.connectionId, req.session.userId);
   if (conn && conn._dataIntegrityError) {
     return res.status(410).json({ error: 'This chat is no longer available — one of the accounts involved no longer exists.' });
@@ -1924,7 +1971,7 @@ app.post('/api/messages/:connectionId/read', requireAuth, async (req, res) => {
 });
 
 // Send normal text message
-app.post('/api/messages/send', requireAuth, async (req, res) => {
+app.post('/api/messages/send', requireAuth, messageLimiter, async (req, res) => {
   const { connection_id, content, is_encrypted, iv, client_uuid } = req.body;
   if (!connection_id || !content?.trim()) {
     return res.status(400).json({ error: 'Missing connection_id or content' });
@@ -2009,11 +2056,9 @@ app.post('/api/messages/send', requireAuth, async (req, res) => {
     (recId, connId) => activeRoomUsers.get(String(connId))?.has(Number(recId))
   ).catch(err => console.warn('Push notification dispatch error:', err.message));
 
-  // Update last_message_at on the connection doc (fire-and-forget is fine — non-critical metadata)
-  const firestore = getDB();
-  firestore.collection('connections').doc(String(connection_id)).update({
-    last_message_at: new Date().toISOString()
-  }).catch(err => console.error('Failed to update last_message_at in Firestore:', err));
+  // Message order and previews come directly from Supabase. Do not write
+  // last_message_at to Firestore for every message: it burns the Firestore
+  // free-tier write quota and creates a hot document for an active chat.
 
   res.json({ success: true, message: msg });
 });
