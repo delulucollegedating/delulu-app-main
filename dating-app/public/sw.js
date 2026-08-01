@@ -179,17 +179,24 @@ async function networkFirst(request) {
   }
 }
 
-// ── Push Notifications (unchanged from original) ─────────────────────────────
+// ── Push Notifications ───────────────────────────────────────────────────────
 self.addEventListener('push', (event) => {
   if (!event.data) return;
   try {
     const data = event.data.json();
-    const title = data.title || 'Delulu';
+    const type = data.type || 'notification';
+    // Never show a blank notification — derive a meaningful title by type
+    const DEFAULT_TITLES = {
+      chat_message: 'New message',
+      connection_request: 'New connection request',
+      connection_accepted: 'Connection accepted'
+    };
+    const title = data.title || DEFAULT_TITLES[type] || 'New notification';
     const options = {
-      body: data.body || '',
+      body: data.body || (type === 'chat_message' ? 'You have a new message' : 'You have a new notification'),
       icon: data.icon || '/favicon.ico',
       badge: '/favicon.ico',
-      data: { url: data.url || '/' },
+      data: { url: data.url || '/', type, connectionId: data.connectionId || '' },
       vibrate: [100, 50, 100]
     };
     event.waitUntil(self.registration.showNotification(title, options));
@@ -198,16 +205,46 @@ self.addEventListener('push', (event) => {
   }
 });
 
-// ── Notification Click (unchanged from original) ─────────────────────────────
+// ── Notification Click: route to the page the notification is about ────────────
+function resolveNotificationUrl(data) {
+  let url = data.url || '/';
+  // Normalize legacy URLs to real pages
+  if (url.startsWith('/chat?')) url = '/chat.html' + url.slice('/chat'.length);
+  if (url === '/requests') url = '/requests.html';
+  if (url === '/messages') url = '/messages.html';
+  // Fallback: route by notification type
+  if (!url || url === '/') {
+    if (data.type === 'connection_request' || data.type === 'connection_accepted') {
+      url = '/requests.html';
+    } else if (data.type === 'chat_message') {
+      url = data.connectionId ? `/chat.html?id=${data.connectionId}` : '/messages.html';
+    } else {
+      url = '/messages.html';
+    }
+  }
+  return url;
+}
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = event.notification.data?.url || '/';
+  const url = resolveNotificationUrl(event.notification.data || {});
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
       for (const client of windowClients) {
-        if (client.url === url && 'focus' in client) return client.focus();
+        // Focus an existing tab already on this page (pathname match)
+        try {
+          const clientUrl = new URL(client.url);
+          const targetUrl = new URL(url, self.registration.scope);
+          if (clientUrl.origin === targetUrl.origin && clientUrl.pathname === targetUrl.pathname && 'focus' in client) {
+            // Navigate existing tab to the exact URL if it differs (e.g. different chat id)
+            if (client.url !== targetUrl.href && 'navigate' in client) {
+              return client.navigate(targetUrl.href).then(() => client.focus()).catch(() => client.focus());
+            }
+            return client.focus();
+          }
+        } catch (e) {}
       }
-      return clients.openWindow(url);
+      return clients.openWindow(url).catch(() => clients.openWindow('/messages.html'));
     })
   );
 });

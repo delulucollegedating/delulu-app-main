@@ -520,6 +520,77 @@ function getOrCreateDeviceId() {
 }
 
 // ===== Push & Native FCM Notification Subscription =====
+
+// Route a tapped notification to the page it belongs to (chat, requests, messages).
+function handlePushNotificationAction(data) {
+  if (!data) data = {};
+  const connId = data.connectionId || data.connection_id;
+  const notifType = data.type;
+  let targetUrl = data.url || '';
+
+  // Normalize legacy URLs to real pages
+  if (targetUrl.startsWith('/chat?')) targetUrl = '/chat.html' + targetUrl.slice('/chat'.length);
+  if (targetUrl === '/requests') targetUrl = '/requests.html';
+  if (targetUrl === '/messages') targetUrl = '/messages.html';
+
+  if (connId) {
+    window.location.href = `chat.html?id=${connId}`;
+  } else if (notifType === 'connection_request' || notifType === 'connection_accepted') {
+    window.location.href = 'requests.html';
+  } else if (targetUrl && targetUrl !== '/' && targetUrl !== '') {
+    window.location.href = targetUrl.startsWith('/') ? targetUrl.substring(1) : targetUrl;
+  } else if (notifType === 'chat_message') {
+    window.location.href = 'messages.html';
+  } else {
+    window.location.href = 'messages.html';
+  }
+}
+
+// Register native push listeners EARLY (at script load) so a notification tap that
+// cold-starts the app is not missed — initPushNotifications may run seconds later.
+function registerCapacitorPushListeners() {
+  if (!window.Capacitor || !window.Capacitor.isPluginAvailable || !window.Capacitor.isPluginAvailable('PushNotifications')) return;
+  if (window.__capacitorPushListenerSet) return;
+  window.__capacitorPushListenerSet = true;
+  try {
+    const PushNotifications = window.Capacitor.Plugins.PushNotifications;
+
+    // Tap on a delivered FCM notification → navigate to the relevant page
+    PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
+      handlePushNotificationAction(action.notification?.data || {});
+    }).catch(() => {});
+
+    // Foreground delivery — FCM does not auto-display while app is open
+    PushNotifications.addListener('pushReceived', (notification) => {
+      const data = (notification && notification.data) || {};
+      const title = data.title || (data.type === 'chat_message' ? 'New message' : 'New notification');
+      const body = data.body || '';
+      const url = data.url || (data.connectionId ? `chat.html?id=${data.connectionId}` : 'messages.html');
+      window.showNativeNotification({ title, body, url, id: data.messageId || data.connectionId });
+    }).catch(() => {});
+  } catch (e) {
+    console.warn('[Capacitor] Push listener registration failed:', e.message);
+  }
+}
+
+// Tap on a LocalNotification (in-app scheduled) → route via its extra.url
+function registerLocalNotificationTap() {
+  if (!window.Capacitor || !window.Capacitor.isPluginAvailable || !window.Capacitor.isPluginAvailable('LocalNotifications')) return;
+  if (window.__capacitorLocalNotifListenerSet) return;
+  window.__capacitorLocalNotifListenerSet = true;
+  try {
+    const LocalNotifications = window.Capacitor.Plugins.LocalNotifications;
+    LocalNotifications.addListener('localNotificationActionPerformed', (res) => {
+      const url = (res && res.notification && res.notification.extra && res.notification.extra.url) || 'messages.html';
+      window.location.href = url.startsWith('/') ? url.substring(1) : url;
+    }).catch(() => {});
+  } catch (e) {}
+}
+
+// Register native tap handling as early as possible
+registerCapacitorPushListeners();
+registerLocalNotificationTap();
+
 async function initPushNotifications() {
   const deviceId = getOrCreateDeviceId();
 
@@ -533,37 +604,22 @@ async function initPushNotifications() {
           await PushNotifications.register().catch(() => {});
         }
 
-        if (!window.__capacitorPushListenerSet) {
-          window.__capacitorPushListenerSet = true;
+        // Ensure tap/pushReceived listeners are registered (idempotent)
+        registerCapacitorPushListeners();
+        registerLocalNotificationTap();
 
-          PushNotifications.addListener('registration', async (token) => {
-            if (token && token.value) {
-              await apiCall('/api/devices/register', 'POST', {
-                deviceId,
-                platform: 'android_fcm',
-                token: token.value,
-                app_version: '1.0.0'
-              }).catch(() => {});
-            }
-          }).catch(() => {});
-
-          PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
-            const data = action.notification?.data || {};
-            const connId = data.connectionId || data.connection_id;
-            const notifType = data.type;
-            const targetUrl = data.url;
-            
-            if (connId) {
-              window.location.href = `chat.html?id=${connId}`;
-            } else if (notifType === 'connection_request' || notifType === 'connection_accepted') {
-              window.location.href = 'requests.html';
-            } else if (targetUrl && targetUrl !== '/') {
-              window.location.href = targetUrl.startsWith('/') ? targetUrl.substring(1) : targetUrl;
-            } else {
-              window.location.href = 'messages.html';
-            }
-          }).catch(() => {});
-        }
+        PushNotifications.addListener('registration', async (token) => {
+          if (token && token.value) {
+            await apiCall('/api/devices/register', 'POST', {
+              deviceId,
+              platform: 'android_fcm',
+              token: token.value,
+              app_version: '1.0.0'
+            }).catch(() => {});
+            // Also register via legacy FCM-token endpoint for backward compatibility
+            await apiCall('/api/push/fcm-token', 'POST', { token: token.value }).catch(() => {});
+          }
+        }).catch(() => {});
       }
     } catch (e) {
       console.warn('[Capacitor] Push notifications setup safely bypassed:', e.message);
@@ -624,19 +680,35 @@ async function initPushNotifications() {
 
 // ===== Global Native Notification Trigger Helper =====
 async function showNativeNotification({ title, body, url, id }) {
+  // Never show a blank notification
+  const safeTitle = title && title.trim() ? title : 'New notification';
+  const safeBody = body && body.trim() ? body : 'You have a new notification';
+  const safeUrl = url && url !== '/' ? url : 'messages.html';
+
   // If running inside Capacitor Native App
   if (window.Capacitor && window.Capacitor.isPluginAvailable('LocalNotifications')) {
     try {
       const LocalNotifications = window.Capacitor.Plugins.LocalNotifications;
+      // Ensure the Android notification channel exists (silently ignored if present)
+      if (typeof LocalNotifications.createChannel === 'function') {
+        LocalNotifications.createChannel({
+          id: 'delulu_messages',
+          name: 'Delulu Messages',
+          description: 'New message and connection notifications',
+          importance: 5,
+          vibration: true,
+          sound: 'default'
+        }).catch(() => {});
+      }
       const notifId = id || Math.floor(Math.random() * 1000000);
       await LocalNotifications.schedule({
         notifications: [
           {
-            title: title || 'Delulu',
-            body: body || '',
+            title: safeTitle,
+            body: safeBody,
             id: notifId,
             schedule: { at: new Date(Date.now() + 100) },
-            extra: { url: url || 'messages.html' }
+            extra: { url: safeUrl }
           }
         ]
       });
@@ -649,10 +721,10 @@ async function showNativeNotification({ title, body, url, id }) {
   // Web Browser fallback
   if ('Notification' in window && Notification.permission === 'granted') {
     try {
-      new Notification(title || 'Delulu', {
-        body: body || '',
+      new Notification(safeTitle, {
+        body: safeBody,
         icon: '/favicon.ico',
-        data: { url: url || 'messages.html' }
+        data: { url: safeUrl }
       });
     } catch (e) {}
   }

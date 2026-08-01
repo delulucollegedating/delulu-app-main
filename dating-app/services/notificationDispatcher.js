@@ -2,7 +2,75 @@ const { getApps } = require('firebase-admin/app');
 const { getFirestore } = require('firebase-admin/firestore');
 const { getMessaging } = require('firebase-admin/messaging');
 const CircuitBreaker = require('../utils/circuitBreaker');
-const { sendPushNotification } = require('../database');
+const webPush = require('web-push');
+const { pushOps } = require('../database');
+
+// Configure Web Push VAPID details so this module can send directly to
+// device subscriptions stored in the users/{userId}/devices subcollection.
+// server.js calls configureWebPush() at startup with its resolved keys so
+// the dispatcher always uses the exact same keys clients subscribed with
+// (server.js may auto-generate temporary keys when env vars are unset).
+let vapidConfigured = false;
+function configureWebPush(publicKey, privateKey) {
+  if (!publicKey || !privateKey) {
+    vapidConfigured = false;
+    return;
+  }
+  try {
+    webPush.setVapidDetails(
+      `mailto:${process.env.GMAIL_USER || 'delulu.college.dating@gmail.com'}`,
+      publicKey,
+      privateKey
+    );
+    vapidConfigured = true;
+  } catch (e) {
+    vapidConfigured = false;
+  }
+}
+
+// Auto-configure from env at load so this module still works standalone
+// (e.g. in tests) even if server.js never calls configureWebPush().
+if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+  configureWebPush(process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY);
+}
+
+/**
+ * Build the JSON payload sent to web-push. Includes type + connectionId so the
+ * service worker (sw.js) can show a meaningful title and route taps correctly.
+ */
+function buildWebPushPayload(payload, connectionId) {
+  const notifTitle = String(payload.title || 'New Notification');
+  const notifBody = String(payload.body || '');
+  const targetUrl = payload.url || (connectionId ? `/chat.html?id=${connectionId}` : '/messages.html');
+  return JSON.stringify({
+    title: notifTitle,
+    body: notifBody,
+    url: targetUrl,
+    type: String(payload.type || 'chat_message'),
+    connectionId: String(connectionId || ''),
+    senderId: String(payload.senderId || ''),
+    senderName: String(payload.senderName || 'Classmate'),
+    icon: '/favicon.ico'
+  });
+}
+
+/**
+ * Send a web push notification to a single subscription.
+ * Throws with ._gone = true when the subscription is dead (410/404) so callers
+ * can clean up the registered device.
+ */
+async function sendWebPush(subscription, payload, connectionId) {
+  if (!subscription || !subscription.endpoint) return;
+  if (!vapidConfigured) return;
+  try {
+    await webPush.sendNotification(subscription, buildWebPushPayload(payload, connectionId));
+  } catch (err) {
+    if (err && (err.statusCode === 410 || err.statusCode === 404)) {
+      err._gone = true;
+    }
+    throw err;
+  }
+}
 
 // Circuit breaker specifically for FCM push service calls
 const fcmBreaker = new CircuitBreaker('fcmPushService', {
@@ -129,15 +197,19 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
   // 2. Fetch registered devices for the receiver
   const devices = await getActiveDevices(receiverId);
   if (devices.length === 0) {
-    // Fallback: If no subcollection devices exist yet, attempt fallback to legacy Supabase push_subscriptions for Web Push
+    // Fallback: If no subcollection devices exist yet, attempt fallback to legacy
+    // push_subs subscriptions for Web Push (kept for users registered before the
+    // devices subcollection existed).
     try {
       await pushBreaker.execute(async () => {
-        await sendPushNotification(
-          receiverId,
-          payload.title || 'New Message',
-          payload.body || 'Someone sent you a message',
-          payload.url || `/chat.html?id=${connectionId}`
-        );
+        const legacySubs = await pushOps.getSubscriptions(receiverId).catch(() => []);
+        for (const sub of legacySubs) {
+          await sendWebPush(
+            { endpoint: sub.endpoint, keys: sub.keys },
+            payload,
+            connectionId
+          ).catch(() => {});
+        }
       }, (err) => {
         console.warn('Web push fallback circuit breaker caught error:', err.message);
       });
@@ -228,21 +300,24 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
   // 4. Dispatch to Web Push devices
   if (webDevices.length > 0) {
     for (const dev of webDevices) {
-      try {
-        await pushBreaker.execute(async () => {
-          await sendPushNotification(
-            receiverId,
-            payload.title || 'New Message',
-            payload.body || 'Someone sent you a message',
-            payload.url || `/chat.html?id=${connectionId}`
-          );
+      const subscription = dev.web_push_subscription;
+      if (!subscription || !subscription.endpoint) continue;
+      // Note: the breaker's fallback swallows the error, so dead-subscription
+      // cleanup must happen INSIDE the execute callback (not in an outer catch).
+      await pushBreaker.execute(async () => {
+        try {
+          await sendWebPush(subscription, payload, connectionId);
           dispatchResults.web++;
-        }, (err) => {
-          console.warn('Web push circuit breaker caught error:', err.message);
-        });
-      } catch (webErr) {
-        dispatchResults.errors.push(webErr.message);
-      }
+        } catch (err) {
+          // Expired/revoked subscription (410/404) — drop the device so we stop retrying it
+          if (err && err._gone && dev.deviceId) {
+            unregisterDevice(receiverId, dev.deviceId).catch(() => {});
+          }
+          throw err;
+        }
+      }, (err) => {
+        console.warn('Web push circuit breaker caught error:', err.message);
+      });
     }
   }
 
@@ -254,6 +329,7 @@ module.exports = {
   unregisterDevice,
   getActiveDevices,
   dispatchNotification,
+  configureWebPush,
   fcmBreaker,
   pushBreaker
 };

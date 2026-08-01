@@ -1371,7 +1371,7 @@ app.post('/api/connections/request', requireAuth, discoverLimiter, async (req, r
   // Notify the target user about the connection request
   const reqUser = await userOps.getById(req.session.userId);
   if (reqUser) {
-    sendPushNotification(to_user_id, 'New Connection Request', `${reqUser.username} wants to connect with you!`, '/requests');
+    sendPushNotification(to_user_id, 'New Connection Request', `${reqUser.username} wants to connect with you!`, '/requests.html', 'connection_request', null);
   }
   
   res.json(result);
@@ -1424,7 +1424,7 @@ app.post('/api/connections/respond', requireAuth, async (req, res) => {
         });
         
         // Notify requester via push
-        sendPushNotification(conn.from_user_id, 'Connection Accepted!', `${accepter.username} accepted your request!`, '/chat?id=' + connection_id);
+        sendPushNotification(conn.from_user_id, 'Connection Accepted!', `${accepter.username} accepted your request!`, '/chat.html?id=' + connection_id, 'connection_accepted', connection_id);
       }
     }
   }
@@ -2063,13 +2063,26 @@ if (vapidPublicKey && vapidPrivateKey) {
       vapidPrivateKey
     );
   } catch (e) {}
+  // Keep the notification dispatcher on the SAME keypair clients subscribed
+  // with (it may be auto-generated above when env vars are unset), so chat
+  // message pushes sent via dispatchNotification() actually reach browsers.
+  try {
+    notificationDispatcher.configureWebPush(vapidPublicKey, vapidPrivateKey);
+  } catch (e) {}
 }
 
 const { getMessaging } = require('firebase-admin/messaging');
 
-async function sendPushNotification(userId, title, body, url = '/messages') {
+async function sendPushNotification(userId, title, body, url = '/messages.html', type = 'notification', connectionId = null) {
   return pushBreaker.execute(async () => {
     const numUserId = Number(userId);
+
+    // Guarantee a non-blank title/body so the OS never shows an empty notification
+    const safeTitle = String(title && title.trim() ? title : 'New Notification');
+    const safeBody = String(body && body.trim() ? body : 'You have a new notification');
+    const safeUrl = String(url || (connectionId ? `/chat.html?id=${connectionId}` : '/messages.html'));
+    const safeType = String(type || 'notification');
+    const safeConnId = String(connectionId || '');
 
     // 1. Web Push Notification (PWA / Web Browsers)
     if (vapidPublicKey && vapidPrivateKey) {
@@ -2080,10 +2093,22 @@ async function sendPushNotification(userId, title, body, url = '/messages') {
             endpoint: sub.endpoint,
             keys: sub.keys
           };
-          const payload = JSON.stringify({ title, body, url, icon: '/favicon.ico' });
+          const payload = JSON.stringify({ title: safeTitle, body: safeBody, url: safeUrl, type: safeType, connectionId: safeConnId, icon: '/favicon.ico' });
           webPush.sendNotification(pushSub, payload).catch(err => {
             if (err.statusCode === 410 || err.statusCode === 404) {
               pushOps.removeSubscription(sub.endpoint);
+            }
+          });
+        }
+        // Devices subcollection web subscriptions (modern registration path)
+        const devices = await notificationDispatcher.getActiveDevices(numUserId).catch(() => []);
+        for (const dev of devices) {
+          const sub = dev.web_push_subscription;
+          if (dev.platform !== 'web_push' || !sub || !sub.endpoint) continue;
+          const payload = JSON.stringify({ title: safeTitle, body: safeBody, url: safeUrl, type: safeType, connectionId: safeConnId, icon: '/favicon.ico' });
+          webPush.sendNotification({ endpoint: sub.endpoint, keys: sub.keys }, payload).catch(err => {
+            if (err.statusCode === 410 || err.statusCode === 404) {
+              notificationDispatcher.unregisterDevice(numUserId, dev.deviceId).catch(() => {});
             }
           });
         }
@@ -2096,23 +2121,30 @@ async function sendPushNotification(userId, title, body, url = '/messages') {
     try {
       const apps = require('firebase-admin/app').getApps();
       if (apps.length > 0) {
-        const fcmTokens = await pushOps.getFCMTokens(numUserId);
-        if (fcmTokens && fcmTokens.length > 0) {
+        const legacyTokens = await pushOps.getFCMTokens(numUserId).catch(() => []);
+        const devices = await notificationDispatcher.getActiveDevices(numUserId).catch(() => []);
+        const deviceTokens = devices
+          .filter(d => d.platform === 'android_fcm' && d.fcm_token)
+          .map(d => d.fcm_token);
+        const allTokens = [...new Set([...(legacyTokens || []), ...deviceTokens])];
+        if (allTokens.length > 0) {
           const messaging = getMessaging(apps[0]);
-          for (const token of fcmTokens) {
+          for (const token of allTokens) {
             const message = {
               token,
-              notification: { title, body },
+              notification: { title: safeTitle, body: safeBody },
               data: {
-                title: String(title),
-                body: String(body),
-                url: String(url || '/messages.html')
+                title: safeTitle,
+                body: safeBody,
+                url: safeUrl,
+                type: safeType,
+                connectionId: safeConnId
               },
               android: {
                 priority: 'high',
                 notification: {
-                  title,
-                  body,
+                  title: safeTitle,
+                  body: safeBody,
                   icon: 'ic_stat_delulu',
                   color: '#a53b29',
                   sound: 'default',
