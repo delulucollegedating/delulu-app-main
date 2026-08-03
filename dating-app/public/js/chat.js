@@ -900,6 +900,8 @@ async function initializeChat() {
     chatInput.value = '';
     localStorage.removeItem(draftKey);
     chatInput.style.height = 'auto'; // Reset textarea auto-grow height
+    // Keep keyboard open on mobile — refocus immediately after clearing
+    chatInput.focus();
 
     // Append message to UI instantly (Optimistic UI)
     appendMessage({

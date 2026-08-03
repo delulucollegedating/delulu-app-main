@@ -1569,8 +1569,8 @@ body.dark #chat-messages .date-divider-pill {
 }
 .chat-composer:focus-within {
   background: #fff;
-  border-color: rgba(165, 59, 41, 0.56);
-  box-shadow: 0 0 0 3px rgba(165, 59, 41, 0.1);
+  border-color: rgba(139, 113, 109, 0.28);
+  box-shadow: none;
 }
 .chat-composer #chat-input { min-height: 38px !important; padding: 8px 0 !important; }
 
@@ -1600,7 +1600,7 @@ body.dark .chat-partner-status { color: #d1c9c5; }
 body.dark .chat-action-chip-primary { color: #ffb4a6; background: rgba(255, 180, 166, 0.12); border-color: rgba(255, 180, 166, 0.22); }
 body.dark .chat-action-chip-danger { color: #ffb4ab; background: rgba(255, 180, 171, 0.11); border-color: rgba(255, 180, 171, 0.2); }
 body.dark .chat-composer { background: #292b2d; border-color: rgba(255, 255, 255, 0.13); }
-body.dark .chat-composer:focus-within { background: #303234; border-color: rgba(255, 180, 166, 0.52); }
+body.dark .chat-composer:focus-within { background: #303234; border-color: rgba(255, 255, 255, 0.18); }
 
 @media (min-width: 768px) {
   body.chat-page {
