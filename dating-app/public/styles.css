@@ -716,6 +716,17 @@ body {
 #profile-overlay {
   transition: all 0.4s ease;
   flex-shrink: 0;
+  /* Ensure the connect button always clears the bottom nav + system gesture bar */
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px));
+}
+
+/* On very short mobile screens, squeeze the avatar container further
+   so the connect button has room to breathe above the bottom nav */
+@media (max-height: 700px) and (max-width: 767px) {
+  #avatar-3d-container {
+    min-height: 160px !important;
+    max-height: 200px !important;
+  }
 }
 
 /* Chat Page — Only the messages container scrolls, never the page itself */
