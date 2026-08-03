@@ -1565,14 +1565,23 @@ body.dark #chat-messages .date-divider-pill {
   border: 1px solid rgba(139, 113, 109, 0.18);
   border-radius: 18px;
   box-shadow: inset 0 1px 1px rgba(60, 32, 27, 0.03);
-  transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+  transition: background 160ms ease;
+  outline: none !important;
+  -webkit-tap-highlight-color: transparent;
 }
 .chat-composer:focus-within {
   background: #fff;
-  border-color: rgba(139, 113, 109, 0.28);
+  border-color: rgba(139, 113, 109, 0.18);
   box-shadow: none;
+  outline: none !important;
 }
-.chat-composer #chat-input { min-height: 38px !important; padding: 8px 0 !important; }
+.chat-composer #chat-input {
+  min-height: 38px !important;
+  padding: 8px 0 !important;
+  outline: none !important;
+  -webkit-tap-highlight-color: transparent;
+  box-shadow: none !important;
+}
 
 .chat-send-button {
   width: 40px;
