@@ -125,7 +125,7 @@
       
       <div class="chat-composer-shell z-10">
         <form id="chat-form" class="chat-composer" action="javascript:void(0)" onsubmit="return false">
-          <button type="button" id="btn-emoji" class="chat-emoji-button" aria-label="Open emoji keyboard" title="Emoji">
+          <button type="button" id="btn-emoji" class="chat-emoji-button" aria-label="Open emoji keyboard" title="Emoji" onmousedown="event.preventDefault()">
             <span style="font-size:22px;line-height:1;">🫥</span>
           </button>
           <textarea id="chat-input" class="flex-1 bg-transparent border-none text-sm px-2 py-2 focus:ring-0 placeholder-outline outline-none resize-none" style="outline:none !important;-webkit-tap-highlight-color:transparent;box-shadow:none !important;" placeholder="Type a message..." autocomplete="off" rows="1"></textarea>

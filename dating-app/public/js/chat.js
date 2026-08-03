@@ -838,8 +838,15 @@ async function initializeChat() {
     return;
   }
 
-  // Emoji button — focuses the input to open native keyboard (user can tap emoji on their keyboard)
+  // Emoji button — use touchend on mobile to fire before the browser blur sequence,
+  // preventing the keyboard from dismissing before we refocus the input.
   if (emojiBtn) {
+    emojiBtn.addEventListener('touchend', (e) => {
+      e.preventDefault(); // Stop the subsequent click/blur from firing
+      chatInput.focus();
+    }, { passive: false });
+
+    // Fallback for non-touch (desktop/PWA)
     emojiBtn.addEventListener('click', () => {
       chatInput.focus();
     });
