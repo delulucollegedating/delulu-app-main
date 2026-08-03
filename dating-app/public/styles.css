@@ -1583,6 +1583,31 @@ body.dark #chat-messages .date-divider-pill {
   box-shadow: none !important;
 }
 
+.chat-emoji-button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: transparent;
+  color: #8b716d;
+  border-radius: 50%;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  outline: none;
+  transition: color 160ms ease, background 160ms ease;
+}
+.chat-emoji-button:hover,
+.chat-emoji-button:active {
+  color: #a53b29;
+  background: rgba(165, 59, 41, 0.08);
+}
+body.dark .chat-emoji-button { color: #b0a09c; }
+body.dark .chat-emoji-button:hover,
+body.dark .chat-emoji-button:active { color: #ffb4a6; background: rgba(255, 180, 166, 0.1); }
+
 .chat-send-button {
   width: 40px;
   height: 40px;

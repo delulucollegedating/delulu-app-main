@@ -830,11 +830,19 @@ async function initializeChat() {
   const chatForm = document.getElementById('chat-form');
   const chatInput = document.getElementById('chat-input');
   const chatSendBtn = document.getElementById('btn-chat-send');
+  const emojiBtn = document.getElementById('btn-emoji');
   let typingTimeout = null;
 
   if (!chatForm || !chatInput || !chatSendBtn) {
     console.error('Chat composer elements are missing; message composer cannot initialize.');
     return;
+  }
+
+  // Emoji button — focuses the input to open native keyboard (user can tap emoji on their keyboard)
+  if (emojiBtn) {
+    emojiBtn.addEventListener('click', () => {
+      chatInput.focus();
+    });
   }
 
   // Text input changed (show/hide mic or send buttons + notify typing)
