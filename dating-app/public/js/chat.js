@@ -838,19 +838,89 @@ async function initializeChat() {
     return;
   }
 
-  // Emoji button — use touchend on mobile to fire before the browser blur sequence,
-  // preventing the keyboard from dismissing before we refocus the input.
-  if (emojiBtn) {
-    emojiBtn.addEventListener('touchend', (e) => {
-      e.preventDefault(); // Stop the subsequent click/blur from firing
-      chatInput.focus();
-    }, { passive: false });
+  // ===== Emoji Picker =====
+  const emojiPicker = document.getElementById('emoji-picker');
+  const emojiGrid = document.getElementById('emoji-grid');
+  let emojiPickerOpen = false;
 
-    // Fallback for non-touch (desktop/PWA)
-    emojiBtn.addEventListener('click', () => {
-      chatInput.focus();
+  const EMOJIS = {
+    smileys: ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃','😉','😊','😇','🥰','😍','🤩','😘','😋','😛','😜','🤪','😝','🤗','🤔','🤨','😐','😑','😏','😒','🙄','😬','😌','😔','😴','😷','🤒','🥺','😢','😭','😤','😡','🤬','😵','🤯','🥳','😎','🫠','🥹','🫡','🤭','🫢','🫣','😶‍🌫️','🫥'],
+    love: ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💕','💞','💓','💗','💖','💘','💝','💔','❣️','💟','💌','🫶','😍','🥰','😘','💏','💑'],
+    hands: ['👋','🤚','🖐','✋','👌','🤌','✌️','🤞','🤟','🤘','🤙','👈','👉','👆','👇','☝️','👍','👎','✊','👊','🤛','🤜','👏','🙌','🤲','🤝','🙏','💪','🦾','🫶','🫂','💅','🤳'],
+    fun: ['🎉','🎊','🎈','🎂','🎁','🏆','🥇','🎯','🎮','🎲','✨','⭐','🌟','💫','⚡','🔥','💥','🎵','🎶','🎸','🎤','🎧','🥂','🍾','🎭','🎨','🪄','🎠','🎡','🎢','🛝','🎪'],
+    nature: ['🌸','🌹','🌺','🌻','🌼','🌷','🌱','🌿','🍀','🌴','🌊','🌈','☀️','🌙','⭐','🦋','🐱','🐶','🐼','🦊','🐸','🐧','🦄','🐝','🦁','🐯','🐨','🐻','🦋','🌮','🍕','☕','🍰','🍓','🍇','🍒']
+  };
+
+  function insertEmoji(emoji) {
+    const start = chatInput.selectionStart ?? chatInput.value.length;
+    const end = chatInput.selectionEnd ?? chatInput.value.length;
+    chatInput.value = chatInput.value.slice(0, start) + emoji + chatInput.value.slice(end);
+    // Move cursor after inserted emoji
+    const newPos = start + emoji.length;
+    chatInput.selectionStart = chatInput.selectionEnd = newPos;
+    chatInput.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  function loadEmojiCategory(cat) {
+    if (!emojiGrid) return;
+    emojiGrid.innerHTML = '';
+    (EMOJIS[cat] || EMOJIS.smileys).forEach(emoji => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'emoji-item';
+      btn.textContent = emoji;
+      btn.setAttribute('onmousedown', 'event.preventDefault()');
+      btn.addEventListener('click', () => insertEmoji(emoji));
+      emojiGrid.appendChild(btn);
     });
   }
+
+  function openEmojiPicker() {
+    if (!emojiPicker) return;
+    emojiPickerOpen = true;
+    chatInput.blur(); // Dismiss keyboard so picker is fully visible
+    emojiPicker.classList.remove('hidden');
+    // Load default category
+    loadEmojiCategory('smileys');
+    document.querySelectorAll('.emoji-tab').forEach(t => t.classList.remove('active'));
+    const firstTab = document.querySelector('.emoji-tab[data-cat="smileys"]');
+    if (firstTab) firstTab.classList.add('active');
+  }
+
+  function closeEmojiPicker() {
+    if (!emojiPicker) return;
+    emojiPickerOpen = false;
+    emojiPicker.classList.add('hidden');
+  }
+
+  // Emoji button toggle
+  if (emojiBtn) {
+    const togglePicker = () => {
+      if (emojiPickerOpen) {
+        closeEmojiPicker();
+        chatInput.focus();
+      } else {
+        openEmojiPicker();
+      }
+    };
+    emojiBtn.addEventListener('touchend', (e) => { e.preventDefault(); togglePicker(); }, { passive: false });
+    emojiBtn.addEventListener('click', togglePicker);
+  }
+
+  // Tapping the textarea closes the picker and opens keyboard
+  chatInput.addEventListener('focus', () => {
+    if (emojiPickerOpen) closeEmojiPicker();
+  });
+
+  // Category tab switching
+  document.querySelectorAll('.emoji-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.emoji-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      loadEmojiCategory(tab.dataset.cat);
+    });
+  });
+
 
   // Text input changed (show/hide mic or send buttons + notify typing)
   // Auto-grow textarea handler
@@ -913,6 +983,8 @@ async function initializeChat() {
 
     // Clear input & buttons instantly
     chatInput.value = '';
+    closeEmojiPicker(); // Close emoji panel on send, re-enable keyboard
+    chatInput.focus();  // Keep keyboard open for next message
     localStorage.removeItem(draftKey);
     chatInput.style.height = 'auto'; // Reset textarea auto-grow height
     // Keep keyboard open on mobile — refocus immediately after clearing

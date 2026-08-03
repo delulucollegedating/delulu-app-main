@@ -1608,6 +1608,78 @@ body.dark .chat-emoji-button { color: #b0a09c; }
 body.dark .chat-emoji-button:hover,
 body.dark .chat-emoji-button:active { color: #ffb4a6; background: rgba(255, 180, 166, 0.1); }
 
+/* ===== Emoji Picker Panel ===== */
+.emoji-picker {
+  flex: 0 0 auto;
+  height: 250px;
+  display: flex;
+  flex-direction: column;
+  background: #fbf9f8;
+  border-top: 1px solid rgba(139, 113, 109, 0.12);
+  padding: 8px 10px 4px;
+  overflow: hidden;
+}
+.emoji-picker.hidden { display: none !important; }
+
+.emoji-tabs {
+  display: flex;
+  gap: 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(139, 113, 109, 0.1);
+  margin-bottom: 4px;
+  flex-shrink: 0;
+}
+.emoji-tab {
+  flex: 1;
+  font-size: 20px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 5px 4px;
+  border-radius: 8px;
+  opacity: 0.4;
+  -webkit-tap-highlight-color: transparent;
+  outline: none;
+  transition: opacity 150ms ease, background 150ms ease;
+}
+.emoji-tab.active { opacity: 1; background: rgba(165, 59, 41, 0.1); }
+.emoji-tab:active { opacity: 1; }
+
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 0px;
+  overflow-y: auto;
+  flex: 1;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.emoji-grid::-webkit-scrollbar { display: none; }
+
+.emoji-item {
+  font-size: 26px;
+  text-align: center;
+  padding: 5px 2px;
+  cursor: pointer;
+  border-radius: 8px;
+  border: none;
+  background: none;
+  -webkit-tap-highlight-color: transparent;
+  outline: none;
+  line-height: 1.2;
+  transition: background 100ms ease, transform 100ms ease;
+}
+.emoji-item:active {
+  background: rgba(165, 59, 41, 0.1);
+  transform: scale(0.85);
+}
+
+body.dark .emoji-picker { background: #1b1d1e; border-color: rgba(255,255,255,0.08); }
+body.dark .emoji-tabs { border-color: rgba(255,255,255,0.07); }
+body.dark .emoji-tab.active { background: rgba(255, 180, 166, 0.12); }
+body.dark .emoji-item:active { background: rgba(255, 180, 166, 0.12); }
+
+
 .chat-send-button {
   width: 40px;
   height: 40px;
