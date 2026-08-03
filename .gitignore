@@ -2,3 +2,18 @@ node_modules/
 .env
 *.db-shm
 *.db-wal
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# JetBrains IDE files
+.idea/
+*.iml
+
+# Root-level scratch/notes
+*.md
+
+# Load test files
+dating-app/load/
