@@ -123,24 +123,10 @@
         <span id="new-messages-badge" class="hidden absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-error text-white text-[10px] font-bold leading-5 text-center" aria-live="polite"></span>
       </button>
       
-      <!-- Emoji Picker Panel -->
-      <div id="emoji-picker" class="emoji-picker hidden">
-        <div class="emoji-tabs">
-          <button type="button" class="emoji-tab active" data-cat="smileys" onmousedown="event.preventDefault()">😀</button>
-          <button type="button" class="emoji-tab" data-cat="love" onmousedown="event.preventDefault()">❤️</button>
-          <button type="button" class="emoji-tab" data-cat="hands" onmousedown="event.preventDefault()">👋</button>
-          <button type="button" class="emoji-tab" data-cat="fun" onmousedown="event.preventDefault()">🎉</button>
-          <button type="button" class="emoji-tab" data-cat="nature" onmousedown="event.preventDefault()">🌸</button>
-        </div>
-        <div id="emoji-grid" class="emoji-grid"></div>
-      </div>
 
       <div class="chat-composer-shell z-10">
         <form id="chat-form" class="chat-composer" action="javascript:void(0)" onsubmit="return false">
-          <button type="button" id="btn-emoji" class="chat-emoji-button" aria-label="Open emoji keyboard" title="Emoji" onmousedown="event.preventDefault()">
-            <span style="font-size:22px;line-height:1;">🫥</span>
-          </button>
-          <textarea id="chat-input" class="flex-1 bg-transparent border-none text-sm px-2 py-2 focus:ring-0 placeholder-outline outline-none resize-none" style="outline:none !important;-webkit-tap-highlight-color:transparent;box-shadow:none !important;" placeholder="Type a message..." autocomplete="off" rows="1"></textarea>
+          <textarea id="chat-input" class="flex-1 bg-transparent border-none text-sm px-4 py-2 focus:ring-0 placeholder-outline outline-none resize-none" style="outline:none !important;-webkit-tap-highlight-color:transparent;box-shadow:none !important;" placeholder="Type a message..." autocomplete="off" rows="1"></textarea>
           <button type="submit" id="btn-chat-send" class="chat-send-button" aria-label="Send message">
             <span class="material-symbols-outlined text-[20px] material-fill">send</span>
           </button>
