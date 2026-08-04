@@ -540,9 +540,9 @@ function renderFallbackCards() {
               ${getAvatarHtml(p.username, p.avatar)}
             </div>
             <h3 class="font-bold text-xl capitalize text-on-surface">${safeUsername}</h3>
-            <button data-fallback-preview="${i}" class="profile-more-btn mt-1.5" type="button" aria-label="View bio and hobbies" title="View bio and hobbies">
-              <span class="profile-more-dot"></span>
-              <span class="profile-more-dot"></span>
+            <button data-fallback-preview="${i}" class="profile-more-btn mt-2" type="button" aria-label="View bio and hobbies" title="View bio and hobbies">
+              <span class="material-symbols-outlined">person_search</span>
+              <span>Check me</span>
             </button>
             <div class="flex gap-3 mt-auto">
               <button data-fallback-action="dismiss" data-index="${i}" class="w-10 h-10 rounded-full bg-white shadow-md border border-outline-variant/20 flex items-center justify-center text-on-surface-variant hover:scale-110 transition-all">
@@ -652,7 +652,7 @@ function showDiscoverSkeletons(count = 6) {
     <div class="discover-skeleton-card">
       <div class="discover-skeleton-avatar shimmer-block"></div>
       <div class="discover-skeleton-line shimmer-block" style="width:65%"></div>
-      <div class="discover-skeleton-dots shimmer-block"></div>
+      <div class="discover-skeleton-checkme shimmer-block"></div>
     </div>
   `).join('');
   
