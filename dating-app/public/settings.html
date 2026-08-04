@@ -234,6 +234,13 @@
             <span class="material-symbols-outlined text-lg">published_with_changes</span>
             <span>Update Password</span>
           </button>
+          <!-- Resend / Cancel so user is never stuck if OTP expires -->
+          <div class="flex items-center justify-center gap-1 mt-1">
+            <span class="text-xs text-on-surface-variant">Didn't receive it?</span>
+            <button type="button" id="btn-pwd-resend" class="text-xs text-primary font-bold hover:underline cursor-pointer">Resend code</button>
+            <span class="text-xs text-on-surface-variant mx-1">·</span>
+            <button type="button" id="btn-pwd-cancel" class="text-xs text-on-surface-variant hover:text-error font-semibold cursor-pointer">Cancel</button>
+          </div>
         </form>
       </section>
 
@@ -241,6 +248,6 @@
   </main>
 
   <script src="js/shared.js?v=283"></script>
-  <script src="js/settings.js?v=101"></script>
+  <script src="js/settings.js?v=102"></script>
 </body>
 </html>

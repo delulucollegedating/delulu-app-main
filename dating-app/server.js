@@ -1538,7 +1538,7 @@ app.post('/api/settings/update-username', requireAuth, async (req, res) => {
 });
 
 // 4. Send Password Reset OTP for logged-in user in Settings
-app.post('/api/settings/password-reset/send-code', requireAuth, async (req, res) => {
+app.post('/api/settings/password-reset/send-code', requireAuth, otpLimiter, async (req, res) => {
   try {
     const user = await userOps.getById(req.session.userId);
     if (!user || !user.email) {

@@ -309,8 +309,13 @@
         <p id="forgot-error-2" class="text-error text-xs font-semibold hidden"></p>
         <button type="submit" id="btn-forgot-reset" class="w-full bg-primary text-white font-bold py-3 rounded-xl shadow-md hover:shadow-lg transition-all text-sm cursor-pointer flex items-center justify-center gap-2">
           <span class="material-symbols-outlined text-lg">check_circle</span>
-          <span>Reset Password & Sign In</span>
+          <span>Reset Password &amp; Sign In</span>
         </button>
+        <!-- Resend / Back so user isn't stuck if OTP expires -->
+        <div class="flex items-center justify-center gap-1">
+          <span class="text-xs text-on-surface-variant">Didn't receive it?</span>
+          <button type="button" id="btn-forgot-resend" class="text-xs text-primary font-bold hover:underline cursor-pointer">Resend code</button>
+        </div>
       </form>
     </div>
   </div>

@@ -48,6 +48,12 @@ function renderCooldownBanner(data) {
       </div>
     `;
     if (btnUpdate) btnUpdate.disabled = false;
+    // BUG FIX: Always re-enable the input so it can't get stuck in a disabled state
+    const usernameInput = document.getElementById('input-username');
+    if (usernameInput) {
+      usernameInput.disabled = false;
+      usernameInput.classList.remove('opacity-60', 'cursor-not-allowed');
+    }
   } else {
     const unlockStr = data.next_allowed_at 
       ? new Date(data.next_allowed_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
@@ -201,6 +207,7 @@ function setupPasswordResetEvents() {
         showToast(res.message || 'Verification code sent to your email!');
         pwdStep1.classList.add('hidden');
         formReset.classList.remove('hidden');
+        document.getElementById('input-pwd-otp')?.focus();
       } catch (err) {
         hapticHeavy();
         showToast(err.message, 'error');
@@ -208,6 +215,34 @@ function setupPasswordResetEvents() {
         btnSendCode.disabled = false;
         btnSendCode.innerHTML = '<span class="material-symbols-outlined text-lg">send</span> Send Reset Code to Email';
       }
+    });
+  }
+
+  // BUG FIX: Resend code — go back to step 1 to request a fresh OTP
+  const btnResend = document.getElementById('btn-pwd-resend');
+  const btnCancel = document.getElementById('btn-pwd-cancel');
+
+  function resetPasswordSteps() {
+    if (formReset) {
+      formReset.reset();
+      formReset.classList.add('hidden');
+    }
+    if (pwdStep1) pwdStep1.classList.remove('hidden');
+    if (errorMsg) errorMsg.classList.add('hidden');
+  }
+
+  if (btnResend) {
+    btnResend.addEventListener('click', async () => {
+      resetPasswordSteps();
+      // Auto-trigger resend
+      if (btnSendCode) btnSendCode.click();
+    });
+  }
+
+  if (btnCancel) {
+    btnCancel.addEventListener('click', () => {
+      resetPasswordSteps();
+      showToast('Password reset cancelled', 'info');
     });
   }
 

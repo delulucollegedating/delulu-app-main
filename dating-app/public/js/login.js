@@ -393,6 +393,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
   }
 
+  // BUG FIX: Resend code — go back to step 1 and auto-submit to get a fresh OTP
+  const btnForgotResend = document.getElementById('btn-forgot-resend');
+  if (btnForgotResend) {
+    btnForgotResend.addEventListener('click', () => {
+      // Reset step 2 and show step 1 again
+      forgotFormStep2.reset();
+      forgotFormStep2.classList.add('hidden');
+      forgotErr2.classList.add('hidden');
+      forgotFormStep1.classList.remove('hidden');
+      // Auto-submit step 1 to resend the code
+      forgotFormStep1.dispatchEvent(new Event('submit', { cancelable: true }));
+    });
+  }
+
   if (forgotFormStep2) {
     forgotFormStep2.onsubmit = async (e) => {
       e.preventDefault();
