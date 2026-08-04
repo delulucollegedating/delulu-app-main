@@ -106,8 +106,14 @@ function setupUsernameEvents() {
     msgEl.className = 'text-xs font-semibold mt-1.5 pl-1 text-on-surface-variant block';
 
     checkUsernameTimer = setTimeout(async () => {
+      // RACE CONDITION FIX: capture the value at timer-fire time and bail
+      // out if the user has typed something different while the request was
+      // queued, so a slow response never marks the wrong username "available".
+      const frozenVal = val;
       try {
-        const res = await apiCall('/api/settings/check-username', 'POST', { username: val });
+        const res = await apiCall('/api/settings/check-username', 'POST', { username: frozenVal });
+        // Discard result if input changed while we were waiting
+        if (usernameInput.value.trim() !== frozenVal) return;
         if (res.available) {
           msgEl.textContent = 'Username is available!';
           msgEl.className = 'text-xs font-semibold mt-1.5 pl-1 text-emerald-600 dark:text-emerald-400 block';
@@ -120,6 +126,7 @@ function setupUsernameEvents() {
           isUsernameAvailable = false;
         }
       } catch (err) {
+        if (usernameInput.value.trim() !== frozenVal) return;
         msgEl.textContent = err.message || 'Failed to verify username';
         msgEl.className = 'text-xs font-semibold mt-1.5 pl-1 text-error block';
         iconEl.innerHTML = '';
@@ -213,8 +220,8 @@ function setupPasswordResetEvents() {
       const newPwd = document.getElementById('input-pwd-new').value;
       const confirmPwd = document.getElementById('input-pwd-confirm').value;
 
-      if (!otp || otp.length !== 6) {
-        errorMsg.textContent = 'Please enter the 6-digit verification code sent to your email';
+      if (!otp || otp.length !== 6 || !/^[0-9]{6}$/.test(otp)) {
+        errorMsg.textContent = 'Please enter the 6-digit numeric verification code';
         errorMsg.classList.remove('hidden');
         return;
       }

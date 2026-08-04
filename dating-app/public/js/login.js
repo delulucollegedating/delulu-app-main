@@ -403,8 +403,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       forgotErr2.classList.add('hidden');
 
-      if (!otp || otp.length !== 6) {
-        forgotErr2.textContent = 'Please enter the 6-digit verification code';
+      if (!otp || otp.length !== 6 || !/^[0-9]{6}$/.test(otp)) {
+        forgotErr2.textContent = 'Please enter the 6-digit numeric verification code';
         forgotErr2.classList.remove('hidden');
         return;
       }
