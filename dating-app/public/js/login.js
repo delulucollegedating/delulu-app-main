@@ -438,6 +438,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (res.user) {
           window.localStorage.setItem('cached_user', JSON.stringify(res.user));
         }
+        // IMPORTANT: The E2EE private key was encrypted with the OLD password.
+        // After a password reset it can no longer be decrypted, so remove the
+        // stale key — the user will see a one-time warning the next time they
+        // open a chat, and can re-enable encryption by logging out and back in
+        // on a device where they remember their previous password.
+        window.localStorage.removeItem('e2ee_private_key');
 
         window.location.replace('discover.html');
       } catch (err) {
