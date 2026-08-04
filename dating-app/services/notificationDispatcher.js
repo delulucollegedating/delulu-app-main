@@ -49,7 +49,7 @@ function buildWebPushPayload(payload, connectionId) {
     type: String(payload.type || 'chat_message'),
     connectionId: String(connectionId || ''),
     senderId: String(payload.senderId || ''),
-    senderName: String(payload.senderName || 'Classmate'),
+    senderName: String(payload.senderName || payload.title || 'User'),
     icon: '/favicon.ico'
   });
 }
@@ -243,7 +243,7 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
           type: String(payload.type || 'chat_message'),
           connectionId: String(connectionId || ''),
           senderId: String(payload.senderId || ''),
-          senderName: String(payload.senderName || 'Classmate'),
+          senderName: String(payload.senderName || payload.title || 'User'),
           messageId: String(payload.messageId || ''),
           createdAt: String(payload.createdAt || new Date().toISOString()),
           title: notifTitle,

@@ -623,7 +623,7 @@ function registerCapacitorPushListeners() {
     // Foreground delivery — FCM does not auto-display while app is open
     PushNotifications.addListener('pushReceived', (notification) => {
       const data = (notification && notification.data) || {};
-      const title = data.title || (data.type === 'chat_message' ? 'New message' : 'New notification');
+      const title = data.title || data.senderName || (data.type === 'chat_message' ? 'New message' : 'New notification');
       const body = data.body || '';
       const url = data.url || (data.connectionId ? `chat.html?id=${data.connectionId}` : 'messages.html');
       window.showNativeNotification({ title, body, url, id: data.messageId || data.connectionId });

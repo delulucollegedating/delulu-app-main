@@ -54,7 +54,7 @@ function initUserStream() {
         // Native notification if app is backgrounded
         if (document.hidden && typeof window.showNativeNotification === 'function') {
           window.showNativeNotification({
-            title: data.senderName ? `${data.senderName} on Delulu` : 'New message',
+            title: data.senderName || 'New message',
             body: data.lastMessage || 'You have a new message',
             url: `chat.html?id=${data.connectionId}`,
             id: data.connectionId

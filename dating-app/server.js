@@ -2028,15 +2028,30 @@ app.post('/api/messages/send', requireAuth, messageLimiter, async (req, res) => 
 
   // Notify the OTHER user's per-user stream (messages list page) for instant updates
   const otherUserId = Number(conn.from_user_id) === senderId ? conn.to_user_id : conn.from_user_id;
-  // Get sender's display name (cached — no extra DB hit)
-  const senderUser = getCachedUser(senderId) || {};
+  // Get sender's display name from session cache or DB (userOps.getById is cached)
+  let senderUser = getCachedUser(senderId);
+  if (!senderUser || !senderUser.username) {
+    senderUser = await userOps.getById(senderId).catch(() => null);
+    if (senderUser) {
+      setCachedUser(senderId, {
+        id: senderUser.id,
+        username: senderUser.username,
+        avatar: senderUser.avatar,
+        bio: senderUser.bio,
+        hobbies: senderUser.hobbies,
+        gender: senderUser.gender
+      });
+    }
+  }
+  const senderUsername = (senderUser && senderUser.username) ? senderUser.username : 'User';
+
   userEmitter.emit(`user:${otherUserId}`, {
     type: 'message',
     connectionId: Number(connection_id),
     lastMessage: displayContent,
     lastMessageTime: msg.created_at,
     senderId,
-    senderName: senderUser.username || 'Someone'
+    senderName: senderUsername
   });
 
   // Dispatch push notification to the receiver across platform channels (FCM for Android app, Web Push for browser)
@@ -2044,10 +2059,10 @@ app.post('/api/messages/send', requireAuth, messageLimiter, async (req, res) => 
     otherUserId,
     connection_id,
     {
-      title: senderUser.username || 'Classmate',
+      title: senderUsername,
       body: displayContent,
       senderId,
-      senderName: senderUser.username || 'Classmate',
+      senderName: senderUsername,
       messageId: msg.id,
       type: 'chat_message',
       createdAt: msg.created_at,
