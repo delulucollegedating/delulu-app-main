@@ -960,7 +960,7 @@ async function sendBrevoEmail(email, subject, htmlContent) {
         'content-type': 'application/json'
       },
       body: JSON.stringify({
-        sender: { name: 'Delulu App', email: 'delulu.college.dating@gmail.com' },
+        sender: { name: 'Delulu', email: process.env.BREVO_SENDER_EMAIL || 'deluluxcollegedating@gmail.com' },
         to: [{ email }],
         subject,
         htmlContent
@@ -2538,7 +2538,7 @@ if (!vapidPublicKey || !vapidPrivateKey) {
 if (vapidPublicKey && vapidPrivateKey) {
   try {
     webPush.setVapidDetails(
-      `mailto:${process.env.GMAIL_USER || 'delulu.college.dating@gmail.com'}`,
+      `mailto:${process.env.GMAIL_USER || 'deluluxcollegedating@gmail.com'}`,
       vapidPublicKey,
       vapidPrivateKey
     );

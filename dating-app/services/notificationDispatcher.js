@@ -18,7 +18,7 @@ function configureWebPush(publicKey, privateKey) {
   }
   try {
     webPush.setVapidDetails(
-      `mailto:${process.env.GMAIL_USER || 'delulu.college.dating@gmail.com'}`,
+      `mailto:${process.env.GMAIL_USER || 'deluluxcollegedating@gmail.com'}`,
       publicKey,
       privateKey
     );
