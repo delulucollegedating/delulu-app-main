@@ -1521,6 +1521,8 @@ app.post('/api/settings/update-username', requireAuth, async (req, res) => {
     // Invalidate caches & update session
     invalidateCache(user.id);
     invalidateUserCache && invalidateUserCache(user.id);
+    // A changed username appears in other viewers' cached Discover feeds
+    invalidateDiscoverFeed();
     if (req.session.user) {
       req.session.user.username = usernameStr;
     }
@@ -1572,12 +1574,12 @@ app.post('/api/settings/password-reset/send-code', requireAuth, otpLimiter, asyn
 });
 
 // 5. Verify OTP & Update Password in Settings
-app.post('/api/settings/password-reset/verify-and-update', requireAuth, async (req, res) => {
-  const { otp, newPassword } = req.body;
+app.post('/api/settings/password-reset/verify-and-update', requireAuth, otpLimiter, async (req, res) => {
+  const { otp, newPassword, encrypted_private_key, public_key } = req.body;
   if (!otp || !newPassword) {
     return res.status(400).json({ error: 'Verification code and new password are required' });
   }
-  if (newPassword.length < 6) {
+  if (typeof newPassword !== 'string' || newPassword.length < 6) {
     return res.status(400).json({ error: 'Password must be at least 6 characters' });
   }
 
@@ -1594,7 +1596,13 @@ app.post('/api/settings/password-reset/verify-and-update', requireAuth, async (r
     }
 
     const passwordHash = await bcrypt.hash(newPassword, 10);
-    await userOps.updatePassword(user.id, passwordHash);
+    // Re-encrypt the E2EE private key with the new password when the client supplies
+    // it — otherwise the DB copy stays locked to the old password forever.
+    await userOps.update(user.id, {
+      passcode_hash: passwordHash,
+      ...(encrypted_private_key ? { encrypted_private_key } : {}),
+      ...(public_key ? { public_key } : {})
+    });
 
     invalidateCache(user.id);
     invalidateUserCache && invalidateUserCache(user.id);
@@ -1646,11 +1654,11 @@ app.post('/api/auth/forgot-password/send-code', otpLimiter, async (req, res) => 
 
 // 7. Public Forgot Password: Verify Code & Reset Password & Log In (Login Page)
 app.post('/api/auth/forgot-password/reset', otpLimiter, async (req, res) => {
-  const { email, otp, newPassword } = req.body;
+  const { email, otp, newPassword, encrypted_private_key, public_key } = req.body;
   if (!email || !otp || !newPassword) {
     return res.status(400).json({ error: 'Email, verification code, and new password are required' });
   }
-  if (newPassword.length < 6) {
+  if (typeof newPassword !== 'string' || newPassword.length < 6) {
     return res.status(400).json({ error: 'Password must be at least 6 characters' });
   }
 
@@ -1667,7 +1675,13 @@ app.post('/api/auth/forgot-password/reset', otpLimiter, async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(newPassword, 10);
-    await userOps.updatePassword(user.id, passwordHash);
+    // Re-encrypt the E2EE private key with the new password when the client supplies
+    // it — otherwise the DB copy stays locked to the old password forever.
+    await userOps.update(user.id, {
+      passcode_hash: passwordHash,
+      ...(encrypted_private_key ? { encrypted_private_key } : {}),
+      ...(public_key ? { public_key } : {})
+    });
 
     // BUG FIX: Clear stale session cache BEFORE writing new one, then also
     // invalidate the Firestore user cache so login reads the fresh password hash

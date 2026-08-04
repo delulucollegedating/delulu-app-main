@@ -1,6 +1,8 @@
 let currentSettings = null;
 let checkUsernameTimer = null;
 let isUsernameAvailable = false;
+let lastCheckedValue = '';      // username the last availability check was for
+let lastCheckSaidTaken = false; // only block submit when a check CONFIRMED taken
 
 document.addEventListener('DOMContentLoaded', async () => {
   await requireAuth();
@@ -95,6 +97,8 @@ function setupUsernameEvents() {
       msgEl.classList.add('hidden');
       iconEl.innerHTML = '';
       isUsernameAvailable = false;
+      lastCheckedValue = '';
+      lastCheckSaidTaken = false;
       return;
     }
 
@@ -104,6 +108,8 @@ function setupUsernameEvents() {
       msgEl.className = 'text-xs font-semibold mt-1.5 pl-1 text-error block';
       iconEl.innerHTML = '<span class="material-symbols-outlined text-error text-lg">cancel</span>';
       isUsernameAvailable = false;
+      lastCheckedValue = val;
+      lastCheckSaidTaken = true; // format invalid — treat as not allowed
       return;
     }
 
@@ -120,22 +126,28 @@ function setupUsernameEvents() {
         const res = await apiCall('/api/settings/check-username', 'POST', { username: frozenVal });
         // Discard result if input changed while we were waiting
         if (usernameInput.value.trim() !== frozenVal) return;
+        lastCheckedValue = frozenVal;
         if (res.available) {
           msgEl.textContent = 'Username is available!';
           msgEl.className = 'text-xs font-semibold mt-1.5 pl-1 text-emerald-600 dark:text-emerald-400 block';
           iconEl.innerHTML = '<span class="material-symbols-outlined text-emerald-500 text-lg">check_circle</span>';
           isUsernameAvailable = true;
+          lastCheckSaidTaken = false;
         } else {
           msgEl.textContent = res.message || 'Username is already taken';
           msgEl.className = 'text-xs font-semibold mt-1.5 pl-1 text-error block';
           iconEl.innerHTML = '<span class="material-symbols-outlined text-error text-lg">cancel</span>';
           isUsernameAvailable = false;
+          lastCheckSaidTaken = true;
         }
       } catch (err) {
         if (usernameInput.value.trim() !== frozenVal) return;
         msgEl.textContent = err.message || 'Failed to verify username';
         msgEl.className = 'text-xs font-semibold mt-1.5 pl-1 text-error block';
         iconEl.innerHTML = '';
+        // Network error — do NOT mark as taken; the server re-validates on submit
+        lastCheckedValue = '';
+        lastCheckSaidTaken = false;
         isUsernameAvailable = false;
       }
     }, 400);
@@ -156,9 +168,11 @@ function setupUsernameEvents() {
         return;
       }
 
-      // BUG FIX: Block submission if availability was never confirmed via the API check
-      if (val !== (currentSettings && currentSettings.username) && !isUsernameAvailable) {
-        showToast('Please wait for username availability to be confirmed', 'error');
+      // Block submission ONLY when we have a confirmed verdict for this exact
+      // value — an unavailable check or an in-flight/errored check must not
+      // deadlock the form (the server re-validates availability anyway).
+      if (val === lastCheckedValue && lastCheckSaidTaken) {
+        showToast('This username is not available', 'error');
         usernameInput.focus();
         return;
       }
@@ -175,14 +189,23 @@ function setupUsernameEvents() {
         isUsernameAvailable = false;
         msgEl.classList.add('hidden');
         iconEl.innerHTML = '';
-        // Update local session
-        if (window.currentUser) window.currentUser.username = val;
+        // Update local session AND persisted cache so other pages (profile,
+        // messages, etc.) show the new username immediately.
+        if (window.currentUser) {
+          window.currentUser.username = val;
+          try {
+            window.localStorage.setItem('cached_user', JSON.stringify(window.currentUser));
+          } catch (e) {}
+          updateHeaderAvatar();
+        }
         await loadUserSettings();
       } catch (err) {
         hapticHeavy();
         showToast(err.message, 'error');
       } finally {
-        btn.disabled = false;
+        // After a successful change the 15-day cooldown is active — keep the
+        // button disabled instead of re-enabling it.
+        btn.disabled = !!(currentSettings && !currentSettings.can_change_username);
         btn.innerHTML = '<span class="material-symbols-outlined text-lg">check_circle</span> Save New Username';
       }
     });
@@ -278,12 +301,22 @@ function setupPasswordResetEvents() {
       btnUpdate.innerHTML = '<span class="material-symbols-outlined text-lg animate-spin">refresh</span> Updating Password...';
 
       try {
+        // Re-encrypt the E2EE private key with the new password so chat history
+        // stays recoverable after the password change.
+        const e2eePayload = await reencryptE2EEKeysForNewPassword(newPwd, currentSettings?.email || '');
         const res = await apiCall('/api/settings/password-reset/verify-and-update', 'POST', {
           otp,
-          newPassword: newPwd
+          newPassword: newPwd,
+          encrypted_private_key: e2eePayload.encrypted_private_key,
+          public_key: e2eePayload.public_key
         });
         hapticHeavy();
         showToast(res.message || 'Password updated successfully!');
+        // Persist a freshly minted private key ONLY after the server accepted
+        // the change, keeping the local keypair in sync with the server.
+        if (e2eePayload.privateKeyJwk) {
+          window.localStorage.setItem('e2ee_private_key', JSON.stringify(e2eePayload.privateKeyJwk));
+        }
         formReset.reset();
         formReset.classList.add('hidden');
         pwdStep1.classList.remove('hidden');

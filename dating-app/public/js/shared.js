@@ -233,6 +233,66 @@ function initGlobalSocket() {
   // Socket.io disabled by user request. Mock socket is used globally.
 }
 
+// After a password change, the E2EE private key stored on the server is
+// encrypted with a key derived from the OLD password — with the new password it
+// can never be decrypted again, which would permanently lock the user out of
+// their chat history. This helper re-encrypts the existing private key (kept in
+// localStorage after login) with the new password. If no local key exists (e.g.
+// forgot-password on a fresh device), a fresh keypair is minted so future
+// messages still work.
+// Returns { encrypted_private_key, public_key } — merge into the reset request.
+async function reencryptE2EEKeysForNewPassword(newPassword, email) {
+  if (typeof E2EECrypto === 'undefined') return {};
+  try {
+    let privateKey = null;
+    const existingKeyJwkStr = window.localStorage.getItem('e2ee_private_key');
+    if (existingKeyJwkStr) {
+      // Re-encrypt the existing keypair — preserves chat history.
+      privateKey = await E2EECrypto.importPrivateKeyFromJwk(JSON.parse(existingKeyJwkStr));
+    } else {
+      // No recoverable key on this device — mint a fresh keypair so new chats work.
+      const keypair = await E2EECrypto.generateECDHKeypair();
+      privateKey = keypair.privateKey;
+    }
+
+    const pbkdf2Key = await E2EECrypto.deriveKeyFromPassword(newPassword, email);
+    const encrypted_private_key = await E2EECrypto.encryptPrivateKey(privateKey, pbkdf2Key);
+
+    // ALWAYS derive the matching public key from the same keypair and send it.
+    // This guarantees the server's public_key always matches the stored private
+    // key — even if the private key came from a previous (failed) reset attempt
+    // that already wrote a fresh keypair to localStorage. Without this, a retry
+    // would update passcode + encrypted_private_key while leaving the OLD
+    // public_key on the server → permanent ECDH mismatch → unreadable messages.
+    let public_key = null;
+    try {
+      public_key = await E2EECrypto.exportKeyToJwk(privateKey.publicKey);
+    } catch (e) {
+      // Some browsers expose the public key off the private CryptoKey; if that
+      // fails, fall back to the public half of the stored JWK (contains x/y).
+      const jwk = await E2EECrypto.exportKeyToJwk(privateKey);
+      public_key = { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y };
+    }
+
+    // For a freshly minted keypair, also return the raw private JWK so the
+    // caller persists it to localStorage ONLY after the server confirms the
+    // reset succeeded — never before, so a failed attempt can't leave a stale
+    // keypair behind that mismatches the server's stored public_key.
+    let privateKeyJwk = null;
+    if (!existingKeyJwkStr) {
+      try {
+        privateKeyJwk = await E2EECrypto.exportKeyToJwk(privateKey);
+      } catch (e) {
+        privateKeyJwk = null;
+      }
+    }
+    return { encrypted_private_key, public_key, privateKeyJwk };
+  } catch (err) {
+    console.error('Failed to re-encrypt E2EE keys after password change:', err);
+    return {};
+  }
+}
+
 async function apiCall(url, method = 'GET', body = null) {
   const options = { 
     method, 

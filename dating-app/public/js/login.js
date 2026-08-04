@@ -444,13 +444,24 @@ document.addEventListener('DOMContentLoaded', async () => {
       btn.innerHTML = '<span class="material-symbols-outlined text-lg animate-spin">refresh</span> Resetting...';
 
       try {
+        // Re-encrypt the E2EE private key with the new password so chat history
+        // stays recoverable after the password reset.
+        const e2eePayload = await reencryptE2EEKeysForNewPassword(newPassword, email);
         const res = await apiCall('/api/auth/forgot-password/reset', 'POST', {
           email,
           otp,
-          newPassword
+          newPassword,
+          encrypted_private_key: e2eePayload.encrypted_private_key,
+          public_key: e2eePayload.public_key
         });
 
         if (res.token) {
+          // Persist a freshly minted private key ONLY after the server accepted
+          // the reset, so a failed attempt can't desync the local keypair from
+          // the server's stored public key.
+          if (e2eePayload.privateKeyJwk) {
+            window.localStorage.setItem('e2ee_private_key', JSON.stringify(e2eePayload.privateKeyJwk));
+          }
           window.localStorage.setItem('auth_token', res.token);
         }
         if (res.user) {
