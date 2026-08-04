@@ -22,7 +22,7 @@
 // ── Cache Version ─────────────────────────────────────────────────────────────
 // Increment this string whenever you deploy a new version of the app.
 // This causes the service worker to delete the old cache and re-download assets.
-const CACHE_VERSION = 'delulu-v6';
+const CACHE_VERSION = 'delulu-v7';
 
 // ── Static Assets to Pre-Cache on Install ─────────────────────────────────────
 // These files are cached immediately when the service worker installs.

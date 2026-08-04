@@ -1082,15 +1082,6 @@ textarea:focus-visible {
   width: 80%;
 }
 .discover-skeleton-line.short { width: 55%; }
-.discover-skeleton-chip {
-  width: 54px;
-  height: 26px;
-  border-radius: 999px;
-  margin-top: 12px;
-}
-.discover-skeleton-chip + .discover-skeleton-chip {
-  margin-left: 6px;
-}
 
 .shimmer-block {
   background: linear-gradient(90deg,
@@ -1645,4 +1636,146 @@ body.dark .chat-composer:focus-within { background: #303234; border-color: rgba(
   .chat-more-button { position: static; flex: 0 0 40px; margin-left: 4px; }
   .chat-composer-shell { padding: 10px 16px; }
   .chat-composer { max-width: 960px; margin: 0 auto; }
+}
+
+/* ===== Two-Dot "More" Button (opens bio/hobbies preview card) ===== */
+.profile-more-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 180ms var(--ease-out-emil), background-color 180ms ease;
+}
+.profile-more-btn:hover { background: rgba(165, 59, 41, 0.08); }
+.profile-more-btn:active { transform: scale(0.9); }
+.profile-more-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--on-surface-variant, #57423e);
+  opacity: 0.55;
+  transition: all 200ms ease;
+}
+body.dark .profile-more-dot { background: #c4c4c0; }
+.profile-more-btn:hover .profile-more-dot {
+  opacity: 1;
+  background: #a53b29;
+  transform: translateY(-1px);
+}
+
+/* ===== Profile Preview Card Modal (bio + hobbies) ===== */
+.profile-preview-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 240ms ease, visibility 240ms ease;
+}
+.profile-preview-modal.open {
+  visibility: visible;
+  opacity: 1;
+}
+.profile-preview-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.profile-preview-card {
+  position: relative;
+  width: 100%;
+  max-width: 380px;
+  max-height: min(80dvh, 640px);
+  overflow-y: auto;
+  border-radius: 24px;
+  padding: 32px 24px 28px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow: 0 24px 80px rgba(60, 32, 27, 0.25);
+  transform: translateY(18px) scale(0.96);
+  transition: transform 280ms var(--ease-out-emil);
+  -webkit-overflow-scrolling: touch;
+  z-index: 1;
+}
+.profile-preview-modal.open .profile-preview-card {
+  transform: translateY(0) scale(1);
+}
+.profile-preview-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--on-surface-variant, #57423e);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 180ms ease;
+}
+.profile-preview-close:hover {
+  background: rgba(165, 59, 41, 0.12);
+  color: #a53b29;
+  transform: rotate(90deg);
+}
+.profile-preview-avatar {
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  box-shadow: 0 8px 24px rgba(165, 59, 41, 0.2);
+  margin-bottom: 10px;
+}
+.profile-preview-username {
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--on-surface, #1b1c1c);
+  margin-bottom: 2px;
+}
+body.dark .profile-preview-card {
+  background: rgba(42, 44, 46, 0.95);
+  border-color: rgba(80, 76, 72, 0.4);
+}
+body.dark .profile-preview-close {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e3e2e0;
+}
+body.dark .profile-preview-close:hover {
+  background: rgba(255, 180, 166, 0.14);
+  color: #ffb4a6;
+}
+body.dark .profile-preview-username { color: #e3e2e0; }
+body.dark .profile-preview-avatar { border-color: rgba(80, 76, 72, 0.4); }
+
+/* Prevent background scroll while the preview card is open */
+body.preview-open { overflow: hidden !important; }
+
+/* Skeleton placeholder for the two-dot button while loading */
+.discover-skeleton-dots {
+  width: 46px;
+  height: 12px;
+  border-radius: 999px;
+  margin-top: 10px;
 }

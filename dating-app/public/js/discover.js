@@ -37,6 +37,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   document.getElementById('btn-discover-connect').onclick = () => handleConnectCenter();
 
+  // Two-dot button opens the bio/hobbies preview card
+  setupProfilePreview();
+
   // Keyboard navigation
   document.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowLeft') navigateCards(-1);
@@ -252,19 +255,83 @@ function updateProfileOverlay(index) {
   const overlay = document.getElementById('center-profile-info');
   if (!overlay) return;
   
+  // Only the avatar (3D scene) + name + two-dot button are shown here.
+  // Bio and hobbies moved to the preview card opened by the two-dot button.
   document.getElementById('center-username').textContent = p.username;
-  document.getElementById('center-bio').textContent = p.bio || 'Mystery person...';
+}
+
+// ── Profile Preview Card (bio + hobbies behind the two-dot button) ────────
+let previewReturnFocus = null;
+
+function openProfilePreview(profile) {
+  if (!profile) return;
   
-  const hobbiesEl = document.getElementById('center-hobbies');
-  if (p.hobbies && p.hobbies.length > 0) {
-    // Limit to max 4 hobbies on mobile to prevent layout overflow
-    const displayHobbies = window.innerWidth < 768 ? p.hobbies.slice(0, 4) : p.hobbies;
-    hobbiesEl.innerHTML = displayHobbies.map(h => 
-      `<span class="px-3 py-1 bg-white/40 backdrop-blur-md rounded-full text-xs font-semibold text-on-surface-variant border border-white/50 shadow-sm">${escapeHtml(h)}</span>`
-    ).join('');
-  } else {
-    hobbiesEl.innerHTML = '';
+  const modal = document.getElementById('profile-preview-modal');
+  if (!modal) return;
+  
+  const avatarEl = document.getElementById('profile-preview-avatar');
+  if (avatarEl) avatarEl.innerHTML = getAvatarHtml(profile.username, profile.avatar);
+  
+  document.getElementById('profile-preview-username').textContent = profile.username;
+  document.getElementById('profile-preview-bio').textContent = profile.bio || 'Mystery person...';
+  
+  // Same chip UI as the old inline hobbies display
+  const hobbiesEl = document.getElementById('profile-preview-hobbies');
+  const hobbies = profile.hobbies && Array.isArray(profile.hobbies) ? profile.hobbies : [];
+  hobbiesEl.innerHTML = hobbies.map(h => 
+    `<span class="px-3 py-1 bg-white/40 backdrop-blur-md rounded-full text-xs font-semibold text-on-surface-variant border border-white/50 shadow-sm">${escapeHtml(h)}</span>`
+  ).join('');
+  
+  hapticLight();
+  previewReturnFocus = document.activeElement;
+  modal.classList.add('open');
+  modal.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('preview-open');
+  document.querySelectorAll('.profile-more-btn').forEach(b => b.setAttribute('aria-expanded', 'true'));
+  
+  // Move focus into the dialog for keyboard/screen-reader users
+  const closeBtn = document.getElementById('profile-preview-close');
+  if (closeBtn && document.activeElement !== closeBtn) closeBtn.focus();
+}
+
+function closeProfilePreview() {
+  const modal = document.getElementById('profile-preview-modal');
+  if (!modal) return;
+  modal.classList.remove('open');
+  modal.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('preview-open');
+  document.querySelectorAll('.profile-more-btn').forEach(b => b.setAttribute('aria-expanded', 'false'));
+  
+  // Return focus to the two-dot button that opened the dialog
+  if (previewReturnFocus && typeof previewReturnFocus.focus === 'function' && document.contains(previewReturnFocus)) {
+    previewReturnFocus.focus();
   }
+  previewReturnFocus = null;
+}
+
+function setupProfilePreview() {
+  const modal = document.getElementById('profile-preview-modal');
+  if (!modal) return;
+  
+  const moreBtn = document.getElementById('btn-profile-more');
+  if (moreBtn) {
+    moreBtn.addEventListener('click', () => {
+      openProfilePreview(discoverProfiles[currentIndex]);
+    });
+  }
+  
+  const closeBtn = document.getElementById('profile-preview-close');
+  if (closeBtn) closeBtn.addEventListener('click', closeProfilePreview);
+  
+  // Backdrop click closes the preview
+  modal.querySelectorAll('[data-preview-close]').forEach(el => {
+    el.addEventListener('click', closeProfilePreview);
+  });
+  
+  // Escape key closes the preview
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeProfilePreview();
+  });
 }
 
 
@@ -467,20 +534,16 @@ function renderFallbackCards() {
     <div class="w-full h-full flex items-center justify-center overflow-x-auto snap-x snap-mandatory gap-6 px-8" id="fallback-rail">
       ${discoverProfiles.map((p, i) => {
         const safeUsername = escapeHtml(p.username);
-        const safeBio = escapeHtml(p.bio || 'Mystery person...');
-        const hobbyChips = (p.hobbies || []).slice(0, 3).map(h => 
-          `<span class="px-2 py-0.5 bg-surface-container-high/60 rounded-full text-[10px]">${escapeHtml(h)}</span>`
-        ).join('');
         return `
           <div class="discover-card relative w-64 h-[420px] shrink-0 snap-center flex flex-col items-center justify-center bg-white/60 backdrop-blur-xl rounded-3xl shadow-xl border border-white/40 p-4 transition-all duration-300" id="fallback-card-${i}">
             <div class="w-40 h-40 rounded-2xl overflow-hidden shadow-lg mb-3 avatar-img-wrapper transition-all duration-300 ${i === 0 ? 'animate-hello' : ''}">
               ${getAvatarHtml(p.username, p.avatar)}
             </div>
             <h3 class="font-bold text-xl capitalize text-on-surface">${safeUsername}</h3>
-            <p class="text-xs text-on-surface-variant mt-1 line-clamp-2 text-center">${safeBio}</p>
-            <div class="flex flex-wrap gap-1 justify-center mt-2 mb-3">
-              ${hobbyChips}
-            </div>
+            <button data-fallback-preview="${i}" class="profile-more-btn mt-1.5" type="button" aria-label="View bio and hobbies" title="View bio and hobbies">
+              <span class="profile-more-dot"></span>
+              <span class="profile-more-dot"></span>
+            </button>
             <div class="flex gap-3 mt-auto">
               <button data-fallback-action="dismiss" data-index="${i}" class="w-10 h-10 rounded-full bg-white shadow-md border border-outline-variant/20 flex items-center justify-center text-on-surface-variant hover:scale-110 transition-all">
                 <span class="material-symbols-outlined">close</span>
@@ -507,6 +570,15 @@ function renderFallbackCards() {
       } else if (action === 'connect') {
         connectFallback(idx, btn);
       }
+    });
+  });
+
+  // Two-dot buttons on fallback cards open the bio/hobbies preview card
+  container.querySelectorAll('[data-fallback-preview]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openProfilePreview(discoverProfiles[Number(btn.getAttribute('data-fallback-preview'))]);
     });
   });
 }
@@ -580,13 +652,7 @@ function showDiscoverSkeletons(count = 6) {
     <div class="discover-skeleton-card">
       <div class="discover-skeleton-avatar shimmer-block"></div>
       <div class="discover-skeleton-line shimmer-block" style="width:65%"></div>
-      <div class="discover-skeleton-line shimmer-block" style="width:85%"></div>
-      <div class="discover-skeleton-line short shimmer-block"></div>
-      <div class="flex gap-2 justify-center mt-4">
-        <div class="discover-skeleton-chip shimmer-block"></div>
-        <div class="discover-skeleton-chip shimmer-block"></div>
-        <div class="discover-skeleton-chip shimmer-block"></div>
-      </div>
+      <div class="discover-skeleton-dots shimmer-block"></div>
     </div>
   `).join('');
   
