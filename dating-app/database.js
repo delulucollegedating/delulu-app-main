@@ -239,12 +239,50 @@ const userOps = {
   
   async getByUsername(username) {
     if (!username) return null;
-    const snap = await getDB().collection('users').where('username', '==', String(username).trim()).limit(1).get();
-    if (snap.empty) return null;
-    const doc = snap.docs[0];
-    const data = doc.data();
-    const docId = doc.id ? (isNaN(doc.id) ? doc.id : Number(doc.id)) : null;
-    return { ...data, id: data.id || docId };
+    const target = String(username).trim();
+    const firestore = getDB();
+
+    // Fast path: exact (case-sensitive) match — usernames are stored as typed
+    const snap = await firestore.collection('users').where('username', '==', target).limit(1).get();
+    if (!snap.empty) {
+      const doc = snap.docs[0];
+      const data = doc.data();
+      const docId = doc.id ? (isNaN(doc.id) ? doc.id : Number(doc.id)) : null;
+      return { ...data, id: data.id || docId };
+    }
+
+    // Fallback: case-insensitive scan so "Bob" vs "bob" can never collide and
+    // login with a different casing still works. Firestore has no native
+    // case-insensitive equality, and the user base is college-scale, so a
+    // single scan on this rare path is acceptable.
+    const lower = target.toLowerCase();
+    const all = await firestore.collection('users').get();
+    for (const doc of all.docs) {
+      const data = doc.data();
+      if (String(data.username || '').trim().toLowerCase() === lower) {
+        const docId = doc.id ? (isNaN(doc.id) ? doc.id : Number(doc.id)) : null;
+        return { ...data, id: data.id || docId };
+      }
+    }
+    return null;
+  },
+
+  async isUsernameTaken(username, excludeUserId = null) {
+    const existing = await this.getByUsername(username);
+    if (!existing) return false;
+    if (excludeUserId !== null && Number(existing.id) === Number(excludeUserId)) return false;
+    return true;
+  },
+
+  async updatePassword(userId, passwordHash) {
+    await this.update(userId, { passcode_hash: passwordHash });
+  },
+
+  async changeUsername(userId, username) {
+    await this.update(userId, {
+      username: String(username).trim(),
+      username_changed_at: new Date().toISOString()
+    });
   },
 
   async getByEmail(email) {
@@ -266,7 +304,7 @@ const userOps = {
 
   async update(id, fields) {
     const updatePayload = {};
-    const allowed = ['bio', 'hobbies', 'avatar', 'fcm_tokens'];
+    const allowed = ['bio', 'hobbies', 'avatar', 'fcm_tokens', 'username', 'username_changed_at', 'passcode_hash', 'encrypted_private_key', 'public_key'];
     for (const key of allowed) {
       if (fields[key] !== undefined) {
         updatePayload[key] = fields[key];
@@ -1917,6 +1955,20 @@ const otpOps = {
     const batch = firestore.batch();
     snapshot.forEach(doc => batch.delete(doc.ref));
     await batch.commit();
+  },
+
+  async generate(email) {
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    await this.create(email, otp, new Date(Date.now() + 10 * 60 * 1000));
+    return otp;
+  },
+
+  async verify(email, otp) {
+    if (!email || !otp) return false;
+    const valid = await this.getValidOTP(email, String(otp).trim());
+    if (!valid) return false;
+    await this.markUsed(valid.id);
+    return true;
   }
 };
 

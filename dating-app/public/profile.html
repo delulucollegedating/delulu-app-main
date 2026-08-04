@@ -120,7 +120,12 @@
 
   <main class="flex-grow flex flex-col w-full px-6 relative" id="app-root">
     <div class="w-full max-w-5xl mx-auto pt-0 pb-0">
-      <h1 class="text-xl md:text-2xl font-bold text-primary mb-2 mt-2">My Profile</h1>
+      <div class="flex items-center justify-between mb-2 mt-2">
+        <h1 class="text-xl md:text-2xl font-bold text-primary">My Profile</h1>
+        <a href="settings.html" id="btn-settings" class="w-10 h-10 rounded-full bg-surface-container-low hover:bg-primary/10 text-on-surface-variant hover:text-primary flex items-center justify-center transition-all shadow-sm border border-outline-variant/30 active:scale-95" title="Account Settings" aria-label="Account Settings">
+          <span class="material-symbols-outlined text-xl">settings</span>
+        </a>
+      </div>
       
       <div class="flex flex-col md:flex-row md:items-center md:justify-between md:gap-6 w-full min-h-[460px] relative">
         <!-- Left Column: Form -->

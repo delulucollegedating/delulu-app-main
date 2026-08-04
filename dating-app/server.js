@@ -106,8 +106,18 @@ const activeGames = new Map(); // connectionId -> active_game payload
 
 const PORT = process.env.PORT || 3000;
 
-// Note: email domain validation is defined inline in the send-verification-email handler
-// (keeping it next to the code that uses it for clarity)
+// Allowed student college email domains for signup & password reset
+const ALLOWED_EMAIL_DOMAINS = [
+  'rishihood.edu.in', 
+  'vitbhopal.ac.in', 
+  'nst.rishihood.edu.in', 
+  'psy.rishihood.edu.in',
+  'som.rishihood.edu.in', 
+  'sod.rishihood.edu.in', 
+  'soh.rishihood.edu.in'
+];
+
+const USERNAME_COOLDOWN_MS = 15 * 24 * 60 * 60 * 1000; // 15 days between username changes
 
 // ===== Firebase Admin SDK Initialization =====
 let firebaseInitialized = false;
@@ -977,19 +987,9 @@ app.post('/api/auth/send-verification-email', otpLimiter, async (req, res) => {
   const cleanEmail = email.trim().toLowerCase();
   const domain = cleanEmail.split('@')[1];
 
-  const allowedDomains = [
-    'rishihood.edu.in', 
-    'vitbhopal.ac.in', 
-    'nst.rishihood.edu.in', 
-    'psy.rishihood.edu.in',
-    'som.rishihood.edu.in', 
-    'sod.rishihood.edu.in', 
-    'soh.rishihood.edu.in'
-  ];
-
-  if (!domain || !allowedDomains.includes(domain)) {
+  if (!domain || !ALLOWED_EMAIL_DOMAINS.includes(domain)) {
     return res.status(400).json({ 
-      error: `Only official college emails are allowed (${allowedDomains.join(', ')})` 
+      error: `Only official college emails are allowed (${ALLOWED_EMAIL_DOMAINS.join(', ')})` 
     });
   }
 
@@ -1111,6 +1111,120 @@ app.post('/api/auth/verify-token', async (req, res) => {
   } catch (err) {
     console.error('Verify token error:', err);
     res.status(500).json({ error: 'Failed to verify token' });
+  }
+});
+
+// Send password reset email (OTP + secure reset link) to a registered student email
+app.post('/api/auth/send-password-reset', otpLimiter, async (req, res) => {
+  const { email } = req.body;
+  if (!email || typeof email !== 'string') {
+    return res.status(400).json({ error: 'Email address is required' });
+  }
+
+  const cleanEmail = email.trim().toLowerCase();
+  const domain = cleanEmail.split('@')[1];
+  if (!domain || !ALLOWED_EMAIL_DOMAINS.includes(domain)) {
+    return res.status(400).json({ error: `Only official college emails are allowed (${ALLOWED_EMAIL_DOMAINS.join(', ')})` });
+  }
+
+  try {
+    const user = await userOps.getByEmail(cleanEmail);
+    if (!user) {
+      return res.status(404).json({ error: 'No account found with this email' });
+    }
+
+    const otp = await otpOps.generate(cleanEmail);
+
+    // Generate a 1-hour reset token for the direct link flow
+    const tokenPayload = `${cleanEmail}:${Date.now() + 3600000}`;
+    const token = crypto.createHmac('sha256', process.env.SESSION_SECRET).update(tokenPayload).digest('hex');
+    const fullToken = Buffer.from(`${tokenPayload}:${token}`).toString('base64url');
+
+    const appUrl = process.env.APP_URL || 'https://delulu-college.onrender.com';
+    const resetLink = `${appUrl}/login.html?reset=1&token=${encodeURIComponent(fullToken)}&email=${encodeURIComponent(cleanEmail)}`;
+
+    const htmlContent = `
+      <div style="font-family: 'Plus Jakarta Sans', sans-serif, system-ui; max-width: 500px; margin: 0 auto; padding: 24px; background: #fbf9f8; border-radius: 20px; border: 1px solid #dec0ba;">
+        <div style="text-align: center; margin-bottom: 24px;">
+          <h1 style="color: #a53b29; margin: 0; font-size: 28px;">Delulu</h1>
+          <p style="color: #57423e; font-size: 14px; margin-top: 4px;">Reset your password</p>
+        </div>
+        
+        <div style="background: #ffffff; padding: 24px; border-radius: 16px; border: 1px solid #e4e2e1; text-align: center;">
+          <p style="font-size: 14px; color: #1b1c1c; margin-top: 0;">Your 6-digit reset code is:</p>
+          <div style="font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #a53b29; margin: 16px 0; font-family: monospace;">${otp}</div>
+          <p style="font-size: 12px; color: #8b716d;">Code expires in 10 minutes.</p>
+          
+          <hr style="border: none; border-top: 1px solid #e4e2e1; margin: 20px 0;" />
+          
+          <p style="font-size: 14px; color: #1b1c1c;">Or click the button below to set a new password instantly:</p>
+          <a href="${resetLink}" style="display: inline-block; background: #a53b29; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 12px; font-weight: 700; font-size: 14px; margin-top: 8px;">Reset Password</a>
+        </div>
+      </div>
+    `;
+
+    await sendBrevoEmail(cleanEmail, `${otp} is your Delulu password reset code`, htmlContent);
+    res.json({ success: true, message: 'Password reset email sent' });
+  } catch (err) {
+    console.error('Brevo password reset error:', err);
+    res.status(500).json({ error: err.message || 'Failed to send password reset email. Please try again.' });
+  }
+});
+
+// Reset password after verifying ownership via OTP or the signed reset link token
+app.post('/api/auth/reset-password', otpLimiter, async (req, res) => {
+  const { email, otp, token, newPassword, encrypted_private_key } = req.body;
+  if (!email || typeof email !== 'string') {
+    return res.status(400).json({ error: 'Email address is required' });
+  }
+  if (typeof newPassword !== 'string' || newPassword.length < 6) {
+    return res.status(400).json({ error: 'New password must be at least 6 characters' });
+  }
+
+  const cleanEmail = email.trim().toLowerCase();
+
+  try {
+    // Authorize the request with either a valid OTP or a signed reset link token
+    let verified = false;
+    if (token && typeof token === 'string') {
+      try {
+        const decoded = Buffer.from(token, 'base64url').toString('utf8');
+        const [tokenEmail, expiresStr, hmac] = decoded.split(':');
+        const expires = Number(expiresStr);
+        if (tokenEmail === cleanEmail && Number.isFinite(expires) && Date.now() <= expires) {
+          const expectedHmac = crypto.createHmac('sha256', process.env.SESSION_SECRET).update(`${tokenEmail}:${expiresStr}`).digest('hex');
+          verified = hmac === expectedHmac;
+        }
+      } catch (e) {
+        verified = false;
+      }
+    } else if (otp && typeof otp === 'string') {
+      verified = await otpOps.verify(cleanEmail, otp.trim());
+    }
+
+    if (!verified) {
+      return res.status(401).json({ error: 'Invalid or expired verification code / link' });
+    }
+
+    const user = await userOps.getByEmail(cleanEmail);
+    if (!user) {
+      return res.status(404).json({ error: 'No account found with this email' });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await userOps.update(user.id, {
+      passcode_hash: passwordHash,
+      encrypted_private_key: encrypted_private_key || undefined
+    });
+
+    // Clear session/DB caches so subsequent requests see the fresh password
+    invalidateCache(user.id);
+    invalidateUserCache(user.id);
+
+    res.json({ success: true, message: 'Password updated successfully' });
+  } catch (err) {
+    console.error('Reset password error:', err);
+    res.status(500).json({ error: 'Failed to reset password. Please try again.' });
   }
 });
 
@@ -1295,6 +1409,279 @@ app.put('/api/users/me', requireAuth, async (req, res) => {
   // ordering in any viewer's cached Discover feed.
   invalidateDiscoverFeed();
   res.json({ success: true, user: safeUser });
+});
+
+// ===== SETTINGS & FORGOT PASSWORD ROUTES =====
+
+// 1. Get user settings status (15-day cooldown calculation, username, email)
+app.get('/api/settings/user-info', requireAuth, async (req, res) => {
+  try {
+    const user = await userOps.getById(req.session.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const COOLDOWN_DAYS = 15;
+    const COOLDOWN_MS = COOLDOWN_DAYS * 24 * 60 * 60 * 1000;
+    let canChangeUsername = true;
+    let daysRemaining = 0;
+    let nextAllowedAt = null;
+
+    if (user.username_changed_at) {
+      const lastChanged = new Date(user.username_changed_at).getTime();
+      const elapsed = Date.now() - lastChanged;
+      if (elapsed < COOLDOWN_MS) {
+        canChangeUsername = false;
+        daysRemaining = Math.ceil((COOLDOWN_MS - elapsed) / (24 * 60 * 60 * 1000));
+        nextAllowedAt = new Date(lastChanged + COOLDOWN_MS).toISOString();
+      }
+    }
+
+    res.json({
+      id: user.id,
+      username: user.username,
+      email: user.email || null,
+      username_changed_at: user.username_changed_at || null,
+      can_change_username: canChangeUsername,
+      days_remaining: daysRemaining,
+      next_allowed_at: nextAllowedAt
+    });
+  } catch (err) {
+    console.error('Get user settings error:', err);
+    res.status(500).json({ error: 'Failed to load user settings' });
+  }
+});
+
+// 2. Check username availability
+app.post('/api/settings/check-username', requireAuth, async (req, res) => {
+  const { username } = req.body;
+  if (!username) return res.status(400).json({ error: 'Username is required' });
+
+  const usernameStr = String(username).trim();
+  if (usernameStr.length < 3 || usernameStr.length > 20) {
+    return res.json({ available: false, message: 'Must be between 3 and 20 characters' });
+  }
+  if (!/^[a-zA-Z0-9_]+$/.test(usernameStr)) {
+    return res.json({ available: false, message: 'Letters, numbers, and underscores only' });
+  }
+
+  const taken = await userOps.isUsernameTaken(usernameStr, req.session.userId);
+  if (taken) {
+    return res.json({ available: false, message: 'Username is already taken' });
+  }
+  res.json({ available: true, message: 'Username is available!' });
+});
+
+// 3. Update username (Enforces 15-day restriction & uniqueness)
+app.post('/api/settings/update-username', requireAuth, async (req, res) => {
+  const { username } = req.body;
+  if (!username) return res.status(400).json({ error: 'Username is required' });
+
+  const usernameStr = String(username).trim();
+  if (usernameStr.length < 3 || usernameStr.length > 20) {
+    return res.status(400).json({ error: 'Username must be between 3 and 20 characters' });
+  }
+  if (!/^[a-zA-Z0-9_]+$/.test(usernameStr)) {
+    return res.status(400).json({ error: 'Username can only contain letters, numbers, and underscores' });
+  }
+
+  try {
+    const user = await userOps.getById(req.session.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    if (user.username === usernameStr) {
+      return res.status(400).json({ error: 'New username is the same as current username' });
+    }
+
+    // Enforce 15-day cooldown
+    const COOLDOWN_DAYS = 15;
+    const COOLDOWN_MS = COOLDOWN_DAYS * 24 * 60 * 60 * 1000;
+    if (user.username_changed_at) {
+      const lastChanged = new Date(user.username_changed_at).getTime();
+      const elapsed = Date.now() - lastChanged;
+      if (elapsed < COOLDOWN_MS) {
+        const daysRemaining = Math.ceil((COOLDOWN_MS - elapsed) / (24 * 60 * 60 * 1000));
+        const unlockDate = new Date(lastChanged + COOLDOWN_MS).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        return res.status(400).json({ 
+          error: `Username can only be changed once every 15 days. You can change it again on ${unlockDate} (${daysRemaining} day${daysRemaining > 1 ? 's' : ''} remaining).` 
+        });
+      }
+    }
+
+    // Check availability
+    const taken = await userOps.isUsernameTaken(usernameStr, user.id);
+    if (taken) {
+      return res.status(400).json({ error: 'Username is already taken by another user' });
+    }
+
+    const changedAt = new Date().toISOString();
+    await userOps.update(user.id, {
+      username: usernameStr,
+      username_changed_at: changedAt
+    });
+
+    // Invalidate caches & update session
+    invalidateCache(user.id);
+    invalidateUserCache && invalidateUserCache(user.id);
+    if (req.session.user) {
+      req.session.user.username = usernameStr;
+    }
+
+    res.json({
+      success: true,
+      message: 'Username updated successfully!',
+      username: usernameStr,
+      username_changed_at: changedAt
+    });
+  } catch (err) {
+    console.error('Update username error:', err);
+    res.status(500).json({ error: 'Failed to update username. Please try again.' });
+  }
+});
+
+// 4. Send Password Reset OTP for logged-in user in Settings
+app.post('/api/settings/password-reset/send-code', requireAuth, async (req, res) => {
+  try {
+    const user = await userOps.getById(req.session.userId);
+    if (!user || !user.email) {
+      return res.status(400).json({ error: 'No verified email associated with your account' });
+    }
+
+    const cleanEmail = user.email.trim().toLowerCase();
+    const otp = await otpOps.generate(cleanEmail);
+
+    const htmlContent = `
+      <div style="font-family: 'Plus Jakarta Sans', sans-serif, system-ui; max-width: 500px; margin: 0 auto; padding: 24px; background: #fbf9f8; border-radius: 20px; border: 1px solid #dec0ba;">
+        <div style="text-align: center; margin-bottom: 24px;">
+          <h1 style="color: #a53b29; margin: 0; font-size: 28px;">Delulu</h1>
+          <p style="color: #57423e; font-size: 14px; margin-top: 4px;">Password Reset Request</p>
+        </div>
+        
+        <div style="background: #ffffff; padding: 24px; border-radius: 16px; border: 1px solid #e4e2e1; text-align: center;">
+          <p style="font-size: 14px; color: #1b1c1c; margin-top: 0;">Your 6-digit password reset code is:</p>
+          <div style="font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #a53b29; margin: 16px 0; font-family: monospace;">${otp}</div>
+          <p style="font-size: 12px; color: #8b716d;">Code expires in 10 minutes. Do not share this code with anyone.</p>
+        </div>
+      </div>
+    `;
+
+    await sendBrevoEmail(cleanEmail, `${otp} is your Delulu password reset code`, htmlContent);
+    res.json({ success: true, message: `Verification code sent to ${cleanEmail}` });
+  } catch (err) {
+    console.error('Send reset OTP error:', err);
+    res.status(500).json({ error: 'Failed to send verification code. Please try again.' });
+  }
+});
+
+// 5. Verify OTP & Update Password in Settings
+app.post('/api/settings/password-reset/verify-and-update', requireAuth, async (req, res) => {
+  const { otp, newPassword } = req.body;
+  if (!otp || !newPassword) {
+    return res.status(400).json({ error: 'Verification code and new password are required' });
+  }
+  if (newPassword.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  }
+
+  try {
+    const user = await userOps.getById(req.session.userId);
+    if (!user || !user.email) {
+      return res.status(400).json({ error: 'No verified email found for this user' });
+    }
+
+    const cleanEmail = user.email.trim().toLowerCase();
+    const valid = await otpOps.verify(cleanEmail, String(otp).trim());
+    if (!valid) {
+      return res.status(400).json({ error: 'Invalid or expired verification code' });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await userOps.updatePassword(user.id, passwordHash);
+
+    invalidateCache(user.id);
+    invalidateUserCache && invalidateUserCache(user.id);
+
+    res.json({ success: true, message: 'Password updated successfully!' });
+  } catch (err) {
+    console.error('Settings password update error:', err);
+    res.status(500).json({ error: 'Failed to update password. Please try again.' });
+  }
+});
+
+// 6. Public Forgot Password: Send Code (Login Page)
+app.post('/api/auth/forgot-password/send-code', otpLimiter, async (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required' });
+  }
+
+  const cleanEmail = email.trim().toLowerCase();
+  try {
+    const user = await userOps.getByEmail(cleanEmail);
+    if (!user) {
+      return res.status(400).json({ error: 'No account found with this student email' });
+    }
+
+    const otp = await otpOps.generate(cleanEmail);
+    const htmlContent = `
+      <div style="font-family: 'Plus Jakarta Sans', sans-serif, system-ui; max-width: 500px; margin: 0 auto; padding: 24px; background: #fbf9f8; border-radius: 20px; border: 1px solid #dec0ba;">
+        <div style="text-align: center; margin-bottom: 24px;">
+          <h1 style="color: #a53b29; margin: 0; font-size: 28px;">Delulu</h1>
+          <p style="color: #57423e; font-size: 14px; margin-top: 4px;">Password Reset Request</p>
+        </div>
+        
+        <div style="background: #ffffff; padding: 24px; border-radius: 16px; border: 1px solid #e4e2e1; text-align: center;">
+          <p style="font-size: 14px; color: #1b1c1c; margin-top: 0;">Your 6-digit password reset code is:</p>
+          <div style="font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #a53b29; margin: 16px 0; font-family: monospace;">${otp}</div>
+          <p style="font-size: 12px; color: #8b716d;">Code expires in 10 minutes. Do not share this code with anyone.</p>
+        </div>
+      </div>
+    `;
+
+    await sendBrevoEmail(cleanEmail, `${otp} is your Delulu password reset code`, htmlContent);
+    res.json({ success: true, message: `Verification code sent to ${cleanEmail}` });
+  } catch (err) {
+    console.error('Forgot password send-code error:', err);
+    res.status(500).json({ error: 'Failed to send verification code. Please try again.' });
+  }
+});
+
+// 7. Public Forgot Password: Verify Code & Reset Password & Log In (Login Page)
+app.post('/api/auth/forgot-password/reset', otpLimiter, async (req, res) => {
+  const { email, otp, newPassword } = req.body;
+  if (!email || !otp || !newPassword) {
+    return res.status(400).json({ error: 'Email, verification code, and new password are required' });
+  }
+  if (newPassword.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  }
+
+  const cleanEmail = email.trim().toLowerCase();
+  try {
+    const user = await userOps.getByEmail(cleanEmail);
+    if (!user) {
+      return res.status(400).json({ error: 'No account found with this email' });
+    }
+
+    const valid = await otpOps.verify(cleanEmail, String(otp).trim());
+    if (!valid) {
+      return res.status(400).json({ error: 'Invalid or expired verification code' });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await userOps.updatePassword(user.id, passwordHash);
+
+    // Auto log-in user after successful reset
+    req.session.userId = user.id;
+    const safeUser = sanitizeUser(user);
+    req.session.user = safeUser;
+    setCachedUser(user.id, safeUser);
+    const token = generateAuthToken(user.id);
+    await new Promise((resolve) => req.session.save(resolve));
+
+    res.json({ success: true, message: 'Password updated successfully! Logging you in...', token, user: safeUser });
+  } catch (err) {
+    console.error('Forgot password reset error:', err);
+    res.status(500).json({ error: 'Failed to reset password. Please try again.' });
+  }
 });
 
 // Discover profiles (cursor-paginated — 15 per page by default)

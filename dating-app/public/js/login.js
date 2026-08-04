@@ -326,4 +326,115 @@ document.addEventListener('DOMContentLoaded', async () => {
       btn.textContent = 'Create Profile';
     }
   };
+
+  // ===== FORGOT PASSWORD MODAL HANDLERS =====
+  const forgotModal = document.getElementById('forgot-password-modal');
+  const btnForgotPassword = document.getElementById('btn-forgot-password');
+  const forgotCloseBtn = document.getElementById('forgot-close-btn');
+  const forgotFormStep1 = document.getElementById('forgot-form-step1');
+  const forgotFormStep2 = document.getElementById('forgot-form-step2');
+  const forgotErr1 = document.getElementById('forgot-error-1');
+  const forgotErr2 = document.getElementById('forgot-error-2');
+
+  if (btnForgotPassword) {
+    btnForgotPassword.onclick = () => {
+      forgotModal.classList.remove('hidden');
+      document.getElementById('forgot-email').focus();
+    };
+  }
+
+  if (forgotCloseBtn) {
+    forgotCloseBtn.onclick = () => {
+      forgotModal.classList.add('hidden');
+      forgotFormStep1.reset();
+      forgotFormStep2.reset();
+      forgotFormStep1.classList.remove('hidden');
+      forgotFormStep2.classList.add('hidden');
+      forgotErr1.classList.add('hidden');
+      forgotErr2.classList.add('hidden');
+    };
+  }
+
+  if (forgotFormStep1) {
+    forgotFormStep1.onsubmit = async (e) => {
+      e.preventDefault();
+      const email = document.getElementById('forgot-email').value.trim();
+      forgotErr1.classList.add('hidden');
+
+      const btn = document.getElementById('btn-forgot-send');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="material-symbols-outlined text-lg animate-spin">refresh</span> Sending...';
+
+      try {
+        const res = await apiCall('/api/auth/forgot-password/send-code', 'POST', { email });
+        document.getElementById('forgot-sent-email').textContent = email;
+        forgotFormStep1.classList.add('hidden');
+        forgotFormStep2.classList.remove('hidden');
+        document.getElementById('forgot-otp').focus();
+      } catch (err) {
+        forgotErr1.textContent = err.message || 'Failed to send verification code';
+        forgotErr1.classList.remove('hidden');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<span class="material-symbols-outlined text-lg">send</span> Send Verification Code';
+      }
+    };
+  }
+
+  if (forgotFormStep2) {
+    forgotFormStep2.onsubmit = async (e) => {
+      e.preventDefault();
+      const email = document.getElementById('forgot-email').value.trim();
+      const otp = document.getElementById('forgot-otp').value.trim();
+      const newPassword = document.getElementById('forgot-new-password').value;
+      const confirmPassword = document.getElementById('forgot-confirm-password').value;
+
+      forgotErr2.classList.add('hidden');
+
+      if (!otp || otp.length !== 6) {
+        forgotErr2.textContent = 'Please enter the 6-digit verification code';
+        forgotErr2.classList.remove('hidden');
+        return;
+      }
+
+      if (newPassword.length < 6) {
+        forgotErr2.textContent = 'Password must be at least 6 characters long';
+        forgotErr2.classList.remove('hidden');
+        return;
+      }
+
+      if (newPassword !== confirmPassword) {
+        forgotErr2.textContent = 'Passwords do not match';
+        forgotErr2.classList.remove('hidden');
+        return;
+      }
+
+      const btn = document.getElementById('btn-forgot-reset');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="material-symbols-outlined text-lg animate-spin">refresh</span> Resetting...';
+
+      try {
+        const res = await apiCall('/api/auth/forgot-password/reset', 'POST', {
+          email,
+          otp,
+          newPassword
+        });
+
+        if (res.token) {
+          window.localStorage.setItem('auth_token', res.token);
+        }
+        if (res.user) {
+          window.localStorage.setItem('cached_user', JSON.stringify(res.user));
+        }
+
+        window.location.replace('discover.html');
+      } catch (err) {
+        forgotErr2.textContent = err.message || 'Failed to reset password';
+        forgotErr2.classList.remove('hidden');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<span class="material-symbols-outlined text-lg">check_circle</span> Reset Password & Sign In';
+      }
+    };
+  }
 });
