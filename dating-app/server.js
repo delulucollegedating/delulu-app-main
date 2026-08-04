@@ -1669,9 +1669,15 @@ app.post('/api/auth/forgot-password/reset', otpLimiter, async (req, res) => {
     const passwordHash = await bcrypt.hash(newPassword, 10);
     await userOps.updatePassword(user.id, passwordHash);
 
+    // BUG FIX: Clear stale session cache BEFORE writing new one, then also
+    // invalidate the Firestore user cache so login reads the fresh password hash
+    invalidateCache(user.id);
+    invalidateUserCache && invalidateUserCache(user.id);
+
     // Auto log-in user after successful reset
     req.session.userId = user.id;
-    const safeUser = sanitizeUser(user);
+    const freshUser = await userOps.getById(user.id);
+    const safeUser = sanitizeUser(freshUser || user);
     req.session.user = safeUser;
     setCachedUser(user.id, safeUser);
     const token = generateAuthToken(user.id);

@@ -339,20 +339,32 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (btnForgotPassword) {
     btnForgotPassword.onclick = () => {
       forgotModal.classList.remove('hidden');
+      forgotModal.setAttribute('aria-hidden', 'false');
       document.getElementById('forgot-email').focus();
     };
   }
 
+  // Helper to close and fully reset the modal
+  function closeForgotModal() {
+    forgotModal.classList.add('hidden');
+    forgotModal.setAttribute('aria-hidden', 'true');
+    forgotFormStep1.reset();
+    forgotFormStep2.reset();
+    forgotFormStep1.classList.remove('hidden');
+    forgotFormStep2.classList.add('hidden');
+    forgotErr1.classList.add('hidden');
+    forgotErr2.classList.add('hidden');
+  }
+
   if (forgotCloseBtn) {
-    forgotCloseBtn.onclick = () => {
-      forgotModal.classList.add('hidden');
-      forgotFormStep1.reset();
-      forgotFormStep2.reset();
-      forgotFormStep1.classList.remove('hidden');
-      forgotFormStep2.classList.add('hidden');
-      forgotErr1.classList.add('hidden');
-      forgotErr2.classList.add('hidden');
-    };
+    forgotCloseBtn.onclick = closeForgotModal;
+  }
+
+  // BUG FIX: Backdrop click to dismiss modal (tap outside the panel)
+  if (forgotModal) {
+    forgotModal.addEventListener('click', (e) => {
+      if (e.target === forgotModal) closeForgotModal();
+    });
   }
 
   if (forgotFormStep1) {

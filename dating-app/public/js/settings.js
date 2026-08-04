@@ -143,6 +143,13 @@ function setupUsernameEvents() {
         return;
       }
 
+      // BUG FIX: Block submission if availability was never confirmed via the API check
+      if (val !== (currentSettings && currentSettings.username) && !isUsernameAvailable) {
+        showToast('Please wait for username availability to be confirmed', 'error');
+        usernameInput.focus();
+        return;
+      }
+
       const btn = document.getElementById('btn-update-username');
       btn.disabled = true;
       btn.innerHTML = '<span class="material-symbols-outlined text-lg animate-spin">refresh</span> Updating...';
@@ -151,6 +158,10 @@ function setupUsernameEvents() {
         const res = await apiCall('/api/settings/update-username', 'POST', { username: val });
         hapticMedium();
         showToast('Username updated successfully!');
+        // Reset availability flag so user must re-check before another change
+        isUsernameAvailable = false;
+        msgEl.classList.add('hidden');
+        iconEl.innerHTML = '';
         // Update local session
         if (window.currentUser) window.currentUser.username = val;
         await loadUserSettings();
