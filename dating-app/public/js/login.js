@@ -402,8 +402,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       forgotFormStep2.classList.add('hidden');
       forgotErr2.classList.add('hidden');
       forgotFormStep1.classList.remove('hidden');
-      // Auto-submit step 1 to resend the code
-      forgotFormStep1.dispatchEvent(new Event('submit', { cancelable: true }));
+      // Auto-submit step 1 to resend the code cross-browser
+      if (typeof forgotFormStep1.requestSubmit === 'function') {
+        forgotFormStep1.requestSubmit();
+      } else {
+        forgotFormStep1.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+      }
     });
   }
 

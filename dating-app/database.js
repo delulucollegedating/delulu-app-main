@@ -270,7 +270,7 @@ const userOps = {
   async isUsernameTaken(username, excludeUserId = null) {
     const existing = await this.getByUsername(username);
     if (!existing) return false;
-    if (excludeUserId !== null && Number(existing.id) === Number(excludeUserId)) return false;
+    if (excludeUserId !== null && excludeUserId !== undefined && String(existing.id) === String(excludeUserId)) return false;
     return true;
   },
 
