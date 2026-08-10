@@ -444,6 +444,7 @@ Non-message notifications (connection request, acceptance) use `sendPushNotifica
 - Event types via `userEmitter.emit('user:{userId}', event)`:
   - `message` — new message arrived (updates chat row, shows rich toast)
   - `chat_ended` — a chat was ended (removes/updates row)
+  - `match_celebration` — connection request accepted (triggers match confetti celebration)
 - Heartbeat: `: heartbeat` every **25 seconds**
 - Max listeners: `userEmitter.setMaxListeners(200)`
 
