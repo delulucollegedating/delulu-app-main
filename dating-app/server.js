@@ -45,7 +45,6 @@ const session = require('express-session');
 const compression = require('compression');
 const PgSession = require('connect-pg-simple')(session);
 const http = require('http');
-const { Server } = require('socket.io');
 const path = require('path');
 const crypto = require('crypto');
 const bcrypt = require('bcrypt');
@@ -95,11 +94,6 @@ const app = express();
 app.use(pinoHttp);
 
 const server = http.createServer(app);
-const io = new Server(server, {
-  pingTimeout: 30000,
-  pingInterval: 10000,
-  transports: ['websocket', 'polling']
-});
 
 // Active in-memory games store (prevents Firestore write overload)
 const activeGames = new Map(); // connectionId -> active_game payload
@@ -670,180 +664,6 @@ app.use(express.static(path.join(__dirname, 'public'), {
     }
   }
 }));
-
-// Share session with Socket.io
-io.use((socket, next) => {
-  sessionMiddleware(socket.request, {}, next);
-});
-
-// ===== Presence Tracking =====
-const onlineUsers = new Map(); // userId -> { socketId, lastSeen }
-
-async function getConnectedUserIdsForPresence(userId) {
-  try {
-    const conns = await connectionOps.getActiveConnections(userId);
-    const ids = [];
-    conns.forEach(c => {
-      if (c.from_user_id === Number(userId)) ids.push(c.to_user_id);
-      else if (c.to_user_id === Number(userId)) ids.push(c.from_user_id);
-    });
-    return [...new Set(ids)];
-  } catch (e) {
-    return [];
-  }
-}
-
-const userSocketsMap = new Map();
-
-// Socket.io connections for chat
-io.on('connection', async (socket) => {
-  const userId = socket.request.session?.userId;
-  if (!userId) {
-    console.log(`Socket connection rejected: No session userId for socket ${socket.id}`);
-    socket.disconnect(true);
-    return;
-  }
-
-  const numUserId = Number(userId);
-  if (!userSocketsMap.has(numUserId)) {
-    userSocketsMap.set(numUserId, new Set());
-  }
-  userSocketsMap.get(numUserId).add(socket.id);
-
-  console.log(`User ${userId} connected via socket`);
-
-  // Presence: mark user as online
-  onlineUsers.set(numUserId, { socketId: socket.id, lastSeen: Date.now() });
-  socket.broadcast.emit('user-online', { userId: numUserId });
-
-  // Join user to their personal room
-  socket.join(`user:${userId}`);
-
-  // Send current online status of their connections
-  try {
-    const connectedIds = await getConnectedUserIdsForPresence(userId);
-    const onlineStatuses = {};
-    connectedIds.forEach(id => {
-      onlineStatuses[id] = onlineUsers.has(id);
-    });
-    socket.emit('presence-bulk', onlineStatuses);
-  } catch (e) {}
-
-  socket.on('join-chat', async (connectionId) => {
-    if (!connectionId) return;
-    try {
-      const conn = await connectionOps.getConnection(connectionId, userId);
-      if (!conn || conn._dataIntegrityError) {
-        console.log(`join-chat denied: user ${userId} not part of connection ${connectionId}`);
-        return;
-      }
-      socket.join(`chat:${connectionId}`);
-      console.log(`User ${userId} joined chat room chat:${connectionId}`);
-      // Confirm room join to client so it knows socket is live
-      socket.emit('room-joined', { connectionId });
-    } catch (err) {
-      console.error(`join-chat error for user ${userId} connection ${connectionId}:`, err.message);
-    }
-  });
-
-  socket.on('leave-chat', (connectionId) => {
-    socket.leave(`chat:${connectionId}`);
-  });
-
-  socket.on('send-message', async (data) => {
-    const { connectionId, content, is_encrypted, iv } = data;
-    if (!connectionId || !content?.trim()) return;
-
-    // Reject abusive / forbidden content. E2EE ciphertext cannot be scanned, so
-    // encrypted messages are skipped here (the client blocks them pre-encryption).
-    if (!Number(is_encrypted) && hasForbiddenText(content)) {
-      socket.emit('message-blocked', { connectionId, error: FORBIDDEN_MESSAGE_ERROR });
-      return;
-    }
-
-    // Verify user is part of this connection
-    const conn = await connectionOps.getConnection(connectionId, userId);
-    if (!conn || conn._dataIntegrityError || !connectionOps.isActive(conn)) return;
-
-    const msg = await messageOps.send(connectionId, userId, sanitizeText(content.trim()), 0, 0, Number(is_encrypted || 0), iv || null);
-    // Emit to both users in the chat
-    io.to(`chat:${connectionId}`).emit('new-message', {
-      ...msg,
-      sender_id: userId
-    });
-    // Also emit a chat-list update for the messages list
-    io.to(`chat:${connectionId}`).emit('chat-update', {
-      connectionId,
-      lastMessage: Number(is_encrypted) === 1 ? 'Encrypted message' : sanitizeText(content.trim()),
-      lastMessageTime: msg.created_at,
-      senderId: Number(userId)
-    });
-  });
-
-  socket.on('typing', (data) => {
-    const { connectionId, isTyping } = data;
-    if (!connectionId) return;
-    socket.to(`chat:${connectionId}`).emit('typing', { userId, isTyping });
-  });
-
-  // Mark messages as read
-  socket.on('mark-read', async (data) => {
-    const { connectionId } = data;
-    if (!connectionId) return;
-    try {
-      const conn = await connectionOps.getConnection(connectionId, userId);
-    if (!conn || conn._dataIntegrityError || !connectionOps.isActive(conn)) return;
-      
-      const result = await messageOps.markAsRead(connectionId, Number(userId), conn);
-      if (result.count > 0) {
-        // Notify the sender that their messages were read — send server timestamp
-        io.to(`chat:${connectionId}`).emit('messages-read', {
-          connectionId,
-          readBy: Number(userId),
-          readAt: result.readAt || new Date().toISOString(),
-          count: result.count
-        });
-      }
-    } catch (e) {
-      console.error('mark-read error:', e);
-    }
-  });
-
-  // Handle presence requests from client
-  socket.on('request-presence', (data) => {
-    const targetUserId = data.userId;
-    if (targetUserId) {
-      const isOnline = onlineUsers.has(Number(targetUserId));
-      socket.emit('presence-bulk', { [targetUserId]: isOnline });
-    }
-  });
-
-  // Clear typing indicator on disconnect — fires while socket.rooms is still populated,
-  // so we can broadcast typing=false to each chat room the user was in.
-  // This prevents the other user from seeing "typing..." stuck indefinitely after a crash
-  // or abrupt tab close (socket timeout could be up to 10 seconds).
-  socket.on('disconnecting', () => {
-    for (const room of socket.rooms) {
-      if (room.startsWith('chat:')) {
-        socket.to(room).emit('typing', { userId, isTyping: false });
-      }
-    }
-  });
-
-  socket.on('disconnect', () => {
-    console.log(`User ${userId} disconnected`);
-    const numUserId = Number(userId);
-    const userSockets = userSocketsMap.get(numUserId);
-    if (userSockets) {
-      userSockets.delete(socket.id);
-      if (userSockets.size === 0) {
-        userSocketsMap.delete(numUserId);
-        onlineUsers.delete(numUserId);
-        socket.broadcast.emit('user-offline', { userId: numUserId, lastSeen: new Date().toISOString() });
-      }
-    }
-  });
-});
 
 // ===== API ROUTES =====
 
@@ -1878,8 +1698,9 @@ app.post('/api/connections/respond', requireAuth, async (req, res) => {
       const accepter = await userOps.getById(req.session.userId);
       const requester = await userOps.getById(conn.from_user_id);
       if (accepter && requester) {
-        io.to(`user:${conn.from_user_id}`).emit('match-celebration', {
-          connectionId: connection_id,
+        userEmitter.emit(`user:${conn.from_user_id}`, {
+          type: 'match_celebration',
+          connectionId: Number(connection_id),
           username: accepter.username,
           avatar: accepter.avatar
         });
@@ -2129,11 +1950,7 @@ app.post('/api/connections/identity-reveal', requireAuth, async (req, res) => {
   if (result.error) return res.status(400).json(result);
   
   if (result.bothRevealed) {
-    // Both users revealed identity — emit meeting code
-    io.to(`chat:${connection_id}`).emit('identity-revealed', {
-      connection_id,
-      meeting_code: result.meeting_code
-    });
+    // Both users revealed identity — the connection SSE stream carries the code.
     connectionEmitter.emit(`update:${connection_id}`, { 
       type: 'revealed', 
       meeting_code: result.meeting_code 
@@ -2194,11 +2011,6 @@ app.post('/api/connections/end-after-decline', requireAuth, async (req, res) => 
     console.error('Failed to clean up messages after declined reveal:', e.message);
   }
   
-  io.to(`chat:${connection_id}`).emit('connection-ended', {
-    connectionId: connection_id,
-    message: "The other person decided to disconnect after the face reveal decline."
-  });
-
   connectionEmitter.emit(`update:${connection_id}`, {
     type: 'ended',
     reason: 'declined',
@@ -2218,17 +2030,6 @@ app.post('/api/connections/:id/start-game', requireAuth, gameLimiter, async (req
     
     // Save to Firestore so clients receive it via real-time connection doc snapshot listener
     const payload = await connectionOps.startGame(req.params.id, game_type, question);
-    
-    // Broadcast status change so both users reload connection state instantly (for socket fallback compatibility)
-    io.to(`chat:${req.params.id}`).emit('status_change', { connection_id: req.params.id });
-    
-    // Broadcast the exact game update to both clients
-    io.to(`chat:${req.params.id}`).emit('game_update', {
-      connection_id: req.params.id,
-      from_user_id: conn.from_user_id,
-      to_user_id: conn.to_user_id,
-      active_game: payload
-    });
     
     connectionEmitter.emit(`update:${req.params.id}`, {
       type: 'game',
@@ -2254,17 +2055,6 @@ app.post('/api/connections/:id/answer-game', requireAuth, gameLimiter, async (re
     // Save answer to Firestore connection doc
     const result = await connectionOps.submitGameAnswer(req.params.id, req.session.userId, answer);
     if (result.error) return res.status(400).json(result);
-    
-    // Broadcast status change so both users reload connection state instantly
-    io.to(`chat:${req.params.id}`).emit('status_change', { connection_id: req.params.id });
-    
-    // Broadcast exact game update to both clients
-    io.to(`chat:${req.params.id}`).emit('game_update', {
-      connection_id: req.params.id,
-      from_user_id: conn.from_user_id,
-      to_user_id: conn.to_user_id,
-      active_game: result.gameData
-    });
     
     connectionEmitter.emit(`update:${req.params.id}`, {
       type: 'game',
@@ -2298,15 +2088,8 @@ app.post('/api/connections/:id/clear-game', requireAuth, gameLimiter, async (req
     // newly created game.
     const { cleared } = await connectionOps.clearGame(req.params.id, game_created_at);
     
-    // Broadcast the clear state to both clients only if the game was actually removed
+    // Notify both clients only if the game was actually removed.
     if (cleared) {
-      io.to(`chat:${req.params.id}`).emit('game_update', {
-        connection_id: req.params.id,
-        from_user_id: conn.from_user_id,
-        to_user_id: conn.to_user_id,
-        active_game: null
-      });
-      
       connectionEmitter.emit(`update:${req.params.id}`, {
         type: 'game',
         from_user_id: conn.from_user_id,
@@ -2346,7 +2129,7 @@ app.get('/api/messages/:connectionId', requireAuth, async (req, res) => {
   res.json({ messages, has_more: hasMore, connection: sanitizeConnection(conn, req.session.userId) });
 });
 
-// REST fallback for read receipts when Socket.io is disabled or unavailable.
+// Read receipts are delivered through the connection SSE stream.
 app.post('/api/messages/:connectionId/read', requireAuth, readReceiptLimiter, async (req, res) => {
   const conn = await connectionOps.getConnection(req.params.connectionId, req.session.userId);
   if (conn && conn._dataIntegrityError) {
@@ -2363,11 +2146,6 @@ app.post('/api/messages/:connectionId/read', requireAuth, readReceiptLimiter, as
     readAt,
     connectionId: Number(req.params.connectionId)
   });
-  io.to(`chat:${req.params.connectionId}`).emit('messages-read', {
-    connectionId: req.params.connectionId,
-    readAt
-  });
-
   // Return HTTP response IMMEDIATELY without waiting for DB writes
   res.json({ success: true, readAt });
 
@@ -2413,18 +2191,6 @@ app.post('/api/messages/send', requireAuth, messageLimiter, async (req, res) => 
 
   const senderId = Number(req.session.userId);
   const displayContent = Number(is_encrypted) === 1 ? 'Encrypted message' : sanitizeText(content.trim());
-
-  // Emit socket event for real-time receipt — sender_id MUST be Number for client === checks
-  io.to(`chat:${connection_id}`).emit('new-message', {
-    ...msg,
-    sender_id: senderId
-  });
-  io.to(`chat:${connection_id}`).emit('chat-update', {
-    connectionId: connection_id,
-    lastMessage: displayContent,
-    lastMessageTime: msg.created_at,
-    senderId
-  });
 
   // Embed full message in SSE event so the receiver gets it with ZERO extra round-trips
   connectionEmitter.emit(`update:${connection_id}`, {
@@ -2702,7 +2468,6 @@ app.post('/api/messages/:id/react', requireAuth, async (req, res) => {
   const result = await messageOps.toggleReaction(req.params.id, req.session.userId, connection_id, emoji);
   if (result.error) return res.status(400).json(result);
 
-  io.to(`chat:${connection_id}`).emit('message-reacted', { messageId: req.params.id, reactions: result.reactions });
   connectionEmitter.emit(`update:${connection_id}`, { type: 'messages' });
   res.json(result);
 });
@@ -2836,7 +2601,6 @@ app.delete('/api/messages/:id', requireAuth, async (req, res) => {
   if (result.error) return res.status(403).json(result);
 
   if (connection_id) {
-    io.to(`chat:${connection_id}`).emit('message-deleted', { messageId: req.params.id });
     connectionEmitter.emit(`update:${connection_id}`, { type: 'messages' });
   }
   res.json(result);

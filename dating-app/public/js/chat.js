@@ -69,8 +69,8 @@ let streamReady = false;
 let isReconnecting = false;
 let statusPollingTimeout = null;
 
-// Guard to prevent redundant loadChatInfo() calls from SSE reconnection,
-// socket connect, and visibilitychange from all firing at once.
+// Guard to prevent redundant loadChatInfo() calls from SSE reconnection and
+// visibilitychange from both firing at once.
 let _chatInfoLoading = false;
 let _chatInfoQueued = false;
 
@@ -485,7 +485,7 @@ async function initializeChat() {
   
   // ── Socket setup ──────────────────────────────────────────────────────────
   // We need to guard against duplicate listener registration (e.g. hot module
-  // reload or double-call). Socket.io listeners accumulate if not cleaned up.
+  // reload or double-call).
   function setupChatSocketListeners() {
     if (!socket) return;
 
@@ -713,8 +713,8 @@ async function initializeChat() {
     }
   }
 
-  // Production client delivery is SSE. The shared socket object is a deliberate
-  // no-op compatibility shim, so never register a second realtime pipeline on it.
+  // SSE is the sole realtime transport. The guarded legacy branch below is
+  // unreachable and retained temporarily only to avoid a broad client refactor.
   if (socket && !socket.isMock) {
     // Register all message/presence listeners once
     setupChatSocketListeners();
@@ -1110,7 +1110,7 @@ async function initializeChat() {
   // ── Keep-Alive Ping ────────────────────────────────────────────────────────
   // Prevents Render free tier from spinning down during active chat.
   // Render spins down after 15 min of inactivity. A lightweight ping every 3
-  // minutes during active chat keeps the server warm so socket.io reconnects
+  // minutes during active chat keeps the server warm and avoids a cold start
   // instantly instead of waiting for a cold start (5-10s).
   if (!window.__chatKeepAliveStarted) {
     window.__chatKeepAliveStarted = true;
@@ -1342,7 +1342,7 @@ if (document.readyState === 'loading') {
 }
 
 // Coalesce multiple calls to loadChatInfo() — only one in-flight at a time.
-// Handles the edge case where SSE reconnection, socket connect, and visibilitychange
+// Handles the edge case where SSE reconnection and visibilitychange
 // all try to refresh chat info simultaneously (saves Supabase reads on the free tier).
 function scheduleChatInfoRefresh() {
   if (_chatInfoLoading) {
@@ -2875,7 +2875,7 @@ function syncActiveGame(c) {
   // Generate a stable game ID. If we already have a tracked game with the same
   // created_at (same game), reuse its domId. Otherwise, the random suffix would
   // change on every syncActiveGame call, causing the card to be removed/recreated
-  // on every Firestore snapshot or socket event.
+  // on every Firestore snapshot or SSE event.
   // NOTE: created_at can be either an ISO string (from API JSON) or a
   // Firestore Timestamp object (from onSnapshot). Using numeric comparison
   // handles both formats.

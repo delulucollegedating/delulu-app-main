@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
+const fs = require('fs');
+const path = require('path');
 const { findForbiddenText, hasForbiddenText, FORBIDDEN_WORDS, FORBIDDEN_SHORT_TOKENS } = require('../utils/profanity.js');
+const canonicalWordList = require('../config/profanity.json');
 
 describe('Chat profanity / forbidden content filter', () => {
   it('blocks the rishihood keyword standalone and case-insensitively', () => {
@@ -91,5 +94,12 @@ describe('Chat profanity / forbidden content filter', () => {
     expect(FORBIDDEN_WORDS.length).toBeGreaterThan(30);
     expect(Array.isArray(FORBIDDEN_SHORT_TOKENS)).toBe(true);
     expect(FORBIDDEN_SHORT_TOKENS.length).toBeGreaterThan(0);
+  });
+
+  it('keeps the generated browser list identical to the canonical list', () => {
+    const clientAsset = fs.readFileSync(path.join(__dirname, '../public/js/profanity-words.generated.js'), 'utf8');
+    const match = clientAsset.match(/Object\.freeze\((\{[\s\S]*\})\);\s*$/);
+    expect(match, 'Run npm run generate:profanity after changing config/profanity.json.').not.toBeNull();
+    expect(JSON.parse(match[1])).toEqual(canonicalWordList);
   });
 });

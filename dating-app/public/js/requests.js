@@ -3,7 +3,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   loadRequests('incoming');
 
-  // Auto-refresh when tab becomes visible (compensates for mock socket)
+  // Refresh when the tab becomes visible.
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
       loadRequests(document.getElementById('tab-req-incoming').classList.contains('text-primary') ? 'incoming' : 'sent');

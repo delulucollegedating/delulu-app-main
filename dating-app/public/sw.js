@@ -30,6 +30,7 @@ const CACHE_VERSION = 'delulu-v7';
 const PRECACHE_ASSETS = [
   '/styles.css',
   '/js/shared.js',
+  '/js/profanity-words.generated.js',
   '/js/chat-cache.js',
   '/js/chat.js',
   '/js/messages.js',

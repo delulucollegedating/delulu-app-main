@@ -315,7 +315,7 @@ function closeBroadcastChannel() {
 }
 
 // ===== Periodic Outbox Flush =====
-// Runs on an interval so pending messages get sent even when no socket is active.
+// Runs on an interval so pending messages are sent while the realtime stream reconnects.
 // The interval automatically short-ciruits when the outbox is empty (quick IndexedDB read).
 let _outboxFlushInterval = null;
 

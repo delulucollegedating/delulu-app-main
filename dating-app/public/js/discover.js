@@ -19,13 +19,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   await requireAuth();
   await loadDiscovery();
   
-  // Listen for match celebration from socket
-  if (socket) {
-    socket.on('match-celebration', ({ connectionId, username }) => {
-      showMatchCelebration(username, connectionId);
-    });
-  }
-  
   // Scroll buttons for 3D scene
   document.getElementById('btn-scroll-left').onclick = () => navigateCards(-1);
   document.getElementById('btn-scroll-right').onclick = () => navigateCards(1);

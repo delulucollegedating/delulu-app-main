@@ -1,0 +1,26 @@
+{
+  "forbiddenWords": [
+    "rishihood",
+    "chutiya", "chutiye", "chutia", "chutiyapanti",
+    "bhosdika", "bhosdike", "bhosda", "bhosdi", "bhosad", "bhosari", "bhosri",
+    "bhenchod", "behenchod", "behenchud", "betichod",
+    "madarchod", "maderchod", "madarchot",
+    "gandu", "gaandu",
+    "loda", "lode", "lodu", "lund", "lawda", "lawde", "lauda", "laude", "laundiya",
+    "chod", "chodu", "chudai", "chudi", "chuda",
+    "bsdk",
+    "suar", "suwar", "suala",
+    "harami", "haramkhor", "haramzada",
+    "kutta", "kutte", "kutiya", "kutia", "kutti",
+    "randi", "tatti", "tharki",
+    "bhadwa", "bhadve", "bhadwe",
+    "chinal", "chudail", "kamina", "kamini", "nalayak", "nalla",
+    "jhaant", "jhant", "chakka", "hijda", "hijra",
+    "fuddu", "fudu",
+    "bakchod", "bakchodi",
+    "ma ki", "maa ki", "behen ki", "bhen ki",
+    "fuck", "bitch", "cunt", "dickhead", "shit", "asshole", "whore", "slut",
+    "pussy", "bastard", "motherfucker", "nigger", "porn", "sexy"
+  ],
+  "forbiddenShortTokens": ["bc", "mc", "bkl", "bsd", "mkc", "gand", "gaand", "sex", "dick"]
+}

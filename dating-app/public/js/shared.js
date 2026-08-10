@@ -19,16 +19,9 @@ function resolveUrl(url) {
 }
 
 let currentUser = null;
-let socket = {
-  on: function() { return this; },
-  // NOTE: In mock mode (socket.io disabled), off() is a no-op that returns this.
-  // If socket.io is ever re-enabled, real socket.off() properly removes listeners.
-  off: function() { return this; },
-  emit: function() { return this; },
-  disconnect: function() { return this; },
-  connected: false,
-  isMock: true
-};
+// Real-time delivery uses SSE exclusively. There is deliberately no WebSocket
+// fallback or client shim: adding one would create a second event pipeline.
+const socket = null;
 
 // Global client error logger to diagnose browser-specific issues
 window.onerror = function (message, source, lineno, colno, error) {
@@ -56,42 +49,11 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-// ===== Forbidden / abusive content filter (keep in sync with utils/profanity.js) =====
-// Two-tier case-insensitive matching:
-//   TIER 1 — FORBIDDEN_WORDS: full abusive words matched as SUBSTRINGS, so a
-//     banned token is caught even when embedded inside other letters/symbols:
-//       "$rishihood$", "jsafhjakdrishihoodsdwd", "abhenchodcd" -> blocked
-//   TIER 2 — FORBIDDEN_SHORT_TOKENS: short letter combos (bc/mc/sex/gand/...)
-//     matched ONLY as standalone words (word boundaries). Innocent words like
-//     "mac", "abc", "McDonalds", "Sussex", "Gandalf" are ALLOWED.
-const FORBIDDEN_WORDS = [
-  'rishihood',
-  'chutiya', 'chutiye', 'chutia', 'chutiyapanti',
-  'bhosdika', 'bhosdike', 'bhosda', 'bhosdi', 'bhosad', 'bhosari', 'bhosri',
-  'bhenchod', 'behenchod', 'behenchud', 'betichod',
-  'madarchod', 'maderchod', 'madarchot',
-  'gandu', 'gaandu',
-  'loda', 'lode', 'lodu', 'lund', 'lawda', 'lawde', 'lauda', 'laude', 'laundiya',
-  'chod', 'chodu', 'chudai', 'chudi', 'chuda',
-  'bsdk',
-  'suar', 'suwar', 'suala',
-  'harami', 'haramkhor', 'haramzada',
-  'kutta', 'kutte', 'kutiya', 'kutia', 'kutti',
-  'randi', 'tatti', 'tharki',
-  'bhadwa', 'bhadve', 'bhadwe',
-  'chinal', 'chudail', 'kamina', 'kamini', 'nalayak', 'nalla',
-  'jhaant', 'jhant', 'chakka', 'hijda', 'hijra',
-  'fuddu', 'fudu',
-  'bakchod', 'bakchodi',
-  'ma ki', 'maa ki', 'behen ki', 'bhen ki',
-  'fuck', 'bitch', 'cunt', 'dickhead', 'shit', 'asshole', 'whore', 'slut',
-  'pussy', 'bastard', 'motherfucker', 'nigger', 'porn', 'sexy'
-];
-
-// Short letter combos / ambiguous tokens — blocked ONLY as standalone words so
-// innocent words like "mac", "abc", "McDonalds", "Sussex", "Gandalf" or the
-// first name "Dick" are never blocked, while the standalone token still is.
-const FORBIDDEN_SHORT_TOKENS = ['bc', 'mc', 'bkl', 'bsd', 'mkc', 'gand', 'gaand', 'sex', 'dick'];
+// Generated from config/profanity.json and loaded before this file. Keeping the
+// browser pre-encryption filter on the same source as the server is essential:
+// encrypted payloads cannot be moderated after they leave the device.
+const FORBIDDEN_WORDS = window.DELULU_PROFANITY.forbiddenWords;
+const FORBIDDEN_SHORT_TOKENS = window.DELULU_PROFANITY.forbiddenShortTokens;
 
 // Pre-compiled word-boundary patterns (built once at load — no per-message overhead)
 const SHORT_TOKEN_PATTERNS = FORBIDDEN_SHORT_TOKENS.map(token => new RegExp(`\\b${token}\\b`));
@@ -126,7 +88,6 @@ async function requireAuth() {
   if (cachedUserStr) {
     try {
       currentUser = JSON.parse(cachedUserStr);
-      initGlobalSocket();
       updateHeaderAvatar();
       
       // Perform session verification in background (non-blocking — page renders immediately with cached data)
@@ -180,7 +141,6 @@ async function requireAuth() {
       if (data.token) {
         window.localStorage.setItem('auth_token', data.token);
       }
-      initGlobalSocket();
       updateHeaderAvatar();
       // Init push notifications after auth confirmed
       setTimeout(initPushNotifications, 3000);
@@ -227,10 +187,6 @@ function hideReconnectBanner() {
     reconnectBanner.remove();
     reconnectBanner = null;
   }
-}
-
-function initGlobalSocket() {
-  // Socket.io disabled by user request. Mock socket is used globally.
 }
 
 // After a password change, the E2EE private key stored on the server is
@@ -951,4 +907,3 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Export initPushNotifications so pages can call it after auth
 window.initPushNotifications = initPushNotifications;
-

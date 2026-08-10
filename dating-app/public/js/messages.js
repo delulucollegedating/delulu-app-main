@@ -21,6 +21,14 @@ function initUserStream() {
       try { localStorage.removeItem('cached_messages_list'); } catch (e) {}
       // Refresh the messages list instantly when a chat is ended
       loadMessagesList({ skipRecent: false });
+    } else if (data.type === 'match_celebration') {
+      // Triggered when someone accepts our "Say Hi" request.
+      // showMatchCelebration is defined in discover.js and exposed globally.
+      if (typeof window.showMatchCelebration === 'function') {
+        window.showMatchCelebration(data.username, data.connectionId);
+      }
+      // Refresh the chat list so the new connection appears immediately
+      loadMessagesList({ skipRecent: false });
     } else if (data.type === 'message') {
       // Update chat list row in-place
       updateChatListItem({
@@ -79,7 +87,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadMessagesList();
   initUserStream();
 
-  // Auto-refresh when tab becomes visible (compensates for mock socket)
+  // Refresh when the tab becomes visible and reconnect SSE if necessary.
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
       loadMessagesList({ skipRecent: true });
@@ -88,41 +96,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  if (socket) {
-    
-    // Real-time chat list updates
-    socket.on('chat-update', (data) => {
-      updateChatListItem(data);
-    });
-    
-    // Presence updates for chat list
-    socket.on('user-online', (data) => {
-      updatePresenceDot(data.userId, true);
-    });
-    socket.on('user-offline', (data) => {
-      updatePresenceDot(data.userId, false);
-    });
-    
-    // Update messages list when a message is read
-    socket.on('messages-read', (data) => {
-      const conn = chatListCache.find(c => c.id == data.connectionId);
-      if (conn) {
-        conn.last_read = true;
-        const list = document.getElementById('messages-list');
-        if (list) {
-          const links = list.querySelectorAll('a');
-          links.forEach(link => {
-            if (link.href.includes(`chat.html?id=${data.connectionId}`) || link.href.includes(`/chat?id=${data.connectionId}`)) {
-              const safeUsername = escapeHtml(conn.other_username);
-              const isRevealed = conn.status === 'revealed';
-              const lastMsg = renderLastMessage(conn);
-              link.outerHTML = renderChatListItem(conn, safeUsername, isRevealed, lastMsg);
-            }
-          });
-        }
-      }
-    });
-  }
 });
 
 // Cache of connection data for live updates
@@ -185,14 +158,6 @@ async function loadMessagesList(options = {}) {
       return renderChatListItem(c, safeUsername, isRevealed, lastMsg);
     }).join('');
 
-    // Request presence info for connected users
-    if (socket) {
-      conns.forEach(c => {
-        if (c.other_user_id) {
-          socket.emit('request-presence', { userId: c.other_user_id });
-        }
-      });
-    }
   } catch (err) {
     if (!chatListCache.length) {
       list.innerHTML = `<div class="p-4 text-error">${escapeHtml(err.message)}</div>`;
@@ -329,4 +294,3 @@ function updatePresenceDot(userId, isOnline) {
     }
   }
 }
-

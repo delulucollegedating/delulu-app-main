@@ -454,13 +454,8 @@ const userOps = {
 // on hot chat routes where the same connection doc is fetched for every message
 // API call (auth check, send, react, upload-voice, etc.).
 //
-// IMPORTANT — this is NOT an authorization decision cache:
-//   • Any mutation that changes a connection's status (block, reject, end, sweep)
-//     calls evictConnection() immediately, so a revoked connection cannot be
-//     served from stale cache.
-//   • At worst, a connection's non-status metadata (e.g. last_read_at timestamps)
-//     may be up to 2 minutes stale — this is acceptable because the client drives
-//     read-receipt updates via delta-sync, not via getConnection().
+// Every connection write in this module must use updateConnection() so a cached
+// connection can never outlive a successful mutation.
 // ───────────────────────────────────────────────────────────────────────────────
 const CONNECTION_CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes
 const CONNECTION_CACHE_MAX    = 10_000;          // hard cap — evict oldest when exceeded
@@ -490,7 +485,7 @@ function _unindexCacheKey(connectionId, cacheKey) {
 
 /**
  * Evict all cache entries for a given connectionId in O(1).
- * Call this immediately after any write that changes connection status.
+ * Called only by the connection-mutation helpers after a successful write.
  */
 function evictConnection(connectionId) {
   const keys = _connCacheIndex.get(connectionId);
@@ -500,6 +495,33 @@ function evictConnection(connectionId) {
   }
   _connCacheIndex.delete(connectionId);
 }
+
+/**
+ * Executes one or more Firestore mutations for a connection, then evicts every
+ * cached view only after the write/transaction has committed successfully.
+ *
+ * Do not call a connection document's update/set/delete methods directly.
+ */
+async function updateConnection(connectionId, mutation) {
+  const result = await mutation();
+  evictConnection(connectionId);
+  return result;
+}
+
+/** Same guarantee as updateConnection() for a committed Firestore batch. */
+async function updateConnections(connectionIds, mutation) {
+  const result = await mutation();
+  for (const connectionId of connectionIds) evictConnection(connectionId);
+  return result;
+}
+
+const CONNECTION_END_REASONS = Object.freeze({
+  NOT_VIBING: 'not_vibing',
+  FACE_REVEAL_DECLINED: 'face_reveal_declined',
+  FACE_REVEAL_TIMEOUT: 'face_reveal_timeout',
+  BLOCKED: 'blocked',
+  REQUEST_TIMEOUT: 'timeout'
+});
 
 const LAST_MESSAGE_CACHE_TTL_MS = 15 * 1000;
 const LAST_MESSAGE_CACHE_MAX = 10_000;
@@ -614,7 +636,7 @@ const connectionOps = {
       if (doc.status === 'rejected' || doc.status === 'expired') {
         const docRef = !snap1.empty ? snap1.docs[0].ref : snap2.docs[0].ref;
         const connId = doc.id;
-        await docRef.update({
+        await updateConnection(connId, () => docRef.update({
           status: 'pending',
           ended_reason: null,
           chat_started_at: null,
@@ -628,15 +650,14 @@ const connectionOps = {
           meeting_code: null,
           from_last_read_at: null,
           to_last_read_at: null
-        });
-        evictConnection(connId);
+        }));
         return { success: true, reconnected: true };
       }
       return { error: 'Connection already exists', status: doc.status };
     }
     
     const connId = await getNextId('connections');
-    await firestore.collection('connections').doc(String(connId)).set({
+    await updateConnection(connId, () => firestore.collection('connections').doc(String(connId)).set({
       id: connId,
       from_user_id: Number(fromId),
       to_user_id: Number(toId),
@@ -650,7 +671,7 @@ const connectionOps = {
       meeting_code: null,
       from_last_read_at: null,
       to_last_read_at: null
-    });
+    }));
     
     return { success: true };
   },
@@ -667,11 +688,10 @@ const connectionOps = {
       .limit(1).get();
     const doc = !snap1.empty ? snap1.docs[0] : (!snap2.empty ? snap2.docs[0] : null);
     if (doc) {
-      await doc.ref.update({ status: 'rejected' });
-      evictConnection(doc.data().id); // cache invalidation — status changed
+      await updateConnection(doc.data().id, () => doc.ref.update({ status: 'rejected' }));
     } else {
       const connId = await getNextId('connections');
-      await firestore.collection('connections').doc(String(connId)).set({
+      await updateConnection(connId, () => firestore.collection('connections').doc(String(connId)).set({
         id: connId,
         from_user_id: Number(fromId),
         to_user_id: Number(toId),
@@ -685,8 +705,7 @@ const connectionOps = {
         meeting_code: null,
         from_last_read_at: null,
         to_last_read_at: null
-      });
-      // New doc — nothing to evict
+      }));
     }
     return { success: true };
   },
@@ -703,8 +722,7 @@ const connectionOps = {
     if (conn.status !== 'pending') {
       return { error: 'Cannot revoke a request that is not pending' };
     }
-    await docRef.delete();
-    evictConnection(connectionId); // cache invalidation — document deleted
+    await updateConnection(connectionId, () => docRef.delete());
     return { success: true };
   },
 
@@ -799,7 +817,7 @@ const connectionOps = {
     const firestore = getDB();
     const connDocRef = firestore.collection('connections').doc(String(connectionId));
     let result;
-    await firestore.runTransaction(async (transaction) => {
+    await updateConnection(connectionId, () => firestore.runTransaction(async (transaction) => {
       const doc = await transaction.get(connDocRef);
       if (!doc.exists) {
         result = { error: 'Connection not found' };
@@ -845,10 +863,7 @@ const connectionOps = {
         face_reveal_available_at: faceRevealAvailable,
         face_reveal_expires_at: faceRevealExpires
       };
-    });
-    if (result?.success) {
-      evictConnection(connectionId);
-    }
+    }));
     return result || { error: 'Unable to respond to this request' };
   },
 
@@ -1024,7 +1039,7 @@ const connectionOps = {
     
     let otherId = null;
     try {
-      await firestore.runTransaction(async (transaction) => {
+      await updateConnection(connectionId, () => firestore.runTransaction(async (transaction) => {
         const doc = await transaction.get(connDocRef);
         if (!doc.exists) return; // will result in ended=false, handled below
         const conn = doc.data();
@@ -1035,15 +1050,14 @@ const connectionOps = {
         otherId = isFrom ? conn.to_user_id : conn.from_user_id;
         
         await releaseActiveConnectionLocks(transaction, conn);
-        transaction.update(connDocRef, { status: 'rejected', ended_reason: 'not_vibing' });
-      });
+        transaction.update(connDocRef, { status: 'rejected', ended_reason: CONNECTION_END_REASONS.NOT_VIBING });
+      }));
     } catch (txErr) {
       // Transaction failed for reasons other than our internal guards
       return { error: 'Connection not available. Please try again.' };
     }
     
     if (otherId) {
-      evictConnection(connectionId);
       return { success: true, ended: true, otherId };
     }
     return { error: 'Connection not active' };
@@ -1057,7 +1071,7 @@ const connectionOps = {
     let result = null;
 
     try {
-      await firestore.runTransaction(async (transaction) => {
+      await updateConnection(connectionId, () => firestore.runTransaction(async (transaction) => {
         const doc = await transaction.get(connDocRef);
         if (!doc.exists) {
           result = { error: 'Connection not found' };
@@ -1087,12 +1101,11 @@ const connectionOps = {
           ? { [field]: 1, status: 'revealed', meeting_code: meetingCode }
           : { [field]: 1 });
         result = { success: true, bothRevealed, meeting_code: meetingCode };
-      });
+      }));
     } catch (txErr) {
       return { error: 'Failed to process identity reveal. Please try again.' };
     }
 
-    if (result?.success) evictConnection(connectionId);
     return result || { error: 'Failed to process identity reveal. Please try again.' };
   },
 
@@ -1104,7 +1117,7 @@ const connectionOps = {
     let result = null;
     
     try {
-      await firestore.runTransaction(async (transaction) => {
+      await updateConnection(connectionId, () => firestore.runTransaction(async (transaction) => {
         const doc = await transaction.get(connDocRef);
         if (!doc.exists) {
           result = { error: 'Connection not found' };
@@ -1141,12 +1154,11 @@ const connectionOps = {
           ? { [field]: 1, status: 'revealed', meeting_code: meetingCode }
           : { [field]: 1 });
         result = { success: true, bothRevealed, meeting_code: meetingCode };
-      });
+      }));
     } catch (txErr) {
       return { error: 'Failed to process face reveal. Please try again.' };
     }
     
-    if (result?.success) evictConnection(connectionId);
     return result || { error: 'Failed to process face reveal. Please try again.' };
   },
 
@@ -1156,7 +1168,7 @@ const connectionOps = {
     const connDocRef = firestore.collection('connections').doc(String(connectionId));
     let otherId = null;
     let result = null;
-    await firestore.runTransaction(async (transaction) => {
+    await updateConnection(connectionId, () => firestore.runTransaction(async (transaction) => {
       const doc = await transaction.get(connDocRef);
       if (!doc.exists) {
         result = { error: 'Connection not found' };
@@ -1182,13 +1194,12 @@ const connectionOps = {
       await releaseActiveConnectionLocks(transaction, conn);
       transaction.update(connDocRef, {
         status: 'rejected',
-        ended_reason: 'face_reveal_declined',
+        ended_reason: CONNECTION_END_REASONS.FACE_REVEAL_DECLINED,
         face_reveal_declined_by: Number(userId)
       });
       result = { success: true, declined: true, otherId };
-    });
+    }));
 
-    if (result?.success) evictConnection(connectionId);
     return result || { error: 'Failed to decline face reveal' };
   },
 
@@ -1197,7 +1208,7 @@ const connectionOps = {
     const firestore = getDB();
     const connDocRef = firestore.collection('connections').doc(String(connectionId));
     let result = null;
-    await firestore.runTransaction(async (transaction) => {
+    await updateConnection(connectionId, () => firestore.runTransaction(async (transaction) => {
       const doc = await transaction.get(connDocRef);
       if (!doc.exists) {
         result = { error: 'Connection not found' };
@@ -1217,10 +1228,9 @@ const connectionOps = {
         return;
       }
       await releaseActiveConnectionLocks(transaction, conn);
-      transaction.update(connDocRef, { status: 'rejected', ended_reason: 'face_reveal_decline' });
+      transaction.update(connDocRef, { status: 'rejected', ended_reason: CONNECTION_END_REASONS.FACE_REVEAL_DECLINED });
       result = { success: true };
-    });
-    if (result?.success) evictConnection(connectionId);
+    }));
     return result || { error: 'Failed to end connection' };
   },
 
@@ -1249,7 +1259,7 @@ const connectionOps = {
     const connDocRef = firestore.collection('connections').doc(String(connectionId));
     let finalPayload = null;
 
-    await firestore.runTransaction(async (transaction) => {
+    await updateConnection(connectionId, () => firestore.runTransaction(async (transaction) => {
       const doc = await transaction.get(connDocRef);
       if (!doc.exists) throw new Error('Connection not found');
       const conn = doc.data() || {};
@@ -1273,9 +1283,7 @@ const connectionOps = {
         created_at: new Date().toISOString()
       };
       transaction.update(connDocRef, { active_game: finalPayload });
-    });
-
-    evictConnection(connectionId); // cache invalidation — active_game field set
+    }));
     return finalPayload;
   },
 
@@ -1285,7 +1293,7 @@ const connectionOps = {
     
     let bothAnswered = false;
     let gameData = null;
-    await firestore.runTransaction(async (transaction) => {
+    await updateConnection(connectionId, () => firestore.runTransaction(async (transaction) => {
       const doc = await transaction.get(connDocRef);
       if (!doc.exists) throw new Error('Connection not found');
       const conn = doc.data();
@@ -1301,8 +1309,7 @@ const connectionOps = {
       const otherId = conn.from_user_id === Number(userId) ? conn.to_user_id : conn.from_user_id;
       bothAnswered = (answers[String(userId)] !== undefined) && (answers[String(otherId)] !== undefined);
       gameData = activeGame;
-    });
-    evictConnection(connectionId); // cache invalidation — active_game.answers updated (transaction committed)
+    }));
     
     return { success: true, bothAnswered, gameData };
   },
@@ -1312,7 +1319,7 @@ const connectionOps = {
     const connDocRef = firestore.collection('connections').doc(String(connectionId));
     let actuallyCleared = false;
     if (gameCreatedAt) {
-      await firestore.runTransaction(async (transaction) => {
+      await updateConnection(connectionId, () => firestore.runTransaction(async (transaction) => {
         const doc = await transaction.get(connDocRef);
         if (!doc.exists) return;
         const conn = doc.data();
@@ -1321,14 +1328,10 @@ const connectionOps = {
           transaction.update(connDocRef, { active_game: null });
           actuallyCleared = true;
         }
-      });
+      }));
     } else {
-      await connDocRef.update({ active_game: null });
+      await updateConnection(connectionId, () => connDocRef.update({ active_game: null }));
       actuallyCleared = true;
-    }
-    // Only evict cache if the game was actually cleared — avoids wasted cache eviction
-    if (actuallyCleared) {
-      evictConnection(connectionId);
     }
     return { success: true, cleared: actuallyCleared };
   },
@@ -1361,6 +1364,7 @@ const connectionOps = {
       
       const batch = firestore.batch();
       let pageChanged = false;
+      const pageExpiredIds = [];
       
       for (const doc of snapshot.docs) {
         lastDoc = doc; // Track for pagination
@@ -1383,10 +1387,11 @@ const connectionOps = {
           : null);
         if (faceExpiry && faceExpiry < now) {
           if (conn.from_face_reveal === 0 || conn.to_face_reveal === 0) {
-            batch.update(doc.ref, { status: 'expired', ended_reason: 'face_reveal_timeout' });
+            batch.update(doc.ref, { status: 'expired', ended_reason: CONNECTION_END_REASONS.FACE_REVEAL_TIMEOUT });
             batch.delete(activeConnectionLockRef(conn.from_user_id));
             batch.delete(activeConnectionLockRef(conn.to_user_id));
             allExpiredIds.push({ id: conn.id, from_user_id: conn.from_user_id, to_user_id: conn.to_user_id });
+            pageExpiredIds.push(conn.id);
             faceRevealsExpired++;
             pageChanged = true;
             continue; // skip to next doc — this connection is handled
@@ -1396,13 +1401,14 @@ const connectionOps = {
       }
       
       // Only commit if there were actual changes — avoid wasted Firestore writes
-      if (pageChanged) await batch.commit();
+      if (pageChanged) {
+        await updateConnections(pageExpiredIds, () => batch.commit());
+      }
       
       // If we got fewer results than the page size, we've processed everything
       if (snapshot.size < PAGE_SIZE) break;
     }
     
-    for (const entry of allExpiredIds) evictConnection(entry.id);
     return { identityRevealsExpired, faceRevealsExpired, expiredConnections: allExpiredIds };
   },
 
@@ -2022,11 +2028,10 @@ const blockOps = {
         chunk.forEach(conn => {
           batch.update(firestore.collection('connections').doc(String(conn.id)), {
             status: 'rejected',
-            ended_reason: 'blocked'
+            ended_reason: CONNECTION_END_REASONS.BLOCKED
           });
-          evictConnection(conn.id); // cache invalidation — status changed due to block
         });
-        await batch.commit();
+        await updateConnections(chunk.map(conn => conn.id), () => batch.commit());
       }
     }
 
@@ -2161,11 +2166,10 @@ connectionOps.sweepExpiredRequests = async function() {
 
     const batch = firestore.batch();
     expiredDocs.forEach(doc => {
-      batch.update(doc.ref, { status: 'expired', ended_reason: 'timeout' });
-      evictConnection(doc.data().id);
+      batch.update(doc.ref, { status: 'expired', ended_reason: CONNECTION_END_REASONS.REQUEST_TIMEOUT });
     });
 
-    await batch.commit();
+    await updateConnections(expiredDocs.map(doc => doc.data().id), () => batch.commit());
     totalExpired += expiredDocs.length;
     if (snapshot.size < 500) break;
   }

@@ -12,42 +12,10 @@
 //       -> ALLOWED
 //       "bc", "!mc!", "hey sex", "gand" -> BLOCKED (standalone words)
 //
-// The client keeps its own copy of this logic in public/js/shared.js — keep the
-// two lists AND the matching functions in sync when editing.
-
-const FORBIDDEN_WORDS = [
-  // Keyword explicitly requested for blocking
-  'rishihood',
-
-  // Hindi / Hinglish abuse (real words — safe to substring-match)
-  'chutiya', 'chutiye', 'chutia', 'chutiyapanti',
-  'bhosdika', 'bhosdike', 'bhosda', 'bhosdi', 'bhosad', 'bhosari', 'bhosri',
-  'bhenchod', 'behenchod', 'behenchud', 'betichod',
-  'madarchod', 'maderchod', 'madarchot',
-  'gandu', 'gaandu',
-  'loda', 'lode', 'lodu', 'lund', 'lawda', 'lawde', 'lauda', 'laude', 'laundiya',
-  'chod', 'chodu', 'chudai', 'chudi', 'chuda',
-  'bsdk',
-  'suar', 'suwar', 'suala',
-  'harami', 'haramkhor', 'haramzada',
-  'kutta', 'kutte', 'kutiya', 'kutia', 'kutti',
-  'randi', 'tatti', 'tharki',
-  'bhadwa', 'bhadve', 'bhadwe',
-  'chinal', 'chudail', 'kamina', 'kamini', 'nalayak', 'nalla',
-  'jhaant', 'jhant', 'chakka', 'hijda', 'hijra',
-  'fuddu', 'fudu',
-  'bakchod', 'bakchodi',
-  'ma ki', 'maa ki', 'behen ki', 'bhen ki',
-
-  // English profanity
-  'fuck', 'bitch', 'cunt', 'dickhead', 'shit', 'asshole', 'whore', 'slut',
-  'pussy', 'bastard', 'motherfucker', 'nigger', 'porn', 'sexy'
-];
-
-// Short letter combos / ambiguous tokens. Matched ONLY as standalone words so
-// innocent words like "mac", "abc", "McDonalds", "Sussex", "Gandalf" or the
-// first name "Dick" are never blocked, while the standalone token still is.
-const FORBIDDEN_SHORT_TOKENS = ['bc', 'mc', 'bkl', 'bsd', 'mkc', 'gand', 'gaand', 'sex', 'dick'];
+// One canonical list serves both the Node validator and browser pre-encryption
+// validator. `npm run generate:profanity` produces the browser asset and the
+// test suite rejects stale generated output.
+const { forbiddenWords: FORBIDDEN_WORDS, forbiddenShortTokens: FORBIDDEN_SHORT_TOKENS } = require('../config/profanity.json');
 
 // Pre-compiled word-boundary patterns (built once at load — no per-message overhead)
 const SHORT_TOKEN_PATTERNS = FORBIDDEN_SHORT_TOKENS.map(token => new RegExp(`\\b${token}\\b`));
