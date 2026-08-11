@@ -61,10 +61,10 @@ const { hasForbiddenText, FORBIDDEN_MESSAGE_ERROR } = require('./utils/profanity
 
 // Circuit breakers for external service isolation
 const brevoBreaker = new CircuitBreaker('BrevoEmailAPI', {
-  timeoutMs: 5000,       // Abort requests hanging over 5s
-  failureThreshold: 3,   // Trip circuit after 3 consecutive failures
+  timeoutMs: 10000,      // Abort requests hanging over 10s
+  failureThreshold: 10,   // Trip circuit after 10 consecutive failures
   resetTimeoutMs: 10000, // Fast-fail for 10s before probing recovery
-  maxConcurrent: 5       // Cap simultaneous outbound email calls
+  maxConcurrent: 50      // Cap simultaneous outbound email calls
 });
 
 const pushBreaker = new CircuitBreaker('PushNotificationsAPI', {
@@ -203,6 +203,8 @@ app.use((req, res, next) => {
       origin.startsWith('https://localhost') || 
       origin.startsWith('capacitor://') ||
       origin.startsWith('file://') ||
+      origin.endsWith('.onrender.com') ||
+      (process.env.APP_URL && origin === process.env.APP_URL) ||
       origin === 'null')) {
     res.setHeader('Access-Control-Allow-Origin', origin);
   }
@@ -246,10 +248,10 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// OTP endpoints: 10 per 15 minutes per email/IP
+// OTP endpoints: 50 per 15 minutes per email/IP
 const otpLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10,
+  max: 50,
   keyGenerator: (req) => {
     if (req.body && req.body.email) {
       return req.body.email.toLowerCase().trim();
@@ -270,11 +272,11 @@ function rateLimitIdentity(req) {
   return `ip:${ipKeyGenerator(req.ip || req.socket?.remoteAddress || 'unknown')}`;
 }
 
-// General API rate limit. Unauthenticated traffic remains deliberately lower;
-// chat mutations also have their own tighter per-user limits below.
+// General API rate limit. Higher unauthenticated limit ensures college campus Wi-Fi
+// sharing (single public IP for hundreds of students) does not lock users out.
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: (req) => Number(req.session?.userId) > 0 ? 300 : 60,
+  max: (req) => Number(req.session?.userId) > 0 ? 300 : 300,
   keyGenerator: rateLimitIdentity,
   message: { error: 'Too many requests. Please slow down.' },
   standardHeaders: true,

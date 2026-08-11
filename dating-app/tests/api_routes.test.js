@@ -109,4 +109,24 @@ describe('Delulu API Routes & Security Tests', () => {
       expect(res).toEqual([]);
     });
   });
+
+  describe('Hosted Domain CORS & Concurrency Tests', () => {
+    it('should allow CORS for .onrender.com origins', async () => {
+      const res = await request(app)
+        .options('/api/auth/send-verification-email')
+        .set('Origin', 'https://delulu-join-now.onrender.com');
+
+      expect(res.headers['access-control-allow-origin']).toBe('https://delulu-join-now.onrender.com');
+    });
+
+    it('should create OTPs concurrently without Firestore transaction lock errors', async () => {
+      const { otpOps } = require('../database.js');
+      const promises = Array.from({ length: 10 }, (_, i) => 
+        otpOps.create(`test${i}@nst.rishihood.edu.in`, '123456', Date.now() + 600000)
+      );
+      const results = await Promise.all(promises);
+      expect(results).toHaveLength(10);
+      results.forEach(id => expect(id).toBeTruthy());
+    });
+  });
 });

@@ -153,10 +153,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     try {
       const data = await apiCall('/api/auth/send-verification-email', 'POST', { email });
-      if (data.success) {
+      if (data && data.success) {
         currentEmail = email;
         otpEmailDisplay.textContent = email;
         showStage(stageOtp);
+      } else {
+        errEl.textContent = (data && data.error) ? data.error : 'Failed to send verification link';
+        errEl.classList.remove('hidden');
       }
     } catch (err) {
       console.error(err);

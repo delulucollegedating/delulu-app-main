@@ -1,6 +1,7 @@
 const { initializeApp, cert, getApps } = require('firebase-admin/app');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 
 let db;
 function getDB() {
@@ -1852,7 +1853,7 @@ const messageOps = {
 const otpOps = {
   async create(email, otp, expiresAt) {
     const firestore = getDB();
-    const otpId = await getNextId('otps');
+    const otpId = crypto.randomUUID();
     await firestore.collection('otps').doc(String(otpId)).set({
       id: otpId,
       email,
