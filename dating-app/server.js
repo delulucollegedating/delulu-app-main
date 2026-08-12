@@ -57,6 +57,7 @@ const { getDB, seedDemoUsers, userOps, connectionOps, messageOps, otpOps, invali
 const multer = require('multer');
 const fs = require('fs');
 const CircuitBreaker = require('./utils/circuitBreaker');
+const EmailQueue = require('./utils/emailQueue');
 const { hasForbiddenText, FORBIDDEN_MESSAGE_ERROR } = require('./utils/profanity');
 
 // Circuit breakers for external service isolation
@@ -65,6 +66,16 @@ const brevoBreaker = new CircuitBreaker('BrevoEmailAPI', {
   failureThreshold: 10,   // Trip circuit after 10 consecutive failures
   resetTimeoutMs: 10000, // Fast-fail for 10s before probing recovery
   maxConcurrent: 50      // Cap simultaneous outbound email calls
+});
+
+// Smooth sudden college signup bursts. Requests wait for a worker instead of
+// failing when simultaneous sends exhaust the provider's available capacity.
+const verificationEmailQueue = new EmailQueue({
+  name: 'VerificationEmail',
+  concurrency: Math.min(50, Math.max(1, Number(process.env.BREVO_EMAIL_QUEUE_CONCURRENCY) || 5)),
+  maxPending: Number(process.env.BREVO_EMAIL_QUEUE_MAX_PENDING) || 500,
+  maxAttempts: 5,
+  baseRetryMs: 1000
 });
 
 const pushBreaker = new CircuitBreaker('PushNotificationsAPI', {
@@ -791,7 +802,13 @@ async function sendBrevoEmail(email, subject, htmlContent) {
 
     if (!response.ok) {
       const errData = await response.json().catch(() => ({}));
-      throw new Error(errData.message || `Brevo API error: ${response.status}`);
+      const error = new Error(errData.message || `Brevo API error: ${response.status}`);
+      error.status = response.status;
+      const retryAfterSeconds = Number(response.headers.get('retry-after'));
+      if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+        error.retryAfterMs = retryAfterSeconds * 1000;
+      }
+      throw error;
     }
     return response.json();
   });
@@ -846,7 +863,9 @@ app.post('/api/auth/send-verification-email', otpLimiter, async (req, res) => {
       </div>
     `;
 
-    await sendBrevoEmail(cleanEmail, `${otp} is your Delulu verification code`, htmlContent);
+    await verificationEmailQueue.enqueue(() =>
+      sendBrevoEmail(cleanEmail, `${otp} is your Delulu verification code`, htmlContent)
+    );
     res.json({ success: true, message: 'Verification email sent' });
   } catch (err) {
     console.error('Brevo Email Error:', err);
