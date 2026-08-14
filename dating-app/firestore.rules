@@ -78,6 +78,24 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Single-use signed link tokens (email verification / password reset)
+    match /auth_tokens/{tokenHash} {
+      allow read, write: if false;
+    }
+
+    // Username reservations (case-insensitive uniqueness)
+    match /usernames/{lower} {
+      allow read, write: if false;
+    }
+
+    // Distributed locks (background sweep) and boot metadata (seed flag)
+    match /locks/{lockId} {
+      allow read, write: if false;
+    }
+    match /meta/{metaId} {
+      allow read, write: if false;
+    }
+
     // User-submitted reports — contain sensitive report reasons
     match /reports/{reportId} {
       allow read, write: if false;

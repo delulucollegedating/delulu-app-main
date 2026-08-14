@@ -81,6 +81,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       await setStoredAuthToken(data.token);
     }
     window.localStorage.setItem('cached_user', JSON.stringify(user));
+    // Legacy accounts may have a password shorter than the current 12-char
+    // policy. They can sign in fine, but surface a gentle nudge to upgrade.
+    if (data.password_upgrade_required) {
+      showToast('For better security, consider setting a stronger password (12+ characters).', 'warning');
+    }
     // If E2EE keys exist, decrypt and store the private key locally
     if (user.encrypted_private_key && user.email) {
       try {

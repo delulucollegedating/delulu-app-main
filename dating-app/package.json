@@ -35,7 +35,6 @@
     "firebase-admin": "^14.1.0",
     "helmet": "^8.2.0",
     "memorystore": "^1.6.8",
-    "multer": "2.2.0",
     "otplib": "^12.0.1",
     "pino": "^10.3.1",
     "pino-http": "^11.0.0",

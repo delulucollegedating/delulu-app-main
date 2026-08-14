@@ -68,29 +68,29 @@ function getEcosystem(email) {
   return 'rishihood';
 }
 
-// Seed demo users — uses a local sentinel file (.seed-done) to avoid
-// touching Firestore on every server restart (each check = 1 wasted read).
-const fs_sync = require('fs');
-const SEED_SENTINEL = '.seed-done';
-
+// Seed demo users. The "already seeded" flag lives in Firestore (meta/seed)
+// rather than a local file, so multiple server instances / ephemeral deploys
+// all see the same flag and never double-seed.
 async function seedDemoUsers() {
-  // Skip entirely if sentinel exists — no Firestore read at all
-  if (fs_sync.existsSync(SEED_SENTINEL)) return;
-
   if (process.env.NODE_ENV === 'production') {
+    // Demo accounts are never seeded in production; record the flag so this
+    // check is a single Firestore read on every boot.
     console.log('Skipping demo user seeding in production.');
-    fs_sync.writeFileSync(SEED_SENTINEL, new Date().toISOString());
+    await getDB().collection('meta').doc('seed').set({ done: true, at: new Date().toISOString() }).catch(() => {});
     return;
   }
 
   const firestore = getDB();
+  const seedMeta = await firestore.collection('meta').doc('seed').get().catch(() => null);
+  if (seedMeta && seedMeta.exists && seedMeta.data().done) return;
+
   const usersColl = firestore.collection('users');
   const snapshot = await usersColl.limit(1).get();
 
   if (!snapshot.empty) {
     console.log('Database already seeded or users exist.');
-    // Write sentinel so we never check again
-    fs_sync.writeFileSync(SEED_SENTINEL, new Date().toISOString());
+    // Record the flag so we never re-scan the users collection again
+    await firestore.collection('meta').doc('seed').set({ done: true, at: new Date().toISOString() }).catch(() => {});
     return;
   }
 
@@ -122,6 +122,7 @@ async function seedDemoUsers() {
     const docRef = usersColl.doc(String(u.id));
     batch.set(docRef, {
       ...u,
+      username_lower: normalizeUsername(u.username),
       passcode_hash: defaultHash,
       is_onboarded: 1,
       created_at: new Date().toISOString()
@@ -133,7 +134,7 @@ async function seedDemoUsers() {
   batch.set(counterRef, { current: 16 });
 
   await batch.commit();
-  fs_sync.writeFileSync(SEED_SENTINEL, new Date().toISOString());
+  await firestore.collection('meta').doc('seed').set({ done: true, at: new Date().toISOString() }).catch(() => {});
   console.log(`Seeded ${demos.length} demo users in Firestore`);
 }
 
@@ -180,6 +181,13 @@ function invalidateEcosystemCache(ecosystem) {
   }
 }
 
+// Normalized form of a username used for case-insensitive uniqueness lookups.
+// Stored as users/{id}.username_lower and queried directly (single-field
+// equality is auto-indexed in Firestore, so this never requires a scan).
+function normalizeUsername(username) {
+  return String(username == null ? '' : username).trim().toLowerCase();
+}
+
 // User operations
 const userOps = {
   async create(username, gender, passcodeHash, bio, hobbies, avatar) {
@@ -188,6 +196,7 @@ const userOps = {
     await userDocRef.set({
       id: userId,
       username,
+      username_lower: normalizeUsername(username),
       gender,
       passcode_hash: passcodeHash,
       bio: bio || '',
@@ -202,27 +211,98 @@ const userOps = {
     return userId;
   },
 
+  // Creates the user and atomically reserves its username in the `usernames`
+  // collection inside ONE Firestore transaction. Two concurrent signups can
+  // never both claim the same name, and the auto-increment counter is bumped
+  // in the same transaction (no cross-transaction counter race).
   async createWithEmail(username, gender, email, passwordHash, bio, hobbies, avatar, publicKey = null, encryptedPrivateKey = null) {
-    const userId = await getNextId('users');
-    const userDocRef = getDB().collection('users').doc(String(userId));
+    const firestore = getDB();
     const ecosystem = getEcosystem(email);
-    await userDocRef.set({
-      id: userId,
-      username,
-      gender,
-      email,
-      passcode_hash: passwordHash,
-      bio: bio || '',
-      hobbies: hobbies || [],
-      avatar: avatar || '',
-      is_onboarded: 1,
-      ecosystem,
-      public_key: publicKey || null,
-      encrypted_private_key: encryptedPrivateKey || null,
-      token_version: 0,
-      created_at: new Date().toISOString()
+    const lower = normalizeUsername(username);
+    let userId = null;
+
+    await firestore.runTransaction(async (tx) => {
+      const counterRef = firestore.collection('counters').doc('users');
+      const counterDoc = await tx.get(counterRef);
+      const next = counterDoc.exists ? (Number(counterDoc.data().current) || 0) + 1 : 1;
+
+      const nameRef = firestore.collection('usernames').doc(lower);
+      const nameDoc = await tx.get(nameRef);
+      if (nameDoc.exists) {
+        const conflict = new Error('Username already taken');
+        conflict.code = 'username_taken';
+        throw conflict;
+      }
+
+      tx.set(counterRef, { current: next });
+      tx.set(nameRef, { user_id: next, created_at: new Date().toISOString() });
+      tx.set(firestore.collection('users').doc(String(next)), {
+        id: next,
+        username,
+        username_lower: lower,
+        gender,
+        email,
+        passcode_hash: passwordHash,
+        bio: bio || '',
+        hobbies: hobbies || [],
+        avatar: avatar || '',
+        is_onboarded: 1,
+        ecosystem,
+        public_key: publicKey || null,
+        encrypted_private_key: encryptedPrivateKey || null,
+        token_version: 0,
+        created_at: new Date().toISOString()
+      });
+      userId = next;
     });
+
+    invalidateEcosystemCache(ecosystem);
     return userId;
+  },
+
+  // Atomic username change: swaps the reservation doc and updates the user in
+  // one transaction so two concurrent renames can never both succeed, and a
+  // rename can never leave a stale reservation behind.
+  async changeUsernameAtomic(userId, newUsername) {
+    const firestore = getDB();
+    const lower = normalizeUsername(newUsername);
+    const oldUser = await this.getById(userId);
+    if (!oldUser) {
+      const err = new Error('User not found');
+      err.code = 'user_not_found';
+      throw err;
+    }
+    const oldLower = oldUser.username ? normalizeUsername(oldUser.username) : null;
+    try {
+      await firestore.runTransaction(async (tx) => {
+        if (oldLower && oldLower !== lower) {
+          tx.delete(firestore.collection('usernames').doc(oldLower));
+        }
+        const nameRef = firestore.collection('usernames').doc(lower);
+        const nameDoc = await tx.get(nameRef);
+        if (nameDoc.exists && Number(nameDoc.data().user_id) !== Number(userId)) {
+          const conflict = new Error('Username already taken');
+          conflict.code = 'username_taken';
+          throw conflict;
+        }
+        tx.set(nameRef, { user_id: Number(userId), created_at: new Date().toISOString() });
+        tx.update(firestore.collection('users').doc(String(userId)), {
+          username: newUsername,
+          username_lower: lower,
+          username_changed_at: new Date().toISOString()
+        });
+      });
+    } catch (err) {
+      if (err.code === 'username_taken' || err.code === 'user_not_found') throw err;
+      // A transaction abort (e.g. a concurrent rename) is indistinguishable from
+      // a conflict — surface it as a retryable "taken" error.
+      const conflict = new Error('Username already taken');
+      conflict.code = 'username_taken';
+      throw conflict;
+    }
+    invalidateUserCache(userId);
+    if (oldUser.ecosystem) invalidateEcosystemCache(oldUser.ecosystem);
+    return true;
   },
 
   async getById(id) {
@@ -243,27 +323,45 @@ const userOps = {
   async getByUsername(username) {
     if (!username) return null;
     const target = String(username).trim();
+    const lower = target.toLowerCase();
     const firestore = getDB();
 
-    // Fast path: exact (case-sensitive) match — usernames are stored as typed
+    // Fast path: normalized query (single-field equality, auto-indexed). New and
+    // updated accounts carry `username_lower`, making this O(1) — no scan.
+    try {
+      const snap = await firestore.collection('users').where('username_lower', '==', lower).limit(1).get();
+      if (!snap.empty) {
+        const doc = snap.docs[0];
+        const data = doc.data();
+        const docId = doc.id ? (isNaN(doc.id) ? doc.id : Number(doc.id)) : null;
+        return { ...data, id: data.id || docId };
+      }
+    } catch (e) {
+      // Querying a field that exists on no document returns empty (not an
+      // error); fall through to the legacy paths on anything unexpected.
+    }
+
+    // Legacy path: exact (case-sensitive) match — pre-normalization accounts.
     const snap = await firestore.collection('users').where('username', '==', target).limit(1).get();
     if (!snap.empty) {
       const doc = snap.docs[0];
       const data = doc.data();
       const docId = doc.id ? (isNaN(doc.id) ? doc.id : Number(doc.id)) : null;
+      // Lazy backfill so future lookups take the fast path.
+      if (!data.username_lower) doc.ref.update({ username_lower: lower }).catch(() => {});
       return { ...data, id: data.id || docId };
     }
 
-    // Fallback: case-insensitive scan so "Bob" vs "bob" can never collide and
-    // login with a different casing still works. Firestore has no native
-    // case-insensitive equality, and the user base is college-scale, so a
-    // single scan on this rare path is acceptable.
-    const lower = target.toLowerCase();
+    // Legacy fallback: case-insensitive scan so "Bob" vs "bob" can never
+    // collide and login with a different casing still works. Only reachable for
+    // accounts created before username_lower existed; the backfill above and new
+    // signups retire this path over time.
     const all = await firestore.collection('users').get();
     for (const doc of all.docs) {
       const data = doc.data();
       if (String(data.username || '').trim().toLowerCase() === lower) {
         const docId = doc.id ? (isNaN(doc.id) ? doc.id : Number(doc.id)) : null;
+        if (!data.username_lower) doc.ref.update({ username_lower: lower }).catch(() => {});
         return { ...data, id: data.id || docId };
       }
     }
@@ -316,11 +414,15 @@ const userOps = {
 
   async update(id, fields) {
     const updatePayload = {};
-    const allowed = ['bio', 'hobbies', 'avatar', 'fcm_tokens', 'username', 'username_changed_at', 'passcode_hash', 'encrypted_private_key', 'public_key', 'token_version', 'totp_secret', 'totp_enabled', 'totp_backup_codes'];
+    const allowed = ['bio', 'hobbies', 'avatar', 'fcm_tokens', 'username', 'username_lower', 'username_changed_at', 'passcode_hash', 'encrypted_private_key', 'public_key', 'token_version', 'totp_secret', 'totp_enabled', 'totp_backup_codes'];
     for (const key of allowed) {
       if (fields[key] !== undefined) {
         updatePayload[key] = fields[key];
       }
+    }
+    // Keep the normalized lookup field in sync whenever the display username changes.
+    if (fields.username !== undefined && fields.username_lower === undefined) {
+      updatePayload.username_lower = normalizeUsername(fields.username);
     }
     if (Object.keys(updatePayload).length === 0) return;
     const oldUser = await this.getById(id);
@@ -364,6 +466,7 @@ const userOps = {
     } else {
       let snapshotDocs = [];
       try {
+        // Required composite index: ecosystem + gender (see firestore.indexes.json).
         let query = firestore.collection('users').where('ecosystem', '==', userEcosystem);
         if (genderFilter) {
           query = query.where('gender', '==', genderFilter);
@@ -371,7 +474,12 @@ const userOps = {
         const snap = await query.get();
         snap.forEach(d => snapshotDocs.push(d));
       } catch (indexErr) {
-        console.warn('Firestore discover query index fallback 1: fetching ecosystem users.');
+        // Fallback to a single-field ecosystem query (auto-indexed, always
+        // available) and filter gender in memory. The composite index is a
+        // deploy requirement — see firestore.indexes.json — and is never
+        // silently replaced by a full collection scan, which would burn
+        // Firestore read quota on a hot public endpoint.
+        console.warn('Firestore discover composite index missing — using ecosystem-only query (deploy firestore.indexes.json).');
         try {
           const ecoQuery = firestore.collection('users').where('ecosystem', '==', userEcosystem);
           const ecoSnap = await ecoQuery.get();
@@ -382,20 +490,7 @@ const userOps = {
             }
           });
         } catch (ecoErr) {
-          console.warn('Firestore discover query index fallback 2: fetching all users.');
-          try {
-            const allSnap = await firestore.collection('users').get();
-            allSnap.forEach(doc => {
-              const u = doc.data();
-              const ecoMatch = (u.ecosystem || 'rishihood') === userEcosystem;
-              const genderMatch = !genderFilter || u.gender === genderFilter;
-              if (ecoMatch && genderMatch) {
-                snapshotDocs.push(doc);
-              }
-            });
-          } catch (allErr) {
-            console.error('All discover queries failed:', allErr);
-          }
+          console.error('Firestore discover query failed:', ecoErr);
         }
       }
 
@@ -785,7 +880,10 @@ const connectionOps = {
       .where('status', '==', 'pending')
       .get();
       
-    const connections = (await Promise.all(snapshot.docs.map(async (doc) => {
+    // Fetch partner profiles with a bounded concurrency of 6 (instead of an
+    // unbounded Promise.all) — userOps.getById is cached, so this is cheap on
+    // warm cache and bounded on cold cache.
+    const connections = (await mapWithConcurrency(snapshot.docs, 6, async (doc) => {
       const conn = doc.data();
       const sender = await userOps.getById(conn.from_user_id);
       if (!sender) return null;
@@ -797,7 +895,7 @@ const connectionOps = {
         avatar: sender.avatar,
         gender: sender.gender
       };
-    }))).filter(Boolean);
+    })).filter(Boolean);
 
     return connections.sort((a, b) => b.created_at.localeCompare(a.created_at));
   },
@@ -808,7 +906,7 @@ const connectionOps = {
       .where('status', '==', 'pending')
       .get();
       
-    const connections = (await Promise.all(snapshot.docs.map(async (doc) => {
+    const connections = (await mapWithConcurrency(snapshot.docs, 6, async (doc) => {
       const conn = doc.data();
       const receiver = await userOps.getById(conn.to_user_id);
       if (!receiver) return null;
@@ -820,7 +918,7 @@ const connectionOps = {
         avatar: receiver.avatar,
         gender: receiver.gender
       };
-    }))).filter(Boolean);
+    })).filter(Boolean);
 
     return connections.sort((a, b) => b.created_at.localeCompare(a.created_at));
   },
@@ -1938,133 +2036,210 @@ const messageOps = {
   }
 };
 
-// OTP operations (Mapped for signup tokens)
+// OTP operations.
+// Security model:
+//  • One active OTP per email, stored at otps/{email}. Generating again simply
+//    replaces the previous code (matches the old "latest wins" semantics).
+//  • The code is stored ONLY as an HMAC-SHA256 digest keyed by SESSION_SECRET
+//    (a pepper), so a Firestore read can never reveal a usable OTP.
+//  • verify() validates AND marks-used inside a single Firestore transaction,
+//    so two concurrent requests with the same code cannot both pass; failed
+//    attempts increment a per-code counter inside the same transaction.
+const OTP_TTL_MS = 10 * 60 * 1000;
+
+function hashOtp(otp) {
+  const secret = process.env.SESSION_SECRET || 'delulu-otp-pepper';
+  return crypto.createHmac('sha256', secret).update(String(otp)).digest('hex');
+}
+
+function otpDocKey(email) {
+  return String(email == null ? '' : email).toLowerCase().trim();
+}
+
 const otpOps = {
   async create(email, otp, expiresAt) {
     const firestore = getDB();
-    const otpId = crypto.randomUUID();
-    await firestore.collection('otps').doc(String(otpId)).set({
-      id: otpId,
-      email,
-      otp,
+    const cleanEmail = otpDocKey(email);
+    const ref = firestore.collection('otps').doc(cleanEmail);
+    await ref.set({
+      id: cleanEmail,
+      email: cleanEmail,
+      otp_hash: hashOtp(otp),
       used: 0,
       expires_at: new Date(expiresAt).toISOString(),
       created_at: new Date().toISOString(),
       attempts: 0
     });
-    return otpId;
-  },
-
-  async getValidOTP(email, otp) {
-    const now = new Date().toISOString();
-    const snapshot = await getDB().collection('otps')
-      .where('email', '==', email)
-      .where('otp', '==', otp)
-      .where('used', '==', 0)
-      .get();
-      
-    let valid = null;
-    let latestCreatedAt = null;
-    snapshot.forEach(doc => {
-      const data = doc.data();
-      if (data.expires_at > now) {
-        // Pick the most recently created valid token — this avoids matching an old orphaned token
-        if (!latestCreatedAt || data.created_at > latestCreatedAt) {
-          valid = data;
-          latestCreatedAt = data.created_at;
-        }
-      }
-    });
-    return valid;
+    return cleanEmail;
   },
 
   async getActiveOTP(email) {
-    const now = new Date().toISOString();
-    const snapshot = await getDB().collection('otps')
-      .where('email', '==', email)
-      .where('used', '==', 0)
-      .get();
-      
-    let active = null;
-    snapshot.forEach(doc => {
-      const data = doc.data();
-      if (data.expires_at > now) {
-        active = data;
-      }
-    });
-    return active;
+    const doc = await getDB().collection('otps').doc(otpDocKey(email)).get();
+    if (!doc.exists) return null;
+    const data = doc.data();
+    if (data.used === 1 || new Date(data.expires_at).getTime() < Date.now()) return null;
+    return data;
   },
 
   async incrementAttempts(email) {
-    const firestore = getDB();
-    const active = await this.getActiveOTP(email);
-    if (active) {
-      await firestore.collection('otps').doc(String(active.id)).update({
-        attempts: FieldValue.increment(1)
-      });
-    }
+    await getDB().collection('otps').doc(otpDocKey(email))
+      .update({ attempts: FieldValue.increment(1) })
+      .catch(() => {});
   },
 
   async markUsed(id) {
-    await getDB().collection('otps').doc(String(id)).update({ used: 1 });
+    await getDB().collection('otps').doc(String(id))
+      .update({ used: 1, used_at: new Date().toISOString() })
+      .catch(() => {});
   },
 
   async cleanExpired() {
     const firestore = getDB();
     const now = new Date().toISOString();
-    // Limit to 200 at a time to avoid excessive reads — expired OTPs are harmless
-    // and get cleaned incrementally over multiple sweep cycles.
-    const snapshot = await firestore.collection('otps')
-      .where('expires_at', '<', now)
-      .limit(200)
-      .get();
-    const batch = firestore.batch();
-    let count = 0;
-    
-    snapshot.forEach(doc => {
-      batch.delete(doc.ref);
-      count++;
-    });
-    
-    // Only commit if there are deletions
-    if (count > 0) await batch.commit();
-    
-    // Also clean used tokens (separate query, smaller scope)
-    const usedSnapshot = await firestore.collection('otps')
-      .where('used', '==', 1)
-      .limit(100)
-      .get();
-    const usedBatch = firestore.batch();
-    let usedCount = 0;
-    usedSnapshot.forEach(doc => {
-      usedBatch.delete(doc.ref);
-      usedCount++;
-    });
-    if (usedCount > 0) await usedBatch.commit();
-    
-    return { deletedCount: count + usedCount };
+    let deletedCount = 0;
+    try {
+      // Expired OTPs — bounded incremental sweep.
+      const snapshot = await firestore.collection('otps')
+        .where('expires_at', '<', now)
+        .limit(200)
+        .get();
+      const batch = firestore.batch();
+      let count = 0;
+      snapshot.forEach(doc => { batch.delete(doc.ref); count++; });
+      if (count > 0) await batch.commit();
+      deletedCount += count;
+
+      // Already-used OTPs — bounded incremental sweep.
+      const usedSnapshot = await firestore.collection('otps')
+        .where('used', '==', 1)
+        .limit(100)
+        .get();
+      const usedBatch = firestore.batch();
+      let usedCount = 0;
+      usedSnapshot.forEach(doc => { usedBatch.delete(doc.ref); usedCount++; });
+      if (usedCount > 0) await usedBatch.commit();
+      deletedCount += usedCount;
+    } catch (err) {
+      console.error('otpOps.cleanExpired error:', err.message);
+    }
+    return { deletedCount };
   },
 
   async deleteByEmail(email) {
-    const firestore = getDB();
-    const snapshot = await firestore.collection('otps').where('email', '==', email).get();
-    const batch = firestore.batch();
-    snapshot.forEach(doc => batch.delete(doc.ref));
-    await batch.commit();
+    await getDB().collection('otps').doc(otpDocKey(email)).delete().catch(() => {});
   },
 
   async generate(email) {
     const otp = String(Math.floor(100000 + Math.random() * 900000));
-    await this.create(email, otp, new Date(Date.now() + 10 * 60 * 1000));
+    await this.create(email, otp, Date.now() + OTP_TTL_MS);
     return otp;
   },
 
+  // Transactional verify + mark-used. Returns true exactly once per issued code.
   async verify(email, otp) {
     if (!email || !otp) return false;
-    const valid = await this.getValidOTP(email, String(otp).trim());
-    if (!valid) return false;
-    await this.markUsed(valid.id);
-    return true;
+    const firestore = getDB();
+    const cleanEmail = otpDocKey(email);
+    const codeHash = hashOtp(String(otp).trim());
+    const ref = firestore.collection('otps').doc(cleanEmail);
+    let outcome = false;
+    try {
+      await firestore.runTransaction(async (tx) => {
+        const doc = await tx.get(ref);
+        if (!doc.exists) return;
+        const data = doc.data();
+        if (data.used === 1) return;
+        if (new Date(data.expires_at).getTime() < Date.now()) return;
+        if (data.otp_hash !== codeHash) {
+          tx.update(ref, { attempts: FieldValue.increment(1) });
+          return;
+        }
+        tx.update(ref, { used: 1, used_at: new Date().toISOString() });
+        outcome = true;
+      });
+    } catch (err) {
+      console.error('otpOps.verify error:', err.message);
+      return false;
+    }
+    return outcome;
+  }
+};
+
+// ===== Single-use signed link tokens (email verification & password reset) =====
+// The token sent in the email is the existing stateless HMAC
+// (base64url(email:expiry:hmac)). To make it single-use we ALSO persist a hash
+// of the token, keyed by the hash itself for O(1) lookup (no query/index
+// needed). consume() marks the token used inside a Firestore transaction, so
+// two concurrent replays of the same link cannot both succeed.
+const authTokenOps = {
+  async create(email, token, ttlMs = 60 * 60 * 1000) {
+    const firestore = getDB();
+    const tokenHash = crypto.createHash('sha256').update(String(token)).digest('hex');
+    await firestore.collection('auth_tokens').doc(tokenHash).set({
+      email: String(email).toLowerCase().trim(),
+      token_hash: tokenHash,
+      used: 0,
+      expires_at: new Date(Date.now() + ttlMs).toISOString(),
+      created_at: new Date().toISOString()
+    });
+    return tokenHash;
+  },
+
+  // Atomically validate the token and mark it used. Returns true exactly once
+  // per issued token — any later (or concurrent) replay returns false.
+  async consume(email, token) {
+    if (!email || !token) return false;
+    const firestore = getDB();
+    const tokenHash = crypto.createHash('sha256').update(String(token)).digest('hex');
+    const ref = firestore.collection('auth_tokens').doc(tokenHash);
+    let outcome = false;
+    try {
+      await firestore.runTransaction(async (tx) => {
+        const doc = await tx.get(ref);
+        if (!doc.exists) return;
+        const data = doc.data();
+        if (String(data.email || '').toLowerCase().trim() !== String(email).toLowerCase().trim()) return;
+        if (data.used === 1) return;
+        if (new Date(data.expires_at).getTime() < Date.now()) return;
+        tx.update(ref, { used: 1, used_at: new Date().toISOString() });
+        outcome = true;
+      });
+    } catch (err) {
+      console.error('authTokenOps.consume error:', err.message);
+      return false;
+    }
+    return outcome;
+  },
+
+  async cleanExpired() {
+    const firestore = getDB();
+    const now = new Date().toISOString();
+    let deletedCount = 0;
+    try {
+      const snapshot = await firestore.collection('auth_tokens')
+        .where('expires_at', '<', now)
+        .limit(200)
+        .get();
+      const batch = firestore.batch();
+      let count = 0;
+      snapshot.forEach(doc => { batch.delete(doc.ref); count++; });
+      if (count > 0) await batch.commit();
+      deletedCount += count;
+
+      // Also sweep already-redeemed tokens (bounded, incremental).
+      const usedSnapshot = await firestore.collection('auth_tokens')
+        .where('used', '==', 1)
+        .limit(100)
+        .get();
+      const usedBatch = firestore.batch();
+      let usedCount = 0;
+      usedSnapshot.forEach(doc => { usedBatch.delete(doc.ref); usedCount++; });
+      if (usedCount > 0) await usedBatch.commit();
+      deletedCount += usedCount;
+    } catch (err) {
+      console.error('authTokenOps.cleanExpired error:', err.message);
+    }
+    return { deletedCount };
   }
 };
 
@@ -2189,9 +2364,32 @@ function generateMeetingCode() {
 }
 
 // ===== Push Subscription Operations =====
+const MAX_FCM_TOKENS_PER_USER = 5;
+
 const pushOps = {
-  async subscribe(userId, subscription) {
+  // maxPerUser caps how many subscriptions a single user may hold — old entries
+  // are evicted oldest-first so registration always succeeds.
+  async subscribe(userId, subscription, maxPerUser = 5) {
     const firestore = getDB();
+    const snapshot = await firestore.collection('push_subs')
+      .where('user_id', '==', Number(userId))
+      .get();
+    let existing = null;
+    snapshot.forEach(doc => {
+      if (doc.data().endpoint === subscription.endpoint) existing = doc;
+    });
+    if (existing) {
+      await existing.ref.update({ keys: subscription.keys, created_at: new Date().toISOString() });
+      return existing.id;
+    }
+    // Evict oldest entries when the per-user cap is exceeded.
+    const docs = snapshot.docs.slice().sort((a, b) => {
+      return String(a.data().created_at || '').localeCompare(String(b.data().created_at || ''));
+    });
+    while (docs.length >= maxPerUser) {
+      const oldest = docs.shift();
+      await oldest.ref.delete().catch(() => {});
+    }
     const subId = await getNextId('push_subs');
     await firestore.collection('push_subs').doc(String(subId)).set({
       id: subId,
@@ -2213,14 +2411,17 @@ const pushOps = {
     return subs;
   },
 
-  async removeSubscription(endpoint) {
+  // Deletion is scoped by user_id so one user can never remove another user's
+  // subscription just by knowing its endpoint.
+  async removeSubscription(endpoint, userId = null) {
     const firestore = getDB();
-    const snapshot = await firestore.collection('push_subs')
-      .where('endpoint', '==', endpoint)
-      .limit(1).get();
-    if (!snapshot.empty) {
-      await snapshot.docs[0].ref.delete();
-    }
+    let query = firestore.collection('push_subs').where('endpoint', '==', endpoint);
+    if (userId) query = query.where('user_id', '==', Number(userId));
+    const snapshot = await query.limit(10).get();
+    const batch = firestore.batch();
+    let count = 0;
+    snapshot.forEach(doc => { batch.delete(doc.ref); count++; });
+    if (count > 0) await batch.commit();
   },
 
   async saveFCMToken(userId, fcmToken) {
@@ -2229,11 +2430,15 @@ const pushOps = {
     const userRef = firestore.collection('users').doc(String(userId));
     const doc = await userRef.get();
     if (doc.exists) {
-      const existingTokens = doc.data().fcm_tokens || [];
+      let existingTokens = doc.data().fcm_tokens || [];
+      if (!Array.isArray(existingTokens)) existingTokens = [];
       if (!existingTokens.includes(fcmToken)) {
-        await userRef.update({
-          fcm_tokens: FieldValue.arrayUnion(fcmToken)
-        });
+        existingTokens.push(fcmToken);
+        // Cap the array so a single account cannot accumulate unbounded tokens.
+        if (existingTokens.length > MAX_FCM_TOKENS_PER_USER) {
+          existingTokens = existingTokens.slice(existingTokens.length - MAX_FCM_TOKENS_PER_USER);
+        }
+        await userRef.update({ fcm_tokens: existingTokens });
       }
     }
   },
@@ -2316,6 +2521,7 @@ module.exports = {
   connectionOps,
   messageOps,
   otpOps,
+  authTokenOps,
   invalidateUserCache,
   reportOps,
   blockOps,

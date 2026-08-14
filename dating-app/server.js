@@ -60,8 +60,7 @@ const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = rateLimit;
 const { initializeApp: firebaseInitializeApp, cert } = require('firebase-admin/app');
 const { getAuth: getFirebaseAuth } = require('firebase-admin/auth');
-const { getDB, seedDemoUsers, userOps, connectionOps, messageOps, otpOps, invalidateUserCache, reportOps, blockOps, pushOps } = require('./database');
-const multer = require('multer');
+const { getDB, seedDemoUsers, userOps, connectionOps, messageOps, otpOps, authTokenOps, invalidateUserCache, reportOps, blockOps, pushOps } = require('./database');
 const fs = require('fs');
 const CircuitBreaker = require('./utils/circuitBreaker');
 const EmailQueue = require('./utils/emailQueue');
@@ -146,6 +145,14 @@ if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && proc
   } catch (err) {
     console.error('Firebase init error:', err.message);
   }
+} else if (process.env.NODE_ENV === 'production') {
+  // The app cannot function without Firestore (users, connections, OTPs), so a
+  // production boot without Firebase config is a hard failure unless the
+  // operator explicitly opts into the degraded mode.
+  if (process.env.REQUIRE_FIREBASE !== 'false') {
+    throw new Error('FATAL: FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY must be set in production.');
+  }
+  console.warn('WARNING: Firebase not configured in production (REQUIRE_FIREBASE=false) — core features will fail.');
 } else {
   console.log('Firebase not configured — OTP endpoint will use local verification only');
 }
@@ -199,33 +206,55 @@ if (process.env.NODE_ENV === 'production' && !process.env.VITEST) {
   });
 }
 
+// ── Origin classification for CORS / CSRF ────────────────────────────────────
+// Web origins carry the session cookie, so they may use credentials.
+// Native origins (Capacitor APK / file:// / null) authenticate with bearer
+// tokens only — we deliberately do NOT reflect Access-Control-Allow-Credentials
+// for them, which removes the "origin: null + cookie" CSRF vector while keeping
+// the Android app fully working (it never sends cookies).
+function isNativeAppOrigin(origin) {
+  if (!origin) return false;
+  return origin.startsWith('capacitor://') ||
+    origin.startsWith('file://') ||
+    origin === 'null';
+}
+
+function isWebAppOrigin(origin) {
+  if (!origin) return false;
+  // Production: only explicit APP_URL + the Render hosting domain.
+  if (process.env.NODE_ENV === 'production') {
+    if (process.env.APP_URL && origin === process.env.APP_URL) return true;
+    if (/^https:\/\/.+\.onrender\.com$/.test(origin)) return true;
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
+    return false;
+  }
+  // Dev/test: localhost variants, Capacitor's http://localhost webview, APP_URL.
+  if (process.env.APP_URL && origin === process.env.APP_URL) return true;
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ||
+    origin.endsWith('.onrender.com') ||
+    origin.startsWith('http://localhost') ||
+    origin.startsWith('https://localhost');
+}
+
+function isAllowedOrigin(origin) {
+  return isWebAppOrigin(origin) || isNativeAppOrigin(origin);
+}
+
 // Custom CORS Middleware to handle credentials and Capacitor/Localhost origins
 // Critical for Android APK: Capacitor WebView loads from file:// which sends Origin: null
 app.use((req, res, next) => {
-  const allowedOrigins = [
-    'http://localhost',
-    'https://localhost',
-    'http://localhost:8080',
-    'capacitor://localhost',
-    'http://127.0.0.1',
-    'https://127.0.0.1',
-    'http://localhost:3000'
-  ];
-  
   const origin = req.headers.origin;
-  if (origin && (allowedOrigins.includes(origin) || 
-      origin.startsWith('http://localhost') || 
-      origin.startsWith('https://localhost') || 
-      origin.startsWith('capacitor://') ||
-      origin.startsWith('file://') ||
-      origin.endsWith('.onrender.com') ||
-      (process.env.APP_URL && origin === process.env.APP_URL) ||
-      origin === 'null')) {
+  if (origin && isAllowedOrigin(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
+    // Only cookie-carrying web origins may use credentials; native origins use
+    // bearer tokens and never receive the credentials allowance.
+    if (isWebAppOrigin(origin)) {
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
   }
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  res.setHeader('Vary', 'Origin');
   
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
@@ -233,18 +262,23 @@ app.use((req, res, next) => {
   next();
 });
 
-// Security headers via Helmet with Content Security Policy allowlist
+// Security headers via Helmet with Content Security Policy allowlist.
+// NOTE: 'unsafe-inline'/'unsafe-eval' are required by the Tailwind Play CDN and
+// the inline theme-bootstrapping scripts in every HTML page. `http:` is removed
+// everywhere so the site never loads subresources over plaintext, and the CDN
+// hosts are pinned explicitly. Moving the inline scripts to files/nonces would
+// let us drop 'unsafe-inline' too — tracked as a follow-up.
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'", "https:"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "blob:", "https:", "http:"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "blob:", "https://cdn.tailwindcss.com", "https://cdnjs.cloudflare.com", "https:"],
       scriptSrcAttr: ["'self'", "'unsafe-inline'"],
-      styleSrc: ["'self'", "'unsafe-inline'", "https:", "http:"],
-      fontSrc: ["'self'", "https:", "http:", "data:"],
-      imgSrc: ["'self'", "data:", "blob:", "https:", "http:"],
-      mediaSrc: ["'self'", "blob:", "data:", "https:", "http:"],
-      connectSrc: ["'self'", "wss:", "ws:", "https:", "http:"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https:"],
+      fontSrc: ["'self'", "https:", "data:"],
+      imgSrc: ["'self'", "data:", "blob:", "https:"],
+      mediaSrc: ["'self'", "blob:", "data:", "https:"],
+      connectSrc: ["'self'", "wss:", "ws:", "https:"],
       frameSrc: ["'self'", "https://apis.google.com"].concat(
         process.env.FIREBASE_PROJECT_ID ? [`https://${process.env.FIREBASE_PROJECT_ID}.firebaseapp.com`] : []
       ),
@@ -263,17 +297,50 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// OTP endpoints: 50 per 15 minutes per email/IP
-const otpLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 50,
-  keyGenerator: (req) => {
-    if (req.body && req.body.email) {
-      return req.body.email.toLowerCase().trim();
-    }
-    return ipKeyGenerator(req);
-  },
-  message: { error: 'Too many OTP requests. Please try again in 15 minutes.' },
+// OTP send endpoints (emailing is expensive): 3 sends per hour per email + 10 per
+// hour per IP. This keeps an attacker from blasting one target address with reset
+// emails or exhausting the email provider quota.
+function otpEmailKey(req) {
+  if (req.body && typeof req.body.email === 'string' && req.body.email.includes('@')) {
+    return `email:${req.body.email.toLowerCase().trim()}`;
+  }
+  return `ip:${ipKeyGenerator(req.ip || req.socket?.remoteAddress || 'unknown')}`;
+}
+
+const otpSendLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 3,
+  keyGenerator: otpEmailKey,
+  message: { error: 'Too many verification emails sent. Please try again in an hour.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const otpSendIpLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  keyGenerator: (req) => `ip:${ipKeyGenerator(req.ip || req.socket?.remoteAddress || 'unknown')}`,
+  message: { error: 'Too many verification emails from this device. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// OTP verification endpoints: 5 attempts per 10 minutes per email + 10 per IP,
+// so a guessed code cannot be brute-forced even if the send limit is bypassed.
+const otpVerifyLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 5,
+  keyGenerator: otpEmailKey,
+  message: { error: 'Too many verification attempts. Please try again in 10 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const otpVerifyIpLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  keyGenerator: (req) => `ip:${ipKeyGenerator(req.ip || req.socket?.remoteAddress || 'unknown')}`,
+  message: { error: 'Too many verification attempts from this device. Please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -339,6 +406,27 @@ const discoverLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 120,
   message: { error: 'Too many requests. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Relationship-state mutations (respond/end/block/report/revoke) — cheap to call
+// but each can fan out into batch writes, so cap them.
+const actionLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  keyGenerator: rateLimitIdentity,
+  message: { error: 'Too many actions. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Firebase custom-token minting (each call creates a signed token) — keep tight.
+const tokenMintLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  keyGenerator: rateLimitIdentity,
+  message: { error: 'Too many token requests. Please slow down.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -523,12 +611,17 @@ if (process.env.SUPABASE_DB_URL) {
     }
   }).catch(() => {});
 } else {
-  // Fallback: in-memory (sessions lost on server restart — users will need to re-login after deploys)
+  // Fallback: in-memory (sessions lost on server restart — users will need to
+  // re-login after deploys). In production this silently breaks "stay logged
+  // in" and multi-instance scaling, so hard-fail unless explicitly opted out.
+  if (process.env.NODE_ENV === 'production' && process.env.REQUIRE_PERSISTENT_SESSIONS !== 'false') {
+    throw new Error('FATAL: SUPABASE_DB_URL is not set — production requires a persistent session store (connect-pg-simple). Set SUPABASE_DB_URL or REQUIRE_PERSISTENT_SESSIONS=false to run with in-memory sessions.');
+  }
   const MemoryStore = require('memorystore')(session);
   sessionStore = new MemoryStore({
     checkPeriod: 15 * 60 * 1000
   });
-  console.log('Session store: MemoryStore (set SUPABASE_DB_URL for persistent sessions)');
+  console.warn('Session store: MemoryStore (set SUPABASE_DB_URL for persistent sessions)');
 }
 
 const sessionMiddleware = session({
@@ -647,48 +740,29 @@ app.use(async (req, res, next) => {
   next();
 });
 
-// Body parsing
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Body parsing with explicit size limits so oversized JSON/form payloads are
+// rejected by the parser (HTTP 413) before application validation runs. 32kb
+// comfortably fits every current endpoint (profile fields, E2EE keys, reports);
+// nothing in the app needs more.
+app.use(express.json({ limit: '32kb' }));
+app.use(express.urlencoded({ extended: true, limit: '32kb' }));
 
 // Apply general API rate limiter to all /api/ routes
 app.use('/api/', apiLimiter);
 
 // CSRF Sec-Fetch-Site / Origin check — defense-in-depth on top of sameSite: 'lax'
 // Android Capacitor APK sends Origin: null for file:// loads — must allow it
+// (native origins authenticate with bearer tokens, so no cookie is at risk).
 app.use((req, res, next) => {
   if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
-    const allowedOrigins = [
-      'http://localhost',
-      'https://localhost',
-      'http://localhost:8080',
-      'capacitor://localhost',
-      'http://127.0.0.1',
-      'https://127.0.0.1',
-      'http://localhost:3000',
-      'http://127.0.0.1:3000'
-    ];
-    
     const requestOrigin = req.get('origin') || req.get('referer') || '';
-    let isNativeCapacitorOrigin = false;
-    if (requestOrigin) {
-      if (allowedOrigins.includes(requestOrigin) || 
-          requestOrigin.startsWith('http://localhost') || 
-          requestOrigin.startsWith('https://localhost') || 
-          requestOrigin.startsWith('capacitor://') ||
-          requestOrigin.startsWith('file://') ||
-          requestOrigin === 'null') {
-        isNativeCapacitorOrigin = true;
-      }
-    }
-
-    if (isNativeCapacitorOrigin) {
+    if (requestOrigin && (isNativeAppOrigin(requestOrigin) || isWebAppOrigin(requestOrigin))) {
       return next();
     }
 
     const secFetchSite = req.get('sec-fetch-site');
     // Block cross-site state-changing requests outright if sent by browser
-    if (secFetchSite === 'cross-site' && !isNativeCapacitorOrigin) {
+    if (secFetchSite === 'cross-site') {
       return res.status(403).json({ error: 'Cross-origin request blocked' });
     }
 
@@ -711,8 +785,20 @@ app.use((req, res, next) => {
   next();
 });
 
+// Rate-limit the APK download: it is a ~17MB static file with no auth, so an
+// attacker could otherwise make the server burn bandwidth and disk I/O on
+// repeated downloads.
+const apkLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 20,
+  keyGenerator: (req) => ipKeyGenerator(req.ip || req.socket?.remoteAddress || 'unknown'),
+  message: { error: 'Too many APK downloads. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // Serve release APK download outside public directory to keep asset bundle lightweight (16MB)
-app.get(['/delulu.apk', '/api/download-apk'], (req, res) => {
+app.get(['/delulu.apk', '/api/download-apk'], apkLimiter, (req, res) => {
   const apkPath = path.join(__dirname, 'builds', 'delulu.apk');
   if (fs.existsSync(apkPath)) {
     res.download(apkPath, 'delulu.apk');
@@ -733,9 +819,14 @@ app.use(express.static(path.join(__dirname, 'public'), {
   index: false,
   maxAge: '0',
   setHeaders: (res, filePath) => {
-    if (filePath.endsWith('.html') || filePath.endsWith('.js') || filePath.endsWith('.css')) {
-      // Never cache HTML/JS/CSS files to ensure code updates are picked up instantly across deploys
+    if (filePath.endsWith('.html')) {
+      // HTML is never cached — code updates must be picked up instantly across deploys.
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    } else if (filePath.endsWith('.js') || filePath.endsWith('.css')) {
+      // JS/CSS: keep correctness (pick up new deploys instantly) but let browsers
+      // revalidate cheaply with ETag/Last-Modified (304s) instead of re-downloading
+      // 127KB of chat.js on every visit. express.static attaches strong ETags.
+      res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
     } else {
       res.setHeader('Cache-Control', 'public, max-age=86400, must-revalidate');
     }
@@ -931,7 +1022,7 @@ async function sendBrevoEmail(email, subject, htmlContent) {
 // ===== AUTH ROUTES =====
 
 // Send verification email with 6-digit OTP and secure link token
-app.post('/api/auth/send-verification-email', otpLimiter, async (req, res) => {
+app.post('/api/auth/send-verification-email', otpSendLimiter, otpSendIpLimiter, async (req, res) => {
   const { email } = req.body;
   if (!email || typeof email !== 'string') {
     return res.status(400).json({ error: 'Email address is required' });
@@ -949,10 +1040,14 @@ app.post('/api/auth/send-verification-email', otpLimiter, async (req, res) => {
   try {
     const otp = await otpOps.generate(cleanEmail);
     
-    // Generate a 1-hour verification token for direct link login
+    // Generate a 1-hour verification token for direct link login. The token is
+    // also persisted (hashed) so it can only be redeemed once — see authTokenOps.
     const tokenPayload = `${cleanEmail}:${Date.now() + 3600000}`;
     const token = crypto.createHmac('sha256', process.env.SESSION_SECRET).update(tokenPayload).digest('hex');
     const fullToken = Buffer.from(`${tokenPayload}:${token}`).toString('base64url');
+    await authTokenOps.create(cleanEmail, fullToken).catch(err => {
+      console.error('Failed to persist verify token (link will be replayable this cycle):', err.message);
+    });
 
     const appUrl = process.env.APP_URL || 'https://delulu-college.onrender.com';
     const verifyLink = `${appUrl}/login.html?token=${encodeURIComponent(fullToken)}`;
@@ -988,7 +1083,7 @@ app.post('/api/auth/send-verification-email', otpLimiter, async (req, res) => {
 });
 
 // Verify 6-digit OTP code
-app.post('/api/auth/verify-otp', otpLimiter, async (req, res) => {
+app.post('/api/auth/verify-otp', otpVerifyLimiter, otpVerifyIpLimiter, async (req, res) => {
   const { email, otp } = req.body;
   if (!email || !otp) {
     return res.status(400).json({ error: 'Email and OTP are required' });
@@ -1030,16 +1125,21 @@ app.post('/api/auth/verify-token', async (req, res) => {
 
   try {
     const decoded = Buffer.from(token, 'base64url').toString('utf8');
-    const [cleanEmail, expiresStr, hmac] = decoded.split(':');
+    const [cleanEmail, expiresStr] = decoded.split(':');
     const expires = Number(expiresStr);
 
+    if (!cleanEmail || !Number.isFinite(expires)) {
+      return res.status(400).json({ error: 'Invalid verification link' });
+    }
     if (Date.now() > expires) {
       return res.status(400).json({ error: 'Verification link has expired' });
     }
 
-    const expectedHmac = crypto.createHmac('sha256', process.env.SESSION_SECRET).update(`${cleanEmail}:${expiresStr}`).digest('hex');
-    if (hmac !== expectedHmac) {
-      return res.status(400).json({ error: 'Invalid verification link' });
+    // Single-use redemption: the link is consumed atomically on first use, so a
+    // replayed or shared link can never log in a second time.
+    const redeemed = await authTokenOps.consume(cleanEmail, token);
+    if (!redeemed) {
+      return res.status(400).json({ error: 'Verification link is invalid or has already been used' });
     }
 
     // Save in session
@@ -1070,7 +1170,7 @@ app.post('/api/auth/verify-token', async (req, res) => {
 });
 
 // Send password reset email (OTP + secure reset link) to a registered student email
-app.post('/api/auth/send-password-reset', otpLimiter, async (req, res) => {
+app.post('/api/auth/send-password-reset', otpSendLimiter, otpSendIpLimiter, async (req, res) => {
   const { email } = req.body;
   if (!email || typeof email !== 'string') {
     return res.status(400).json({ error: 'Email address is required' });
@@ -1085,15 +1185,21 @@ app.post('/api/auth/send-password-reset', otpLimiter, async (req, res) => {
   try {
     const user = await userOps.getByEmail(cleanEmail);
     if (!user) {
-      return res.status(404).json({ error: 'No account found with this email' });
+      // Anti-enumeration: return the same success payload as a real send; no
+      // email is actually dispatched for unknown addresses.
+      return res.json({ success: true, message: 'If an account exists for this email, a password reset email has been sent.' });
     }
 
     const otp = await otpOps.generate(cleanEmail);
 
-    // Generate a 1-hour reset token for the direct link flow
+    // Generate a 1-hour reset token for the direct link flow. Persisted (hashed)
+    // so the link can only be redeemed once — see authTokenOps.
     const tokenPayload = `${cleanEmail}:${Date.now() + 3600000}`;
     const token = crypto.createHmac('sha256', process.env.SESSION_SECRET).update(tokenPayload).digest('hex');
     const fullToken = Buffer.from(`${tokenPayload}:${token}`).toString('base64url');
+    await authTokenOps.create(cleanEmail, fullToken).catch(err => {
+      console.error('Failed to persist reset token (link will be replayable this cycle):', err.message);
+    });
 
     const appUrl = process.env.APP_URL || 'https://delulu-college.onrender.com';
     const resetLink = `${appUrl}/login.html?reset=1&token=${encodeURIComponent(fullToken)}&email=${encodeURIComponent(cleanEmail)}`;
@@ -1127,7 +1233,7 @@ app.post('/api/auth/send-password-reset', otpLimiter, async (req, res) => {
 });
 
 // Reset password after verifying ownership via OTP or the signed reset link token
-app.post('/api/auth/reset-password', otpLimiter, async (req, res) => {
+app.post('/api/auth/reset-password', otpVerifyLimiter, otpVerifyIpLimiter, async (req, res) => {
   const { email, otp, token, newPassword, encrypted_private_key } = req.body;
   if (!email || typeof email !== 'string') {
     return res.status(400).json({ error: 'Email address is required' });
@@ -1140,16 +1246,14 @@ app.post('/api/auth/reset-password', otpLimiter, async (req, res) => {
   const cleanEmail = email.trim().toLowerCase();
 
   try {
-    // Authorize the request with either a valid OTP or a signed reset link token
+    // Authorize the request with either a valid OTP or a single-use reset link token
     let verified = false;
     if (token && typeof token === 'string') {
       try {
         const decoded = Buffer.from(token, 'base64url').toString('utf8');
-        const [tokenEmail, expiresStr, hmac] = decoded.split(':');
-        const expires = Number(expiresStr);
-        if (tokenEmail === cleanEmail && Number.isFinite(expires) && Date.now() <= expires) {
-          const expectedHmac = crypto.createHmac('sha256', process.env.SESSION_SECRET).update(`${tokenEmail}:${expiresStr}`).digest('hex');
-          verified = hmac === expectedHmac;
+        const [tokenEmail] = decoded.split(':');
+        if (tokenEmail === cleanEmail) {
+          verified = await authTokenOps.consume(cleanEmail, token);
         }
       } catch (e) {
         verified = false;
@@ -1164,7 +1268,8 @@ app.post('/api/auth/reset-password', otpLimiter, async (req, res) => {
 
     const user = await userOps.getByEmail(cleanEmail);
     if (!user) {
-      return res.status(404).json({ error: 'No account found with this email' });
+      // Generic message — never confirm whether an email has an account.
+      return res.status(401).json({ error: 'Invalid or expired verification code / link' });
     }
 
     const passwordHash = await bcrypt.hash(newPassword, 10);
@@ -1229,7 +1334,12 @@ app.post('/api/users/login', authLimiter, async (req, res) => {
     setCachedUser(user.id, safeUser);
     const token = generateAuthToken(user.id, user.token_version || 0);
     await new Promise((resolve) => req.session.save(resolve));
-    res.json({ success: true, user: safeUser, token });
+
+    // Legacy accounts may predate the 12-char password policy. They can still
+    // sign in, but we surface a gentle nudge so the weak credential gets
+    // upgraded instead of living forever.
+    const passwordUpgradeRequired = typeof password === 'string' && password.length < MIN_PASSWORD_LENGTH;
+    res.json({ success: true, user: safeUser, token, password_upgrade_required: passwordUpgradeRequired || undefined });
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ error: 'Internal server error', details: err.message });
@@ -1283,17 +1393,27 @@ app.post('/api/auth/complete-profile', async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
-    const userId = await userOps.createWithEmail(
-      usernameStr, 
-      gender, 
-      email.toLowerCase().trim(), 
-      passwordHash, 
-      sanitizeText(bio), 
-      hobbies ? hobbies.map(h => sanitizeText(h)) : hobbies, 
-      avatar,
-      public_key || null,
-      encrypted_private_key || null
-    );
+    let userId;
+    try {
+      userId = await userOps.createWithEmail(
+        usernameStr, 
+        gender, 
+        email.toLowerCase().trim(), 
+        passwordHash, 
+        sanitizeText(bio), 
+        hobbies ? hobbies.map(h => sanitizeText(h)) : hobbies, 
+        avatar,
+        public_key || null,
+        encrypted_private_key || null
+      );
+    } catch (createErr) {
+      // Atomic username reservation (see userOps.createWithEmail) may reject a
+      // race between two users grabbing the same name.
+      if (createErr && createErr.code === 'username_taken') {
+        return res.status(400).json({ error: 'Username already taken' });
+      }
+      throw createErr;
+    }
     
     req.session.userId = Number(userId);
     delete req.session.pendingEmail;
@@ -1354,6 +1474,14 @@ app.put('/api/users/me', requireAuth, async (req, res) => {
         return res.status(400).json({ error: 'Each hobby must be a string under 30 characters' });
       }
     }
+  }
+  // Avatar is only ever a preset key like "female_01"; reject anything that is
+  // not a preset (no arbitrary URLs / file paths can be stored as an avatar).
+  if (avatar !== undefined && avatar !== null && typeof avatar !== 'string') {
+    return res.status(400).json({ error: 'Invalid avatar' });
+  }
+  if (typeof avatar === 'string' && avatar.trim() !== '' && !/^(male|female)_\d{1,2}$/.test(avatar.trim())) {
+    return res.status(400).json({ error: 'Invalid avatar' });
   }
   try {
     await userOps.update(req.session.userId, { 
@@ -1471,17 +1599,18 @@ app.post('/api/settings/update-username', requireAuth, async (req, res) => {
       }
     }
 
-    // Check availability
-    const taken = await userOps.isUsernameTaken(usernameStr, user.id);
-    if (taken) {
-      return res.status(400).json({ error: 'Username is already taken by another user' });
+    // The pre-check above gives instant UX feedback; changeUsernameAtomic is the
+    // race-proof backstop (transactional reservation swap).
+    try {
+      await userOps.changeUsernameAtomic(user.id, usernameStr);
+    } catch (changeErr) {
+      if (changeErr && changeErr.code === 'username_taken') {
+        return res.status(400).json({ error: 'Username is already taken by another user' });
+      }
+      throw changeErr;
     }
 
     const changedAt = new Date().toISOString();
-    await userOps.update(user.id, {
-      username: usernameStr,
-      username_changed_at: changedAt
-    });
 
     // Invalidate caches & update session
     invalidateCache(user.id);
@@ -1505,7 +1634,7 @@ app.post('/api/settings/update-username', requireAuth, async (req, res) => {
 });
 
 // 4. Send Password Reset OTP for logged-in user in Settings
-app.post('/api/settings/password-reset/send-code', requireAuth, otpLimiter, async (req, res) => {
+app.post('/api/settings/password-reset/send-code', requireAuth, otpSendLimiter, otpSendIpLimiter, async (req, res) => {
   try {
     const user = await userOps.getById(req.session.userId);
     if (!user || !user.email) {
@@ -1539,7 +1668,7 @@ app.post('/api/settings/password-reset/send-code', requireAuth, otpLimiter, asyn
 });
 
 // 5. Verify OTP & Update Password in Settings
-app.post('/api/settings/password-reset/verify-and-update', requireAuth, otpLimiter, async (req, res) => {
+app.post('/api/settings/password-reset/verify-and-update', requireAuth, otpVerifyLimiter, otpVerifyIpLimiter, async (req, res) => {
   const { otp, newPassword, encrypted_private_key, public_key } = req.body;
   if (!otp || !newPassword) {
     return res.status(400).json({ error: 'Verification code and new password are required' });
@@ -1585,7 +1714,7 @@ app.post('/api/settings/password-reset/verify-and-update', requireAuth, otpLimit
 });
 
 // 6. Public Forgot Password: Send Code (Login Page)
-app.post('/api/auth/forgot-password/send-code', otpLimiter, async (req, res) => {
+app.post('/api/auth/forgot-password/send-code', otpSendLimiter, otpSendIpLimiter, async (req, res) => {
   const { email } = req.body;
   if (!email) {
     return res.status(400).json({ error: 'Email is required' });
@@ -1595,7 +1724,8 @@ app.post('/api/auth/forgot-password/send-code', otpLimiter, async (req, res) => 
   try {
     const user = await userOps.getByEmail(cleanEmail);
     if (!user) {
-      return res.status(400).json({ error: 'No account found with this student email' });
+      // Anti-enumeration: pretend success; no email is dispatched for unknown addresses.
+      return res.json({ success: true, message: 'If an account exists for this email, a verification code has been sent.' });
     }
 
     const otp = await otpOps.generate(cleanEmail);
@@ -1623,7 +1753,7 @@ app.post('/api/auth/forgot-password/send-code', otpLimiter, async (req, res) => 
 });
 
 // 7. Public Forgot Password: Verify Code & Reset Password & Log In (Login Page)
-app.post('/api/auth/forgot-password/reset', otpLimiter, async (req, res) => {
+app.post('/api/auth/forgot-password/reset', otpVerifyLimiter, otpVerifyIpLimiter, async (req, res) => {
   const { email, otp, newPassword, encrypted_private_key, public_key } = req.body;
   if (!email || !otp || !newPassword) {
     return res.status(400).json({ error: 'Email, verification code, and new password are required' });
@@ -1636,12 +1766,9 @@ app.post('/api/auth/forgot-password/reset', otpLimiter, async (req, res) => {
   const cleanEmail = email.trim().toLowerCase();
   try {
     const user = await userOps.getByEmail(cleanEmail);
-    if (!user) {
-      return res.status(400).json({ error: 'No account found with this email' });
-    }
-
-    const valid = await otpOps.verify(cleanEmail, String(otp).trim());
+    const valid = user ? await otpOps.verify(cleanEmail, String(otp).trim()) : false;
     if (!valid) {
+      // Generic message — never confirm whether an email has an account.
       return res.status(400).json({ error: 'Invalid or expired verification code' });
     }
 
@@ -1834,7 +1961,7 @@ app.get('/api/connections/sent', requireAuth, async (req, res) => {
 });
 
 // Respond to request
-app.post('/api/connections/respond', requireAuth, async (req, res) => {
+app.post('/api/connections/respond', requireAuth, actionLimiter, async (req, res) => {
   const { connection_id, action } = req.body;
   if (!connection_id || !['accept', 'reject'].includes(action)) {
     return res.status(400).json({ error: 'Invalid request' });
@@ -1917,6 +2044,27 @@ app.get('/api/connections/:id', requireAuth, async (req, res) => {
 // ===== In-Memory Presence & Typing Tracking (0% DB cost) =====
 const activeRoomUsers = new Map(); // connectionId -> Set<userId>
 
+// ── SSE connection caps ─────────────────────────────────────────────────────
+// Each open SSE stream holds a socket, an EventEmitter listener and a heartbeat
+// interval, so a malicious or careless client can exhaust server resources by
+// opening many of them. Cap per user and per IP; excess connections get 429.
+const MAX_SSE_PER_USER = 5;
+const MAX_SSE_PER_IP = 20;
+const _sseCounts = new Map(); // key -> count
+
+function trackSSEConnection(key, max) {
+  const count = _sseCounts.get(key) || 0;
+  if (count >= max) return false;
+  _sseCounts.set(key, count + 1);
+  return true;
+}
+
+function releaseSSEConnection(key) {
+  const count = _sseCounts.get(key) || 0;
+  if (count <= 1) _sseCounts.delete(key);
+  else _sseCounts.set(key, count - 1);
+}
+
 function addRoomPresence(connectionId, userId) {
   const roomKey = String(connectionId);
   const set = activeRoomUsers.get(roomKey) || new Set();
@@ -1953,10 +2101,23 @@ function removeRoomPresence(connectionId, userId) {
 app.get('/api/connections/:id/stream', requireAuth, async (req, res) => {
   const connectionId = req.params.id;
   const userId = req.session.userId;
-  
+
+  // Enforce per-user/per-IP connection caps before any DB work.
+  const userKey = `u:${userId}`;
+  const ipKey = `ip:${ipKeyGenerator(req.ip || req.socket?.remoteAddress || 'unknown')}`;
+  if (!trackSSEConnection(userKey, MAX_SSE_PER_USER)) {
+    return res.status(429).json({ error: 'Too many open connections. Please close other chat tabs.' });
+  }
+  if (!trackSSEConnection(ipKey, MAX_SSE_PER_IP)) {
+    releaseSSEConnection(userKey);
+    return res.status(429).json({ error: 'Too many open connections from this device.' });
+  }
+  const releaseSSE = () => { releaseSSEConnection(userKey); releaseSSEConnection(ipKey); };
+
   // Verify that the connection exists and the user belongs to it
   const conn = await connectionOps.getConnection(connectionId, userId);
   if (!conn || conn._dataIntegrityError) {
+    releaseSSE();
     return res.status(404).end();
   }
 
@@ -1998,6 +2159,7 @@ app.get('/api/connections/:id/stream', requireAuth, async (req, res) => {
 
   // Clean up subscription, room presence, and interval when connection closes
   req.on('close', () => {
+    releaseSSE();
     removeRoomPresence(connectionId, userId);
     connectionEmitter.off(eventName, onUpdate);
     clearInterval(heartbeatInterval);
@@ -2029,6 +2191,18 @@ app.post('/api/connections/:id/typing', requireAuth, typingLimiter, async (req, 
 app.get('/api/user/stream', requireAuth, (req, res) => {
   const userId = req.session.userId;
 
+  // Enforce per-user/per-IP connection caps before opening the stream.
+  const userKey = `u:${userId}`;
+  const ipKey = `ip:${ipKeyGenerator(req.ip || req.socket?.remoteAddress || 'unknown')}`;
+  if (!trackSSEConnection(userKey, MAX_SSE_PER_USER)) {
+    return res.status(429).json({ error: 'Too many open connections. Please close other tabs.' });
+  }
+  if (!trackSSEConnection(ipKey, MAX_SSE_PER_IP)) {
+    releaseSSEConnection(userKey);
+    return res.status(429).json({ error: 'Too many open connections from this device.' });
+  }
+  const releaseSSE = () => { releaseSSEConnection(userKey); releaseSSEConnection(ipKey); };
+
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -2054,6 +2228,7 @@ app.get('/api/user/stream', requireAuth, (req, res) => {
   }, 25000);
 
   req.on('close', () => {
+    releaseSSE();
     userEmitter.off(eventName, onEvent);
     clearInterval(heartbeat);
     res.end();
@@ -2061,7 +2236,7 @@ app.get('/api/user/stream', requireAuth, (req, res) => {
 });
 
 // End connection ("Not Vibing")
-app.post('/api/connections/end', requireAuth, async (req, res) => {
+app.post('/api/connections/end', requireAuth, actionLimiter, async (req, res) => {
   const { connection_id } = req.body;
   if (!connection_id) return res.status(400).json({ error: 'Missing connection id' });
   evictConnectionAuth(connection_id); // Invalidate auth cache immediately
@@ -2159,7 +2334,7 @@ app.post('/api/connections/identity-reveal', requireAuth, async (req, res) => {
 });
 
 // End connection after face reveal decline
-app.post('/api/connections/end-after-decline', requireAuth, async (req, res) => {
+app.post('/api/connections/end-after-decline', requireAuth, actionLimiter, async (req, res) => {
   const { connection_id } = req.body;
   if (!connection_id) return res.status(400).json({ error: 'Missing connection id' });
   const result = await connectionOps.endAfterDecline(connection_id, req.session.userId);
@@ -2179,7 +2354,8 @@ app.post('/api/connections/end-after-decline', requireAuth, async (req, res) => 
 // Start icebreaker game
 app.post('/api/connections/:id/start-game', requireAuth, gameLimiter, async (req, res) => {
   const { game_type, question } = req.body;
-  if (!game_type || !question) return res.status(400).json({ error: 'Missing game_type or question' });
+  if (!game_type || typeof question !== 'string' || !question.trim()) return res.status(400).json({ error: 'Missing game_type or question' });
+  if (question.length > 200) return res.status(400).json({ error: 'Question is too long (max 200 characters)' });
   try {
     const conn = await connectionOps.getConnection(req.params.id, req.session.userId);
     if (!conn || conn._dataIntegrityError) return res.status(404).json({ error: 'Connection not found' });
@@ -2203,7 +2379,8 @@ app.post('/api/connections/:id/start-game', requireAuth, gameLimiter, async (req
 // Answer icebreaker game
 app.post('/api/connections/:id/answer-game', requireAuth, gameLimiter, async (req, res) => {
   const { answer } = req.body;
-  if (!answer) return res.status(400).json({ error: 'Missing answer' });
+  if (typeof answer !== 'string' || !answer.trim()) return res.status(400).json({ error: 'Missing answer' });
+  if (answer.length > 500) return res.status(400).json({ error: 'Answer is too long (max 500 characters)' });
   try {
     const conn = await connectionOps.getConnection(req.params.id, req.session.userId);
     if (!conn || conn._dataIntegrityError) return res.status(404).json({ error: 'Connection not found' });
@@ -2313,10 +2490,20 @@ app.post('/api/messages/:connectionId/read', requireAuth, readReceiptLimiter, as
 });
 
 // Send normal text message
+const MAX_PLAIN_MESSAGE_LENGTH = 4000;
+const MAX_ENCRYPTED_MESSAGE_LENGTH = 6000; // base64 overhead over ~4.4k plaintext
+
 app.post('/api/messages/send', requireAuth, messageLimiter, async (req, res) => {
   const { connection_id, content, is_encrypted, iv, client_uuid } = req.body;
-  if (!connection_id || !content?.trim()) {
+  if (!connection_id || typeof content !== 'string' || !content.trim()) {
     return res.status(400).json({ error: 'Missing connection_id or content' });
+  }
+  if (Number(is_encrypted) === 1) {
+    if (content.length > MAX_ENCRYPTED_MESSAGE_LENGTH) {
+      return res.status(400).json({ error: 'Message is too long' });
+    }
+  } else if (content.length > MAX_PLAIN_MESSAGE_LENGTH) {
+    return res.status(400).json({ error: 'Message is too long' });
   }
 
   // Reject abusive / forbidden content. E2EE ciphertext cannot be scanned, so
@@ -2422,11 +2609,20 @@ app.post('/api/log-error', async (req, res) => {
     return res.sendStatus(200); // Silently drop excess logs
   }
 
+  // Only ever persist the known fields, each length-capped, so an unauthenticated
+  // caller cannot bloat Firestore docs with arbitrary keys or huge values.
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+  const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
   const logData = {
     timestamp: new Date().toISOString(),
-    ip: ipKey,
-    userAgent: req.headers['user-agent'],
-    ...req.body
+    ip: str(ipKey, 64),
+    userAgent: str(req.headers['user-agent'], 300),
+    message: str(body.message, 2000),
+    source: str(body.source, 500),
+    lineno: Number.isFinite(Number(body.lineno)) ? Number(body.lineno) : null,
+    colno: Number.isFinite(Number(body.colno)) ? Number(body.colno) : null,
+    stack: str(body.stack, 5000),
+    path: str(body.path, 500)
   };
   console.error('Client-side error received:', JSON.stringify(logData, null, 2));
   try {
@@ -2499,7 +2695,7 @@ async function sendPushNotification(userId, title, body, url = '/messages.html',
           const payload = JSON.stringify({ title: safeTitle, body: safeBody, url: safeUrl, type: safeType, connectionId: safeConnId, icon: '/favicon.ico' });
           webPush.sendNotification(pushSub, payload).catch(err => {
             if (err.statusCode === 410 || err.statusCode === 404) {
-              pushOps.removeSubscription(sub.endpoint);
+              pushOps.removeSubscription(sub.endpoint, numUserId);
             }
           });
         }
@@ -2577,8 +2773,31 @@ async function sendPushNotification(userId, title, body, url = '/messages.html',
 // Register or upsert a device token for the logged-in user
 app.post('/api/devices/register', requireAuth, async (req, res) => {
   const { deviceId, platform, token, fcm_token, web_push_subscription, app_version, device_model } = req.body;
-  if (!deviceId) {
-    return res.status(400).json({ error: 'Missing deviceId' });
+  if (!deviceId || typeof deviceId !== 'string' || deviceId.length > 128) {
+    return res.status(400).json({ error: 'Missing or invalid deviceId' });
+  }
+  if (platform && !['android_fcm', 'android', 'web_push'].includes(platform)) {
+    return res.status(400).json({ error: 'Invalid platform' });
+  }
+  const deviceToken = token || fcm_token;
+  if (deviceToken !== undefined && deviceToken !== null && (typeof deviceToken !== 'string' || deviceToken.length > 512)) {
+    return res.status(400).json({ error: 'Invalid device token' });
+  }
+  if (web_push_subscription !== undefined && web_push_subscription !== null) {
+    const sub = web_push_subscription;
+    if (typeof sub !== 'object' || typeof sub.endpoint !== 'string' || !sub.endpoint.startsWith('https://')) {
+      return res.status(400).json({ error: 'Invalid web push subscription' });
+    }
+    if (sub.keys && (typeof sub.keys.p256dh !== 'string' || typeof sub.keys.auth !== 'string' ||
+        sub.keys.p256dh.length > 1024 || sub.keys.auth.length > 1024)) {
+      return res.status(400).json({ error: 'Invalid web push subscription keys' });
+    }
+  }
+  if (app_version !== undefined && app_version !== null && (typeof app_version !== 'string' || app_version.length > 32)) {
+    return res.status(400).json({ error: 'Invalid app_version' });
+  }
+  if (device_model !== undefined && device_model !== null && (typeof device_model !== 'string' || device_model.length > 64)) {
+    return res.status(400).json({ error: 'Invalid device_model' });
   }
 
   const result = await notificationDispatcher.registerDevice(req.session.userId, {
@@ -2632,7 +2851,7 @@ app.post('/api/messages/:id/react', requireAuth, async (req, res) => {
 // ===== Report & Block =====
 
 // Report a user
-app.post('/api/users/report', requireAuth, async (req, res) => {
+app.post('/api/users/report', requireAuth, actionLimiter, async (req, res) => {
   const { reported_user_id, reason, connection_id, evidence } = req.body;
   if (!reported_user_id) return res.status(400).json({ error: 'Missing reported user' });
   if (Number(reported_user_id) === req.session.userId) return res.status(400).json({ error: 'Cannot report yourself' });
@@ -2642,6 +2861,22 @@ app.post('/api/users/report', requireAuth, async (req, res) => {
   // Reporter-supplied evidence (e.g. decrypted E2EE message content) that the
   // server cannot read itself. Kept with the report for safety review.
   const safeEvidence = (typeof evidence === 'string' ? evidence : '').slice(0, 5000) || null;
+  
+  // If a connection is cited as evidence, it must actually be the chat between
+  // the reporter and the reported user — otherwise a report could be attached
+  // to an arbitrary connection_id for moderation tampering.
+  if (connection_id) {
+    const conn = await connectionOps.getConnectionById(connection_id).catch(() => null);
+    if (!conn) return res.status(400).json({ error: 'Invalid connection for this report' });
+    const reporterId = Number(req.session.userId);
+    const reportedId = Number(reported_user_id);
+    const isParticipant = Number(conn.from_user_id) === reporterId || Number(conn.to_user_id) === reporterId;
+    const coversPair = (Number(conn.from_user_id) === reporterId && Number(conn.to_user_id) === reportedId) ||
+      (Number(conn.from_user_id) === reportedId && Number(conn.to_user_id) === reporterId);
+    if (!isParticipant || !coversPair) {
+      return res.status(400).json({ error: 'This connection does not belong to the reported conversation' });
+    }
+  }
   
   try {
     const reportId = await reportOps.create(req.session.userId, reported_user_id, safeReason, connection_id || null, safeEvidence);
@@ -2654,7 +2889,7 @@ app.post('/api/users/report', requireAuth, async (req, res) => {
 });
 
 // Block a user
-app.post('/api/users/block', requireAuth, async (req, res) => {
+app.post('/api/users/block', requireAuth, actionLimiter, async (req, res) => {
   const { blocked_user_id } = req.body;
   if (!blocked_user_id) return res.status(400).json({ error: 'Missing blocked user' });
   if (Number(blocked_user_id) === req.session.userId) return res.status(400).json({ error: 'Cannot block yourself' });
@@ -2699,7 +2934,7 @@ app.post('/api/users/block', requireAuth, async (req, res) => {
 });
 
 // Unblock a user
-app.post('/api/users/unblock', requireAuth, async (req, res) => {
+app.post('/api/users/unblock', requireAuth, actionLimiter, async (req, res) => {
   const { blocked_user_id } = req.body;
   if (!blocked_user_id) return res.status(400).json({ error: 'Missing user' });
   
@@ -2718,13 +2953,29 @@ app.post('/api/users/unblock', requireAuth, async (req, res) => {
 // ===== Push Notifications =====
 
 // Subscribe to push notifications
+const MAX_PUSH_SUBSCRIPTIONS_PER_USER = 5;
+
 app.post('/api/push/subscribe', requireAuth, async (req, res) => {
   const { subscription } = req.body;
-  if (!subscription || !subscription.endpoint) {
+  if (!subscription || !subscription.endpoint || typeof subscription.endpoint !== 'string') {
     return res.status(400).json({ error: 'Invalid subscription' });
   }
+  let endpointUrl;
   try {
-    await pushOps.subscribe(req.session.userId, subscription);
+    endpointUrl = new URL(subscription.endpoint);
+  } catch (e) {
+    return res.status(400).json({ error: 'Invalid subscription endpoint' });
+  }
+  if (endpointUrl.protocol !== 'https:') {
+    return res.status(400).json({ error: 'Invalid subscription endpoint' });
+  }
+  const keys = subscription.keys || {};
+  if (typeof keys.p256dh !== 'string' || typeof keys.auth !== 'string' ||
+      keys.p256dh.length > 1024 || keys.auth.length > 1024) {
+    return res.status(400).json({ error: 'Invalid subscription keys' });
+  }
+  try {
+    await pushOps.subscribe(req.session.userId, { endpoint: subscription.endpoint, keys }, MAX_PUSH_SUBSCRIPTIONS_PER_USER);
     res.json({ success: true });
   } catch (err) {
     console.error('Push subscribe error:', err);
@@ -2735,9 +2986,10 @@ app.post('/api/push/subscribe', requireAuth, async (req, res) => {
 // Unsubscribe from push notifications
 app.post('/api/push/unsubscribe', requireAuth, async (req, res) => {
   const { endpoint } = req.body;
-  if (!endpoint) return res.status(400).json({ error: 'Missing endpoint' });
+  if (!endpoint || typeof endpoint !== 'string') return res.status(400).json({ error: 'Missing endpoint' });
   try {
-    await pushOps.removeSubscription(endpoint);
+    // Scoped by user id so a user can only remove their own subscriptions.
+    await pushOps.removeSubscription(endpoint, req.session.userId);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Failed to unsubscribe' });
@@ -2747,9 +2999,9 @@ app.post('/api/push/unsubscribe', requireAuth, async (req, res) => {
 // Register FCM device token for native Android background push notifications
 app.post('/api/push/fcm-token', requireAuth, async (req, res) => {
   const { token } = req.body;
-  if (!token) return res.status(400).json({ error: 'Missing token' });
+  if (!token || typeof token !== 'string' || token.length > 512) return res.status(400).json({ error: 'Missing or invalid token' });
   try {
-    await pushOps.saveFCMToken(req.session.userId, token);
+    await pushOps.saveFCMToken(req.session.userId, token.trim());
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Failed to save FCM token' });
@@ -2766,7 +3018,7 @@ app.get('/api/firebase/config', (req, res) => {
 });
 
 // Firebase custom auth token for client-side Firestore onSnapshot
-app.get('/api/firebase/token', requireAuth, async (req, res) => {
+app.get('/api/firebase/token', requireAuth, tokenMintLimiter, async (req, res) => {
   if (!firebaseAuth) {
     return res.status(503).json({ error: 'Firebase Auth not configured' });
   }
@@ -2844,9 +3096,49 @@ app.get('/profile', (req, res) => {
   }
 })();
 
+// ── Distributed sweep lock ───────────────────────────────────────────────────
+// The sweep runs inside every web process; on a multi-instance deploy each
+// instance would redo the same work. A Firestore lock (with TTL) lets only one
+// instance sweep at a time; a crashed instance's lock expires on its own.
+const SWEEP_LOCK_TTL_MS = 40 * 60 * 1000;
+
+async function acquireSweepLock() {
+  const firestore = getDB();
+  const lockRef = firestore.collection('locks').doc('sweep');
+  const now = Date.now();
+  try {
+    await firestore.runTransaction(async (tx) => {
+      const doc = await tx.get(lockRef);
+      if (doc.exists && Number(doc.data().expires_at) > now) {
+        throw new Error('SWEEP_LOCKED');
+      }
+      tx.set(lockRef, {
+        owner: `instance:${process.pid}`,
+        acquired_at: new Date().toISOString(),
+        expires_at: now + SWEEP_LOCK_TTL_MS
+      });
+    });
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+async function releaseSweepLock() {
+  try {
+    await getDB().collection('locks').doc('sweep').delete();
+  } catch (err) {
+    // Best-effort — the TTL handles a stuck lock.
+  }
+}
+
 // Scheduled Sweep for Expired Connections & Requests (every 30 minutes to conserve Firebase free-tier quota)
 setInterval(async () => {
+  let lockHeld = false;
   try {
+    lockHeld = await acquireSweepLock();
+    if (!lockHeld) return; // another instance (or a recent run) is sweeping
+
     const sweepResult = await connectionOps.sweepExpired();
     const reqSweep = await connectionOps.sweepExpiredRequests();
     // Hard-delete archived chat messages past their retention window
@@ -2857,6 +3149,9 @@ setInterval(async () => {
     if (sweepResult.identityRevealsExpired > 0 || sweepResult.faceRevealsExpired > 0 || reqSweep.expiredCount > 0 || purgedMessages > 0) {
       console.log(`[Sweep] Expired ${sweepResult.identityRevealsExpired} identity reveals, ${sweepResult.faceRevealsExpired} face reveals, ${reqSweep.expiredCount} pending requests, purged ${purgedMessages} archived messages.`);
     }
+    // Housekeeping: sweep expired/used OTPs and single-use auth tokens.
+    await otpOps.cleanExpired().catch(() => {});
+    await authTokenOps.cleanExpired().catch(() => {});
     // Emit SSE events for each expired connection so users' UIs update in real-time
     if (sweepResult.expiredConnections && sweepResult.expiredConnections.length > 0) {
       const endedMsg = 'The chat window has closed because neither user completed the face reveal in time.';
@@ -2873,6 +3168,8 @@ setInterval(async () => {
     }
   } catch (err) {
     console.error('[Sweep Error]', err);
+  } finally {
+    if (lockHeld) await releaseSweepLock().catch(() => {});
   }
 }, 30 * 60 * 1000);
 

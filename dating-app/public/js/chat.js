@@ -259,6 +259,13 @@ function initRealtimeStream() {
     streamReady = true;
     stopPollingFallback();
     stopStatusPollingFallback();
+    // Connection succeeded — reset the backoff counter and cancel any pending
+    // manual reconnect so we never double-connect.
+    _sseReconnectAttempts = 0;
+    if (window.__sseReconnectTimer) {
+      clearTimeout(window.__sseReconnectTimer);
+      window.__sseReconnectTimer = null;
+    }
 
     // Resync connection state & fetch message delta when connecting/reconnecting
     console.log('[SSE] Stream connected. Syncing connection info & message state.');
@@ -354,18 +361,54 @@ function initRealtimeStream() {
     
     streamReady = false;
     isReconnecting = true;
-    
+
+    // Close the failed EventSource explicitly. The browser's native
+    // auto-reconnect would otherwise race our manual reconnect + HTTP polling
+    // fallback and multiply connections; we own the retry schedule instead.
+    if (eventSource) {
+      eventSource.close();
+      eventSource = null;
+    }
+
     // Start HTTP polling fallback immediately — with aggressive 3s base interval
     startPollingFallback();
     startStatusPollingFallback();
+
+    // Manual reconnect with capped exponential backoff (1s → 30s max).
+    const delay = Math.min(
+      SSE_RECONNECT_BASE_DELAY_MS * Math.pow(2, _sseReconnectAttempts),
+      SSE_RECONNECT_MAX_DELAY_MS
+    );
+    _sseReconnectAttempts = Math.min(_sseReconnectAttempts + 1, 10);
+    if (window.__sseReconnectTimer) clearTimeout(window.__sseReconnectTimer);
+    window.__sseReconnectTimer = setTimeout(function retrySse() {
+      window.__sseReconnectTimer = null;
+      if (!currentConnId) return;
+      if (document.hidden) {
+        // Tab hidden — don't burn a connection; retry once it's visible again.
+        window.__sseReconnectTimer = setTimeout(retrySse, 15000);
+        return;
+      }
+      initRealtimeStream();
+    }, delay);
   };
 }
+
+// Backoff parameters for the manual SSE reconnect loop.
+const SSE_RECONNECT_BASE_DELAY_MS = 1000;
+const SSE_RECONNECT_MAX_DELAY_MS = 30000;
+let _sseReconnectAttempts = 0;
 
 function stopRealtimeStream() {
   if (eventSource) {
     eventSource.close();
     eventSource = null;
   }
+  if (window.__sseReconnectTimer) {
+    clearTimeout(window.__sseReconnectTimer);
+    window.__sseReconnectTimer = null;
+  }
+  _sseReconnectAttempts = 0;
   streamReady = false;
 }
 
@@ -1112,16 +1155,42 @@ async function initializeChat() {
   // Render spins down after 15 min of inactivity. A lightweight ping every 3
   // minutes during active chat keeps the server warm and avoids a cold start
   // instantly instead of waiting for a cold start (5-10s).
+  //
+  // Only ONE tab per browser sends the ping (elected via a localStorage
+  // heartbeat) so the traffic doesn't multiply with every open chat tab.
   if (!window.__chatKeepAliveStarted) {
     window.__chatKeepAliveStarted = true;
     const sendKeepAlive = () => {
       if (document.hidden || !currentConnId) return;
+      if (!isKeepAliveLeader()) return;
       apiCall('/api/connections/' + currentConnId)
         .then(() => {}).catch(() => {});
     };
     window.__chatKeepAliveInterval = setInterval(sendKeepAlive, 3 * 60 * 1000); // Every 3 minutes
     // Send one immediately so the server is warm right away
     setTimeout(sendKeepAlive, 5000);
+  }
+}
+
+// Tab identity + leader election for the keep-alive ping. Leadership is just a
+// localStorage heartbeat: whoever wrote last wins, and a claim expires after
+// 60s of silence, so closing the leader tab hands the job to the next one.
+if (!window.__chatTabId) window.__chatTabId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+const KEEP_ALIVE_LEADER_KEY = '__deluluKeepAliveLeader';
+
+function isKeepAliveLeader() {
+  try {
+    const now = Date.now();
+    const raw = localStorage.getItem(KEEP_ALIVE_LEADER_KEY);
+    const current = raw ? JSON.parse(raw) : null;
+    if (!current || now - current.at > 60000 || current.tabId === window.__chatTabId) {
+      localStorage.setItem(KEEP_ALIVE_LEADER_KEY, JSON.stringify({ tabId: window.__chatTabId, at: now }));
+      return true;
+    }
+    return false;
+  } catch (e) {
+    // localStorage unavailable (private mode) — single tab in practice
+    return true;
   }
 }
 

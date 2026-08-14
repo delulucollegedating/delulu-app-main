@@ -105,6 +105,8 @@ function getMessagingInstance() {
 /**
  * Register or update a device token for a user under users/{userId}/devices/{deviceId}
  */
+const MAX_DEVICES_PER_USER = 10;
+
 async function registerDevice(userId, deviceData) {
   if (!userId || !deviceData || !deviceData.deviceId) {
     return { error: 'Missing userId or deviceId' };
@@ -116,6 +118,38 @@ async function registerDevice(userId, deviceData) {
     .doc(String(userId))
     .collection('devices')
     .doc(String(deviceData.deviceId));
+
+  // Bound the number of registered devices per account so a malicious client
+  // cannot bloat the devices subcollection. When the cap is reached, evict the
+  // least-recently-active device to make room (registration always succeeds).
+  try {
+    const existingSnap = await deviceRef.get();
+    if (!existingSnap.exists) {
+      const allSnap = await firestore
+        .collection('users')
+        .doc(String(userId))
+        .collection('devices')
+        .limit(MAX_DEVICES_PER_USER + 1)
+        .get();
+      if (allSnap.size > MAX_DEVICES_PER_USER) {
+        const candidates = allSnap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .sort((a, b) => String(a.last_active_at || '').localeCompare(String(b.last_active_at || '')));
+        const toEvict = candidates[0];
+        if (toEvict) {
+          await firestore
+            .collection('users')
+            .doc(String(userId))
+            .collection('devices')
+            .doc(String(toEvict.id))
+            .delete();
+        }
+      }
+    }
+  } catch (err) {
+    // Never block registration on the eviction bookkeeping.
+    console.warn('Device cap check failed:', err.message);
+  }
 
   const platform = deviceData.platform === 'android_fcm' || deviceData.platform === 'android'
     ? 'android_fcm'

@@ -41,20 +41,11 @@
       ]
     },
     {
-      "collectionGroup": "otps",
+      "collectionGroup": "push_subs",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "email", "order": "ASCENDING" },
-        { "fieldPath": "used", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "otps",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "email", "order": "ASCENDING" },
-        { "fieldPath": "otp", "order": "ASCENDING" },
-        { "fieldPath": "used", "order": "ASCENDING" }
+        { "fieldPath": "endpoint", "order": "ASCENDING" },
+        { "fieldPath": "user_id", "order": "ASCENDING" }
       ]
     }
   ],
