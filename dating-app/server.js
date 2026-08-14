@@ -34,6 +34,13 @@ console.warn = (...args) => {
   }
 };
 
+process.on('unhandledRejection', (reason, promise) => {
+  pino.error({ reason, promise }, 'Unhandled Promise Rejection');
+});
+process.on('uncaughtException', (err) => {
+  pino.fatal({ err }, 'Uncaught Exception');
+});
+
 const { EventEmitter } = require('events');
 const connectionEmitter = new EventEmitter();
 const userEmitter = new EventEmitter(); // Per-user SSE stream (messages list page)
@@ -107,9 +114,6 @@ const app = express();
 app.use(pinoHttp);
 
 const server = http.createServer(app);
-
-// Active in-memory games store (prevents Firestore write overload)
-const activeGames = new Map(); // connectionId -> active_game payload
 
 const PORT = process.env.PORT || 3000;
 
@@ -774,6 +778,10 @@ app.use((req, res, next) => {
           return res.status(403).json({ error: 'Cross-origin request blocked' });
         }
       } catch (e) {
+        // Relative path referer (e.g. '/login.html') is inherently same-origin
+        if (requestOrigin.startsWith('/')) {
+          return next();
+        }
         return res.status(403).json({ error: 'Invalid origin header' });
       }
     }
@@ -2026,10 +2034,7 @@ app.post('/api/connections/request', requireAuth, discoverLimiter, async (req, r
   invalidateDiscoverFeed(to_user_id);
   
   // Notify the target user about the connection request
-  const reqUser = await userOps.getById(req.session.userId);
-  if (reqUser) {
-    sendPushNotification(to_user_id, 'New Connection Request', `${reqUser.username} wants to connect with you!`, '/requests.html', 'connection_request', null);
-  }
+  sendPushNotification(to_user_id, 'New Connection Request', `${user.username} wants to connect with you!`, '/requests.html', 'connection_request', null);
   
   res.json(result);
 });
@@ -2190,6 +2195,11 @@ app.get('/api/connections/:id/stream', requireAuth, async (req, res) => {
     'Connection': 'keep-alive',
     'X-Accel-Buffering': 'no'
   });
+  if (req.socket) {
+    req.socket.setTimeout(0);
+    req.socket.setNoDelay(true);
+    req.socket.setKeepAlive(true);
+  }
   
   // Send initial connection verification comment
   res.write(': ok\n\n');
@@ -2253,6 +2263,11 @@ app.get('/api/user/stream', requireAuth, (req, res) => {
     'Connection': 'keep-alive',
     'X-Accel-Buffering': 'no'
   });
+  if (req.socket) {
+    req.socket.setTimeout(0);
+    req.socket.setNoDelay(true);
+    req.socket.setKeepAlive(true);
+  }
   res.write(': ok\n\n');
 
   const onEvent = (event) => {
@@ -2858,6 +2873,7 @@ app.post('/api/users/report', requireAuth, async (req, res) => {
   
   try {
     const reportId = await reportOps.create(req.session.userId, reported_user_id, safeReason, connection_id || null, safeEvidence);
+    invalidateDiscoverFeed(req.session.userId);
     res.json({ success: true, reportId });
   } catch (err) {
     console.error('Report error:', err);
@@ -2872,7 +2888,37 @@ app.post('/api/users/block', requireAuth, async (req, res) => {
   if (Number(blocked_user_id) === req.session.userId) return res.status(400).json({ error: 'Cannot block yourself' });
   
   try {
-    const result = await blockOps.block(req.session.userId, blocked_user_id);
+    const blockerId = Number(req.session.userId);
+    const blockedId = Number(blocked_user_id);
+    const result = await blockOps.block(blockerId, blockedId);
+
+    // Invalidate discover feed cache for both users
+    invalidateDiscoverFeed(blockerId);
+    invalidateDiscoverFeed(blockedId);
+
+    // If any active connections were ended by this block, cleanup auth & messages, and notify SSE streams
+    if (result.endedConnectionIds && result.endedConnectionIds.length > 0) {
+      for (const connId of result.endedConnectionIds) {
+        evictConnectionAuth(connId);
+        await messageOps.softDeleteAllForConnection(connId, blockerId);
+        
+        // Notify chat page SSE
+        connectionEmitter.emit(`update:${connId}`, {
+          type: 'ended',
+          reason: 'blocked',
+          message: 'This chat has ended.'
+        });
+
+        // Notify messages list SSE for both users
+        const chatEndedEvent = {
+          type: 'chat_ended',
+          connectionId: Number(connId)
+        };
+        userEmitter.emit(`user:${blockerId}`, chatEndedEvent);
+        userEmitter.emit(`user:${blockedId}`, chatEndedEvent);
+      }
+    }
+
     res.json(result);
   } catch (err) {
     console.error('Block error:', err);
@@ -2886,7 +2932,11 @@ app.post('/api/users/unblock', requireAuth, async (req, res) => {
   if (!blocked_user_id) return res.status(400).json({ error: 'Missing user' });
   
   try {
-    await blockOps.unblock(req.session.userId, blocked_user_id);
+    const blockerId = Number(req.session.userId);
+    const blockedId = Number(blocked_user_id);
+    await blockOps.unblock(blockerId, blockedId);
+    invalidateDiscoverFeed(blockerId);
+    invalidateDiscoverFeed(blockedId);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Failed to unblock' });
@@ -2964,7 +3014,7 @@ app.get('/api/push/vapid-key', (req, res) => {
 
 // Delete a message
 app.delete('/api/messages/:id', requireAuth, async (req, res) => {
-  const { connection_id } = req.body;
+  const connection_id = req.query.connection_id || req.body?.connection_id;
   if (!connection_id) return res.status(400).json({ error: 'Missing connection_id' });
   const conn = await connectionOps.getConnection(connection_id, req.session.userId);
   if (conn && conn._dataIntegrityError) return res.status(410).json({ error: 'This chat is no longer available.' });

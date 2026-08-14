@@ -2141,12 +2141,16 @@ const blockOps = {
             status: 'rejected',
             ended_reason: CONNECTION_END_REASONS.BLOCKED
           });
+          if (conn.status === 'accepted') {
+            batch.delete(activeConnectionLockRef(conn.from_user_id));
+            batch.delete(activeConnectionLockRef(conn.to_user_id));
+          }
         });
         await updateConnections(chunk.map(conn => conn.id), () => batch.commit());
       }
     }
 
-    return { success: true };
+    return { success: true, endedConnectionIds: activeConns.map(conn => conn.id) };
   },
 
   async unblock(blockerId, blockedUserId) {

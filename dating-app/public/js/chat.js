@@ -2130,7 +2130,7 @@ function showMessageMenu(e, msg, bubbleEl) {
         if (moreBtn) moreBtn.remove();
 
         try {
-          await apiCall(`/api/messages/${msg.id}`, 'DELETE', { connection_id: currentConnId });
+          await apiCall(`/api/messages/${msg.id}?connection_id=${encodeURIComponent(currentConnId)}`, 'DELETE', { connection_id: currentConnId });
           msg.deleted_at = new Date().toISOString();
         } catch (err) {
           // Graceful Rollback on server failure
