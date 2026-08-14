@@ -245,114 +245,12 @@
         </form>
       </section>
 
-      <!-- CARD 3: TWO-FACTOR AUTHENTICATION (TOTP, opt-in) -->
-      <section class="glass-panel p-5 md:p-6 rounded-3xl ambient-shadow relative overflow-hidden">
-        <div class="flex items-center gap-3 mb-4">
-          <div class="w-10 h-10 rounded-2xl bg-primary/10 text-primary flex items-center justify-center">
-            <span class="material-symbols-outlined">shield_lock</span>
-          </div>
-          <div>
-            <h2 class="text-lg font-bold text-on-surface">Two-Factor Authentication</h2>
-            <p class="text-xs text-on-surface-variant">Require a 6-digit code from your authenticator app when you sign in</p>
-          </div>
-        </div>
-
-        <!-- Status row -->
-        <div class="p-3.5 rounded-2xl bg-surface-container-low border border-outline-variant/30 mb-4 flex items-center justify-between gap-3">
-          <div class="flex items-center gap-2.5 overflow-hidden">
-            <span id="2fa-status-icon" class="material-symbols-outlined text-outline text-xl shrink-0">shield</span>
-            <div class="truncate">
-              <p class="text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider">Status</p>
-              <p id="2fa-status-text" class="text-sm font-bold text-on-surface truncate">Loading...</p>
-            </div>
-          </div>
-          <div class="flex items-center gap-2 shrink-0">
-            <button type="button" id="btn-2fa-setup" class="hidden bg-surface-container-high hover:bg-primary/10 text-primary border border-primary/30 font-bold py-2 px-4 rounded-xl shadow-sm transition-all text-xs cursor-pointer flex items-center gap-1.5">
-              <span class="material-symbols-outlined text-sm">add</span> Set Up
-            </button>
-            <button type="button" id="btn-2fa-disable" class="hidden bg-surface-container-high hover:bg-error/10 text-error border border-error/30 font-bold py-2 px-4 rounded-xl shadow-sm transition-all text-xs cursor-pointer flex items-center gap-1.5">
-              <span class="material-symbols-outlined text-sm">shield_off</span> Disable
-            </button>
-          </div>
-        </div>
-
-        <!-- Setup panel: QR + secret + verify code -->
-        <div id="2fa-setup-panel" class="hidden flex-col gap-3.5 mb-4">
-          <div class="p-3 rounded-xl bg-primary/10 text-primary text-xs font-semibold flex items-center gap-2">
-            <span class="material-symbols-outlined text-sm">qr_code_scanner</span>
-            <span>Scan the QR code with your authenticator app (Google Authenticator, Authy, 1Password…)</span>
-          </div>
-          <div class="flex flex-col items-center gap-2">
-            <img id="2fa-qr" alt="Two-factor authentication QR code" class="w-44 h-44 rounded-2xl bg-white p-2" />
-            <p class="text-[11px] text-on-surface-variant">Can't scan? Enter this code manually:</p>
-            <code id="2fa-secret" class="text-xs font-mono font-bold text-on-surface bg-surface-container-low rounded-lg px-3 py-1.5 select-all"></code>
-          </div>
-          <div>
-            <label class="text-xs font-bold text-on-surface-variant pl-1 mb-1 block">6-Digit Code From App</label>
-            <input
-              id="2fa-verify-code"
-              type="text"
-              inputmode="numeric"
-              pattern="[0-9]*"
-              placeholder="123456"
-              maxlength="6"
-              autocomplete="one-time-code"
-              class="w-full bg-surface-container-low rounded-xl px-4 py-2.5 border-none focus:ring-2 focus:ring-primary/50 outline-none font-mono text-center text-lg tracking-widest font-bold"
-            >
-          </div>
-          <p id="2fa-setup-error" class="text-xs font-semibold text-error hidden"></p>
-          <button type="button" id="btn-2fa-verify" class="w-full bg-primary text-white font-bold py-3 rounded-xl shadow-md hover:shadow-lg transition-all text-sm cursor-pointer flex items-center justify-center gap-2">
-            <span class="material-symbols-outlined text-lg">verified_user</span>
-            <span>Verify & Enable</span>
-          </button>
-          <button type="button" id="btn-2fa-cancel-setup" class="w-full text-xs text-on-surface-variant hover:text-primary font-semibold cursor-pointer">Cancel</button>
-        </div>
-
-        <!-- Backup codes (shown exactly once after enabling) -->
-        <div id="2fa-backup-panel" class="hidden flex-col gap-3 mb-4">
-          <div class="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-300 text-xs font-semibold flex items-start gap-2">
-            <span class="material-symbols-outlined text-sm shrink-0 mt-0.5">warning</span>
-            <span>Save these 10 one-time backup codes somewhere safe. Each works once, and they're the only way to sign in if you lose your phone. They won't be shown again.</span>
-          </div>
-          <div id="2fa-backup-codes" class="grid grid-cols-2 gap-2 font-mono text-sm font-bold text-on-surface bg-surface-container-low rounded-xl p-3.5 select-all"></div>
-          <button type="button" id="btn-2fa-backup-done" class="w-full bg-primary text-white font-bold py-3 rounded-xl shadow-md hover:shadow-lg transition-all text-sm cursor-pointer">
-            I've Saved Them — Done
-          </button>
-        </div>
-
-        <!-- Disable panel: confirm with a live code -->
-        <div id="2fa-disable-panel" class="hidden flex-col gap-3.5">
-          <div class="p-3 rounded-xl bg-error/10 text-error text-xs font-semibold flex items-center gap-2">
-            <span class="material-symbols-outlined text-sm">shield_off</span>
-            <span>Enter your current code to turn two-factor authentication off.</span>
-          </div>
-          <div>
-            <label class="text-xs font-bold text-on-surface-variant pl-1 mb-1 block">6-Digit Code From App</label>
-            <input
-              id="2fa-disable-code"
-              type="text"
-              inputmode="numeric"
-              pattern="[0-9]*"
-              placeholder="123456"
-              maxlength="6"
-              autocomplete="one-time-code"
-              class="w-full bg-surface-container-low rounded-xl px-4 py-2.5 border-none focus:ring-2 focus:ring-primary/50 outline-none font-mono text-center text-lg tracking-widest font-bold"
-            >
-          </div>
-          <p id="2fa-disable-error" class="text-xs font-semibold text-error hidden"></p>
-          <button type="button" id="btn-2fa-disable-confirm" class="w-full bg-error text-white font-bold py-3 rounded-xl shadow-md hover:shadow-lg transition-all text-sm cursor-pointer">
-            Disable Two-Factor Authentication
-          </button>
-          <button type="button" id="btn-2fa-disable-cancel" class="w-full text-xs text-on-surface-variant hover:text-primary font-semibold cursor-pointer">Cancel</button>
-        </div>
-      </section>
-
     </div>
   </main>
 
   <script src="js/profanity-words.generated.js"></script>
   <script src="js/shared.js?v=285"></script>
   <script src="js/crypto.js"></script>
-  <script src="js/settings.js?v=104"></script>
+  <script src="js/settings.js?v=105"></script>
 </body>
 </html>

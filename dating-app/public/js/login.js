@@ -70,45 +70,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   };
 
   // ===== STAGE 0: Email/Username + Password Login =====
-
-  // Two-factor authentication state (accounts with 2FA enabled)
-  let pendingTotpChallenge = null;
-  let pendingTotpPassword = '';
-  const loginCredentialsDiv = document.getElementById('login-credentials');
-  const login2faDiv = document.getElementById('login-2fa');
-  const login2faCode = document.getElementById('login-2fa-code');
-  const login2faError = document.getElementById('login-2fa-error');
   const loginUsernameInput = document.getElementById('login-username');
   const loginPasswordInput = document.getElementById('login-password');
 
-  function showLogin2fa() {
-    loginCredentialsDiv.classList.add('hidden');
-    login2faDiv.classList.remove('hidden');
-    // Disable the credential fields so the browser skips their `required`
-    // validation while they're visually hidden.
-    loginUsernameInput.disabled = true;
-    loginPasswordInput.disabled = true;
-    // Enable the 2FA code field — it is disabled by default (hidden step) so
-    // the hidden `required` input can never block the credentials step.
-    login2faCode.disabled = false;
-    login2faError.classList.add('hidden');
-    login2faCode.value = '';
-    setTimeout(() => login2faCode.focus(), 50);
-  }
-
-  function showLoginCredentials() {
-    login2faDiv.classList.add('hidden');
-    loginCredentialsDiv.classList.remove('hidden');
-    loginUsernameInput.disabled = false;
-    loginPasswordInput.disabled = false;
-    // Re-disable the 2FA code field so its `required` validation can't block
-    // the credentials step when the step is hidden.
-    login2faCode.disabled = true;
-    login2faCode.value = '';
-  }
-
   // Shared post-auth completion: persist token + cached user, decrypt E2EE keys,
-  // then redirect. Used by both the plain login and the 2FA login paths.
+  // then redirect.
   async function finishLogin(data, password) {
     const user = data.user;
     if (data.token) {
@@ -140,35 +106,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('form-login').onsubmit = async (e) => {
     e.preventDefault();
 
-    // Step 1 → Step 2 switch: keep the 6-digit code in the same form so Enter works
-    if (loginCredentialsDiv.classList.contains('hidden')) {
-      const code = login2faCode.value.trim();
-      const btn2fa = document.getElementById('btn-login-2fa');
-      btn2fa.disabled = true;
-      btn2fa.textContent = 'Verifying...';
-      login2faError.classList.add('hidden');
-
-      try {
-        const data = await apiCall('/api/users/login/2fa', 'POST', {
-          challenge: pendingTotpChallenge,
-          code
-        });
-        if (data.success) {
-          await finishLogin(data, pendingTotpPassword);
-        }
-      } catch (err) {
-        console.error(err);
-        login2faError.textContent = err.message || 'Invalid code';
-        login2faError.classList.remove('hidden');
-        login2faCode.value = '';
-        login2faCode.focus();
-      } finally {
-        btn2fa.disabled = false;
-        btn2fa.textContent = 'Verify & Sign In';
-      }
-      return;
-    }
-
     const usernameOrEmail = loginUsernameInput.value.trim();
     const password = loginPasswordInput.value;
 
@@ -179,11 +116,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     try {
       const data = await apiCall('/api/users/login', 'POST', { usernameOrEmail, password });
-      if (data.totpRequired) {
-        pendingTotpChallenge = data.challenge;
-        pendingTotpPassword = password;
-        showLogin2fa();
-      } else if (data.success) {
+      if (data.success) {
         await finishLogin(data, password);
       }
     } catch (err) {
@@ -194,14 +127,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       btn.disabled = false;
       btn.textContent = 'Sign In';
     }
-  };
-
-  // Back to the credential step (abandon the in-flight 2FA challenge)
-  document.getElementById('btn-login-2fa-back').onclick = () => {
-    pendingTotpChallenge = null;
-    pendingTotpPassword = '';
-    showLoginCredentials();
-    loginUsernameInput.focus();
   };
 
   // ===== STAGE 1: Send Signup Email (Verification link via Brevo) =====

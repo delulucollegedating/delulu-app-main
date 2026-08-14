@@ -131,8 +131,7 @@
           "Built-in icebreakers and mini-games",
           "Day-7 identity reveal with mutual consent",
           "Day-10 face reveal with mutual consent",
-          "Safety reporting and block features",
-          "Two-factor authentication"
+          "Safety reporting and block features"
         ],
         "downloadUrl": "https://delulu-college.onrender.com/api/download-apk",
         "author": { "@id": "https://delulu-college.onrender.com/#organization" },
@@ -171,7 +170,7 @@
             "name": "Is Delulu safe?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "Yes. Delulu is designed with safety first. All chats are college-verified only, messages are end-to-end encrypted, users can report or block others at any time, and identities are revealed gradually only with mutual consent. Two-factor authentication is also available for additional account security."
+              "text": "Yes. Delulu is designed with safety first. All chats are college-verified only, messages are end-to-end encrypted, users can report or block others at any time, and identities are revealed gradually only with mutual consent."
             }
           },
           {
@@ -332,79 +331,42 @@
         <p class="text-sm text-on-surface-variant mb-6">Sign in to continue your conversations</p>
         
         <form id="form-login" class="flex flex-col gap-4">
-          <!-- Step 1: Credentials -->
-          <div id="login-credentials">
-            <div class="relative">
-              <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-lg">person</span>
-              <input 
-                id="login-username" 
-                type="text" 
-                placeholder="College Email or Username" 
-                class="w-full bg-surface-container-low rounded-xl pl-10 pr-4 py-3 border-none focus:ring-2 focus:ring-primary/50 outline-none font-medium"
-                required
-              >
-            </div>
-            <div class="relative mt-4">
-              <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-lg">lock</span>
-              <input 
-                id="login-password" 
-                type="password" 
-                placeholder="Password" 
-                class="w-full bg-surface-container-low rounded-xl pl-10 pr-4 py-3 border-none focus:ring-2 focus:ring-primary/50 outline-none font-medium"
-                required
-              >
-            </div>
-            <div class="text-right mt-2">
-              <button type="button" id="btn-forgot-password" class="text-xs text-primary font-bold hover:underline cursor-pointer">
-                Forgot Password?
-              </button>
-            </div>
-            <p id="login-error" class="text-error text-sm font-semibold hidden"></p>
-            <button 
-              type="submit" 
-              id="btn-login"
-              class="w-full btn-primary bg-primary text-white font-bold py-3.5 rounded-xl shadow-md transition-all flex items-center justify-center cursor-pointer"
+          <div class="relative">
+            <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-lg">person</span>
+            <input 
+              id="login-username" 
+              type="text" 
+              placeholder="College Email or Username" 
+              class="w-full bg-surface-container-low rounded-xl pl-10 pr-4 py-3 border-none focus:ring-2 focus:ring-primary/50 outline-none font-medium"
+              required
             >
-              Sign In
-            </button>
-            <div class="text-center mt-2">
-              <button type="button" id="btn-go-signup" class="text-sm text-primary hover:underline font-bold">
-                New here? Join your college circle
-              </button>
-            </div>
           </div>
-
-          <!-- Step 2: Two-Factor Authentication code (only for accounts with 2FA on) -->
-          <div id="login-2fa" class="hidden">
-            <div class="p-3 rounded-xl bg-primary/10 text-primary text-xs font-semibold flex items-center gap-2">
-              <span class="material-symbols-outlined text-sm">shield_lock</span>
-              <span>Enter your 6-digit code or an 8-character backup code</span>
-            </div>
-            <div class="relative mt-4">
-              <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-lg">pin</span>
-              <input 
-                id="login-2fa-code" 
-                type="text"
-                placeholder="6-digit code or backup code" 
-                maxlength="10"
-                autocomplete="one-time-code"
-                autocapitalize="characters"
-                spellcheck="false"
-                disabled
-                class="w-full bg-surface-container-low rounded-xl pl-10 pr-4 py-3 border-none focus:ring-2 focus:ring-primary/50 outline-none font-mono text-center text-base md:text-lg tracking-wider font-bold uppercase"
-                required
-              >
-            </div>
-            <p id="login-2fa-error" class="text-error text-sm font-semibold hidden"></p>
-            <button 
-              type="submit" 
-              id="btn-login-2fa"
-              class="w-full btn-primary bg-primary text-white font-bold py-3.5 rounded-xl shadow-md transition-all flex items-center justify-center cursor-pointer"
+          <div class="relative mt-4">
+            <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-lg">lock</span>
+            <input 
+              id="login-password" 
+              type="password" 
+              placeholder="Password" 
+              class="w-full bg-surface-container-low rounded-xl pl-10 pr-4 py-3 border-none focus:ring-2 focus:ring-primary/50 outline-none font-medium"
+              required
             >
-              Verify & Sign In
+          </div>
+          <div class="text-right mt-2">
+            <button type="button" id="btn-forgot-password" class="text-xs text-primary font-bold hover:underline cursor-pointer">
+              Forgot Password?
             </button>
-            <button type="button" id="btn-login-2fa-back" class="w-full text-xs text-on-surface-variant hover:text-primary font-semibold cursor-pointer mt-2">
-              ← Use a different account
+          </div>
+          <p id="login-error" class="text-error text-sm font-semibold hidden"></p>
+          <button 
+            type="submit" 
+            id="btn-login"
+            class="w-full btn-primary bg-primary text-white font-bold py-3.5 rounded-xl shadow-md transition-all flex items-center justify-center cursor-pointer"
+          >
+            Sign In
+          </button>
+          <div class="text-center mt-2">
+            <button type="button" id="btn-go-signup" class="text-sm text-primary hover:underline font-bold">
+              New here? Join your college circle
             </button>
           </div>
         </form>
@@ -584,6 +546,6 @@
   <script src="js/profanity-words.generated.js"></script>
   <script src="js/shared.js?v=285"></script>
   <script src="js/crypto.js"></script>
-  <script type="module" src="js/login.js?v=247"></script>
+  <script type="module" src="js/login.js?v=248"></script>
 </body>
 </html>

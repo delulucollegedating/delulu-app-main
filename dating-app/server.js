@@ -66,8 +66,6 @@ const fs = require('fs');
 const CircuitBreaker = require('./utils/circuitBreaker');
 const EmailQueue = require('./utils/emailQueue');
 const { hasForbiddenText, FORBIDDEN_MESSAGE_ERROR } = require('./utils/profanity');
-const { authenticator } = require('otplib');
-const QRCode = require('qrcode');
 
 // Circuit breakers for external service isolation
 const brevoBreaker = new CircuitBreaker('BrevoEmailAPI', {
@@ -607,82 +605,6 @@ function verifyAuthToken(tokenStr, version = 0) {
     if (safeEqual(signature, legacyHmac)) return userId;
   }
   return null;
-}
-
-// ===== Two-Factor Authentication (TOTP) =====
-// Opt-in 2FA: users enroll a standard authenticator app (Google Authenticator,
-// Authy, 1Password...). The login route gates on totp_enabled and hands out a
-// short-lived, stateless challenge (HMAC-signed, works with cookies AND the
-// Android bearer-token flow) that the second step redeems with a 6-digit code.
-const TOTP_ISSUER = 'Delulu';
-const TOTP_DRIFT_WINDOW = 1;                // tolerate ±1 time-step (30s) of clock drift
-const TOTP_CHALLENGE_TTL_MS = 10 * 60 * 1000; // 2FA challenge expires after 10 minutes
-const TOTP_BACKUP_CODE_COUNT = 10;          // one-time recovery codes issued at enrollment
-const TOTP_BACKUP_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I/O/0/1 lookalikes
-
-// otplib v12's window is an INSTANCE option (per-call verify() ignores it).
-// window: 1 = accept codes from ±1 time-step, standard RFC 6238 drift tolerance.
-authenticator.options = { window: TOTP_DRIFT_WINDOW };
-
-function generateTotpSecret() {
-  return authenticator.generateSecret();
-}
-
-function verifyTotpCode(secret, code) {
-  if (!secret || !code || typeof code !== 'string' || !/^\d{6}$/.test(code)) return false;
-  try {
-    return authenticator.verify({ secret, token: code });
-  } catch (e) {
-    return false;
-  }
-}
-
-function totpUri(secret, email) {
-  return authenticator.keyuri(email, TOTP_ISSUER, secret);
-}
-
-// Backup codes are never stored plaintext — only an HMAC (keyed by SESSION_SECRET).
-function hashBackupCode(code) {
-  return crypto.createHmac('sha256', process.env.SESSION_SECRET || '')
-    .update(`totp-backup:${code}`).digest('hex');
-}
-
-function generateBackupCodes() {
-  const codes = [];
-  for (let i = 0; i < TOTP_BACKUP_CODE_COUNT; i++) {
-    let c = '';
-    for (let j = 0; j < 8; j++) c += TOTP_BACKUP_ALPHABET[crypto.randomInt(TOTP_BACKUP_ALPHABET.length)];
-    codes.push(c);
-  }
-  return codes;
-}
-
-// Stateless 2FA login challenge: base64url(userId:expires:hmac). No server-side
-// state, so it survives cookie loss on the Android WebView and multi-instance deploys.
-function signTotpChallenge(userId) {
-  const numUserId = Number(userId);
-  if (!numUserId) return null;
-  const expires = Date.now() + TOTP_CHALLENGE_TTL_MS;
-  const payload = `${numUserId}:${expires}`;
-  const hmac = crypto.createHmac('sha256', process.env.SESSION_SECRET).update(payload).digest('hex');
-  return Buffer.from(`${payload}:${hmac}`, 'utf8').toString('base64url');
-}
-
-function verifyTotpChallenge(challenge) {
-  if (!challenge || typeof challenge !== 'string') return null;
-  try {
-    const decoded = Buffer.from(challenge, 'base64url').toString('utf8');
-    const [userIdStr, expiresStr, hmac] = decoded.split(':');
-    const userId = Number(userIdStr);
-    const expires = Number(expiresStr);
-    if (!Number.isInteger(userId) || !Number.isFinite(expires) || Date.now() > expires) return null;
-    const expected = crypto.createHmac('sha256', process.env.SESSION_SECRET)
-      .update(`${userIdStr}:${expiresStr}`).digest('hex');
-    if (hmac !== expected) return null;
-    return userId;
-  } catch (e) {
-    return null;
-  }
 }
 
 // Current token_version for a user (short-TTL cache; invalidated on bump).
@@ -1301,17 +1223,6 @@ app.post('/api/users/login', authLimiter, async (req, res) => {
       return res.status(401).json({ error: 'Incorrect username/email or password' });
     }
 
-    // Two-factor authentication gate: the session/token is only issued after
-    // a valid TOTP code (or one-time backup code) is presented at /api/users/login/2fa.
-    if (user.totp_enabled) {
-      return res.json({
-        success: false,
-        totpRequired: true,
-        challenge: signTotpChallenge(user.id),
-        message: 'Enter your two-factor authentication code'
-      });
-    }
-
     req.session.userId = user.id;
     const safeUser = sanitizeUser(user);
     req.session.user = safeUser;
@@ -1321,59 +1232,6 @@ app.post('/api/users/login', authLimiter, async (req, res) => {
     res.json({ success: true, user: safeUser, token });
   } catch (err) {
     console.error('Login error:', err);
-    res.status(500).json({ error: 'Internal server error', details: err.message });
-  }
-});
-
-// Complete login with a two-factor authentication code (or a one-time backup code).
-// The challenge is stateless and expires after 10 minutes; the same code path
-// serves web (session cookie) and Android (bearer token) clients.
-app.post('/api/users/login/2fa', authLimiter, async (req, res) => {
-  const { challenge, code } = req.body;
-  if (!challenge || !code) {
-    return res.status(400).json({ error: 'Challenge and code are required' });
-  }
-
-  const userId = verifyTotpChallenge(challenge);
-  if (!userId) {
-    return res.status(401).json({ error: 'This login attempt has expired. Please sign in again.' });
-  }
-
-  try {
-    const user = await userOps.getById(userId);
-    if (!user || !user.totp_enabled) {
-      return res.status(401).json({ error: 'Two-factor authentication is not enabled for this account' });
-    }
-
-    const rawCode = String(code).trim();
-    let codeOk = await verifyTotpCode(user.totp_secret, rawCode);
-
-    // Fall back to one-time backup codes (stored only as HMACs).
-    if (!codeOk && Array.isArray(user.totp_backup_codes) && user.totp_backup_codes.length) {
-      const normalized = rawCode.toUpperCase().replace(/\s+/g, '');
-      const idx = user.totp_backup_codes.indexOf(hashBackupCode(normalized));
-      if (idx !== -1) {
-        // Burn the used code so it can never be replayed.
-        const remaining = user.totp_backup_codes.slice();
-        remaining.splice(idx, 1);
-        await userOps.update(user.id, { totp_backup_codes: remaining });
-        codeOk = true;
-      }
-    }
-
-    if (!codeOk) {
-      return res.status(401).json({ error: 'Invalid two-factor authentication code' });
-    }
-
-    req.session.userId = user.id;
-    const safeUser = sanitizeUser(user);
-    req.session.user = safeUser;
-    setCachedUser(user.id, safeUser);
-    const token = generateAuthToken(user.id, user.token_version || 0);
-    await new Promise((resolve) => req.session.save(resolve));
-    res.json({ success: true, user: safeUser, token });
-  } catch (err) {
-    console.error('2FA login error:', err);
     res.status(500).json({ error: 'Internal server error', details: err.message });
   }
 });
@@ -1549,97 +1407,11 @@ app.get('/api/settings/user-info', requireAuth, async (req, res) => {
       username_changed_at: user.username_changed_at || null,
       can_change_username: canChangeUsername,
       days_remaining: daysRemaining,
-      next_allowed_at: nextAllowedAt,
-      totp_enabled: !!user.totp_enabled
+      next_allowed_at: nextAllowedAt
     });
   } catch (err) {
     console.error('Get user settings error:', err);
     res.status(500).json({ error: 'Failed to load user settings' });
-  }
-});
-
-// 1b. Two-factor authentication (TOTP) enrollment / management
-
-// Current 2FA status
-app.get('/api/settings/2fa', requireAuth, async (req, res) => {
-  try {
-    const user = await userOps.getById(req.session.userId);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    res.json({ enabled: !!user.totp_enabled });
-  } catch (err) {
-    console.error('2FA status error:', err);
-    res.status(500).json({ error: 'Failed to load two-factor settings' });
-  }
-});
-
-// Step 1 — generate and persist a fresh TOTP secret, return QR + manual secret.
-// 2FA is NOT enabled yet; that only happens on verify.
-app.post('/api/settings/2fa/setup', requireAuth, async (req, res) => {
-  try {
-    const user = await userOps.getById(req.session.userId);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    if (user.totp_enabled) return res.status(400).json({ error: 'Two-factor authentication is already enabled' });
-
-    const secret = generateTotpSecret();
-    const email = (user.email && String(user.email).trim()) || `user${user.id}@delulu.app`;
-    await userOps.update(user.id, { totp_secret: secret });
-    const uri = totpUri(secret, email);
-    const qrDataUrl = await QRCode.toDataURL(uri);
-    res.json({ secret, qrDataUrl, otpauthUrl: uri });
-  } catch (err) {
-    console.error('2FA setup error:', err);
-    res.status(500).json({ error: 'Failed to start two-factor setup' });
-  }
-});
-
-// Step 2 — verify a live code from the authenticator app, then enable 2FA and
-// issue one-time backup codes (returned plaintext once, stored as HMACs).
-app.post('/api/settings/2fa/verify', requireAuth, async (req, res) => {
-  const { code } = req.body;
-  if (!code) return res.status(400).json({ error: 'Enter the 6-digit code from your authenticator app' });
-  try {
-    const user = await userOps.getById(req.session.userId);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    if (user.totp_enabled) return res.status(400).json({ error: 'Two-factor authentication is already enabled' });
-    if (!user.totp_secret) return res.status(400).json({ error: 'Start two-factor setup first' });
-
-    const ok = await verifyTotpCode(user.totp_secret, String(code).trim());
-    if (!ok) return res.status(401).json({ error: 'Invalid code. Check that your device clock is correct, then try again.' });
-
-    const backupCodes = generateBackupCodes();
-    await userOps.update(user.id, {
-      totp_enabled: true,
-      totp_backup_codes: backupCodes.map(hashBackupCode)
-    });
-    res.json({ success: true, backupCodes, message: 'Two-factor authentication enabled' });
-  } catch (err) {
-    console.error('2FA verify error:', err);
-    res.status(500).json({ error: 'Failed to enable two-factor authentication' });
-  }
-});
-
-// Disable 2FA — requires the CURRENT TOTP code so a stolen session alone can't
-// turn off the protection and lock the real owner out.
-app.post('/api/settings/2fa/disable', requireAuth, async (req, res) => {
-  const { code } = req.body;
-  if (!code) return res.status(400).json({ error: 'Enter your current two-factor authentication code' });
-  try {
-    const user = await userOps.getById(req.session.userId);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    if (!user.totp_enabled) return res.status(400).json({ error: 'Two-factor authentication is not enabled' });
-
-    const ok = await verifyTotpCode(user.totp_secret, String(code).trim());
-    if (!ok) return res.status(401).json({ error: 'Invalid code' });
-
-    await userOps.update(user.id, {
-      totp_enabled: false,
-      totp_secret: null,
-      totp_backup_codes: []
-    });
-    res.json({ success: true, message: 'Two-factor authentication disabled' });
-  } catch (err) {
-    console.error('2FA disable error:', err);
-    res.status(500).json({ error: 'Failed to disable two-factor authentication' });
   }
 });
 
@@ -3138,13 +2910,6 @@ module.exports = {
     validatePasswordStrength,
     isCommonPassword,
     checkPwnedPassword,
-    MIN_PASSWORD_LENGTH,
-    generateTotpSecret,
-    verifyTotpCode,
-    hashBackupCode,
-    generateBackupCodes,
-    signTotpChallenge,
-    verifyTotpChallenge,
-    TOTP_BACKUP_CODE_COUNT
+    MIN_PASSWORD_LENGTH
   }
 };
