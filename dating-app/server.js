@@ -51,6 +51,14 @@ const notificationDispatcher = require('./services/notificationDispatcher');
 const session = require('express-session');
 const compression = require('compression');
 const PgSession = require('connect-pg-simple')(session);
+const { RedisStore: RedisSessionStore } = require('connect-redis');
+const redisClient = require('./services/redisClient');
+const { createFailoverRateLimitStore, FailoverSessionStore } = require('./services/failoverStores');
+
+// Optional shared Redis backend (rate limits + sessions). No-op unless
+// REDIS_URL is set; rate limits/sessions fall back to local stores while Redis
+// is unavailable (see services/failoverStores.js).
+redisClient.initRedis();
 const http = require('http');
 const path = require('path');
 const crypto = require('crypto');
@@ -295,6 +303,7 @@ const authLimiter = rateLimit({
   message: { error: 'Too many attempts. Please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
+  store: createFailoverRateLimitStore('auth'),
 });
 
 // OTP send endpoints (emailing is expensive): 3 sends per hour per email + 10 per
@@ -314,6 +323,7 @@ const otpSendLimiter = rateLimit({
   message: { error: 'Too many verification emails sent. Please try again in an hour.' },
   standardHeaders: true,
   legacyHeaders: false,
+  store: createFailoverRateLimitStore('otp-send'),
 });
 
 const otpSendIpLimiter = rateLimit({
@@ -323,6 +333,7 @@ const otpSendIpLimiter = rateLimit({
   message: { error: 'Too many verification emails from this device. Please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
+  store: createFailoverRateLimitStore('otp-send-ip'),
 });
 
 // OTP verification endpoints: 5 attempts per 10 minutes per email + 10 per IP,
@@ -334,6 +345,7 @@ const otpVerifyLimiter = rateLimit({
   message: { error: 'Too many verification attempts. Please try again in 10 minutes.' },
   standardHeaders: true,
   legacyHeaders: false,
+  store: createFailoverRateLimitStore('otp-verify'),
 });
 
 const otpVerifyIpLimiter = rateLimit({
@@ -343,6 +355,7 @@ const otpVerifyIpLimiter = rateLimit({
   message: { error: 'Too many verification attempts from this device. Please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
+  store: createFailoverRateLimitStore('otp-verify-ip'),
 });
 
 // API limits are keyed by authenticated user, not just IP. A college Wi-Fi
@@ -363,6 +376,7 @@ const apiLimiter = rateLimit({
   message: { error: 'Too many requests. Please slow down.' },
   standardHeaders: true,
   legacyHeaders: false,
+  store: createFailoverRateLimitStore('api'),
 });
 
 const messageLimiter = rateLimit({
@@ -372,6 +386,7 @@ const messageLimiter = rateLimit({
   message: { error: 'You are sending messages too quickly. Please slow down.' },
   standardHeaders: true,
   legacyHeaders: false,
+  store: createFailoverRateLimitStore('message'),
 });
 
 const typingLimiter = rateLimit({
@@ -381,6 +396,7 @@ const typingLimiter = rateLimit({
   message: { error: 'Too many typing updates. Please slow down.' },
   standardHeaders: true,
   legacyHeaders: false,
+  store: createFailoverRateLimitStore('typing'),
 });
 
 const gameLimiter = rateLimit({
@@ -390,6 +406,7 @@ const gameLimiter = rateLimit({
   message: { error: 'Too many game actions. Please try again shortly.' },
   standardHeaders: true,
   legacyHeaders: false,
+  store: createFailoverRateLimitStore('game'),
 });
 
 const readReceiptLimiter = rateLimit({
@@ -399,6 +416,7 @@ const readReceiptLimiter = rateLimit({
   message: { error: 'Too many read-receipt updates. Please slow down.' },
   standardHeaders: true,
   legacyHeaders: false,
+  store: createFailoverRateLimitStore('read-receipt'),
 });
 
 // Looser limit for discovery routes (swiping/dismissing profiles)
@@ -408,6 +426,7 @@ const discoverLimiter = rateLimit({
   message: { error: 'Too many requests. Please slow down.' },
   standardHeaders: true,
   legacyHeaders: false,
+  store: createFailoverRateLimitStore('discover'),
 });
 
 // Relationship-state mutations (respond/end/block/report/revoke) — cheap to call
@@ -419,6 +438,7 @@ const actionLimiter = rateLimit({
   message: { error: 'Too many actions. Please slow down.' },
   standardHeaders: true,
   legacyHeaders: false,
+  store: createFailoverRateLimitStore('action'),
 });
 
 // Firebase custom-token minting (each call creates a signed token) — keep tight.
@@ -429,6 +449,7 @@ const tokenMintLimiter = rateLimit({
   message: { error: 'Too many token requests. Please slow down.' },
   standardHeaders: true,
   legacyHeaders: false,
+  store: createFailoverRateLimitStore('token-mint'),
 });
 
 // ===== In-Memory Session Cache (reduces Firestore reads for frequent session checks) =====
@@ -576,13 +597,29 @@ async function getCachedConnection(connectionId, userId) {
 }
 
 // Session middleware — using memorystore (pure JS, no native compilation)
-// ===== Session Store (Supabase Postgres — survives server restarts) =====
-// Uses connect-pg-simple with Supabase's Postgres connection string.
-// SUPABASE_DB_URL must be set in environment (format: postgresql://postgres.<ref>:<password>@...:5432/postgres)
-// Find it at: Supabase Console -> Settings -> Database -> Connection String -> URI (Session mode port 5432)
-// If not set, falls back to in-memory store (sessions lost on restart).
+// ===== Session Store =====
+// Precedence:
+//   1. REDIS_URL          → Redis (shared across instances) with an in-memory
+//                           fallback while Redis is unreachable.
+//   2. SUPABASE_DB_URL    → connect-pg-simple with Supabase's Postgres
+//                           connection string (persistent across restarts).
+//                           Format: postgresql://postgres.<ref>:<password>@...:5432/postgres
+//                           Find it at: Supabase Console -> Settings -> Database ->
+//                           Connection String -> URI (Session mode port 5432)
+//   3. Otherwise          → in-memory store (sessions lost on restart).
 let sessionStore;
-if (process.env.SUPABASE_DB_URL) {
+if (process.env.REDIS_URL) {
+  const MemoryStore = require('memorystore')(session);
+  const redisSessionStore = new RedisSessionStore({
+    client: redisClient.getRedis(),
+    prefix: 'sess:'
+  });
+  sessionStore = new FailoverSessionStore(
+    redisSessionStore,
+    new MemoryStore({ checkPeriod: 15 * 60 * 1000 })
+  );
+  console.log('Session store: Redis (shared across instances, with in-memory fallback)');
+} else if (process.env.SUPABASE_DB_URL) {
   sessionStore = new PgSession({
     conString: process.env.SUPABASE_DB_URL,
     tableName: 'session',
@@ -615,13 +652,13 @@ if (process.env.SUPABASE_DB_URL) {
   // re-login after deploys). In production this silently breaks "stay logged
   // in" and multi-instance scaling, so hard-fail unless explicitly opted out.
   if (process.env.NODE_ENV === 'production' && process.env.REQUIRE_PERSISTENT_SESSIONS !== 'false') {
-    throw new Error('FATAL: SUPABASE_DB_URL is not set — production requires a persistent session store (connect-pg-simple). Set SUPABASE_DB_URL or REQUIRE_PERSISTENT_SESSIONS=false to run with in-memory sessions.');
+    throw new Error('FATAL: no persistent session store configured — production requires REDIS_URL or SUPABASE_DB_URL. Set one of them, or REQUIRE_PERSISTENT_SESSIONS=false to run with in-memory sessions.');
   }
   const MemoryStore = require('memorystore')(session);
   sessionStore = new MemoryStore({
     checkPeriod: 15 * 60 * 1000
   });
-  console.warn('Session store: MemoryStore (set SUPABASE_DB_URL for persistent sessions)');
+  console.warn('Session store: MemoryStore (set REDIS_URL or SUPABASE_DB_URL for persistent sessions)');
 }
 
 const sessionMiddleware = session({
@@ -795,6 +832,7 @@ const apkLimiter = rateLimit({
   message: { error: 'Too many APK downloads. Please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
+  store: createFailoverRateLimitStore('apk'),
 });
 
 // Serve release APK download outside public directory to keep asset bundle lightweight (16MB)
@@ -2452,10 +2490,22 @@ app.get('/api/messages/:connectionId', requireAuth, async (req, res) => {
   const { since, before } = req.query;
   const limit = parseInt(req.query.limit, 10) || 30;
 
+  // Delta-sync `since` values that are unparseable or more than 24h old are
+  // treated as a full page load — a client that far behind shouldn't be able to
+  // pull an arbitrarily large delta on every poll. (The payload is also capped
+  // server-side via DELTA_FETCH_LIMIT regardless.)
+  let safeSince = null;
+  if (since && typeof since === 'string') {
+    const sinceTime = Date.parse(since);
+    if (Number.isFinite(sinceTime) && Date.now() - sinceTime <= 24 * 60 * 60 * 1000) {
+      safeSince = since;
+    }
+  }
+
   const messages = await messageOps.getRecentForConnection(
     req.params.connectionId,
     Math.min(limit, 100), // Cap at 100 to prevent abuse
-    since || null,
+    safeSince,
     before || null
   );
 

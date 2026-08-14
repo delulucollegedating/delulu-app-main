@@ -1653,6 +1653,11 @@ const readReceiptOps = {
   }
 };
 
+// Delta-sync fetches (REST fallback polling) are capped separately from full
+// page loads so a broken/malicious client can't pull hundreds of messages on
+// every poll. Configurable via MESSAGE_DELTA_LIMIT; default 100.
+const DELTA_FETCH_LIMIT = Number(process.env.MESSAGE_DELTA_LIMIT) || 100;
+
 const messageOps = {
   // ── INSERT ──────────────────────────────────────────────────────────────────
   // Supabase table schema: id, connection_id, sender_id, content, reactions,
@@ -2003,7 +2008,7 @@ const messageOps = {
       }
 
       // Fetch limit+1 to detect if more pages exist without an extra count query
-      const fetchLimit = since ? 200 : limit + 1;
+      const fetchLimit = since ? DELTA_FETCH_LIMIT : limit + 1;
 
       // Fetch newest-first so .limit() trims the right end, then reverse in JS
       const { data, error } = await query
