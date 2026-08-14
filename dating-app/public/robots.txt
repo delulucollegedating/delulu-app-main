@@ -1,0 +1,22 @@
+# Delulu — robots.txt
+# The landing page (/) is the only public, indexable page. Everything else is
+# behind the client-side login gate (or the API), so block it to save crawl budget.
+
+User-agent: *
+Allow: /
+
+# Login-gated app pages — no indexable content behind the auth wall
+Disallow: /discover
+Disallow: /requests
+Disallow: /messages
+Disallow: /chat
+Disallow: /profile
+Disallow: /settings
+
+# API is not meant for crawling
+Disallow: /api/
+
+# Android APK download (126MB binary)
+Disallow: /delulu.apk
+
+Sitemap: https://delulu-college.onrender.com/sitemap.xml

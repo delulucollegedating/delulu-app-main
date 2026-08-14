@@ -1304,7 +1304,17 @@ function setupModalEventDelegation() {
         break;
       case 'report-from-chat':
         closeModal();
-        setTimeout(() => openModal('modal-report'), 250);
+        setTimeout(() => {
+          // Reset any preset from a previous meetup report
+          const reasonEl = document.getElementById('report-reason');
+          const evidenceEl = document.getElementById('report-evidence');
+          if (reasonEl) reasonEl.value = '';
+          if (evidenceEl) {
+            evidenceEl.value = '';
+            evidenceEl.placeholder = "Paste any message content you want us to review (encrypted / E2EE messages can't be read by us — copy the decrypted text here so we can investigate)";
+          }
+          openModal('modal-report');
+        }, 250);
         break;
       case 'block-from-chat':
         await blockUser();
@@ -2505,6 +2515,13 @@ function showMeetingModal(meetingCode) {
     };
   }
 
+  const reportBtn = document.getElementById('meet-report-btn');
+  if (reportBtn) {
+    reportBtn.onclick = () => {
+      reportBadMeetup();
+    };
+  }
+
   openModal('modal-google-meet');
 }
 
@@ -3070,6 +3087,15 @@ async function submitReport() {
     return;
   }
   
+  // Reporter-supplied evidence — required for E2EE chats, which the server
+  // cannot read. Copied verbatim (decrypted) so our safety team can review it.
+  const evidenceEl = document.getElementById('report-evidence');
+  const evidence = evidenceEl ? evidenceEl.value.trim() : '';
+  if (evidence.length > 5000) {
+    showToast('Evidence is too long. Please keep it under 5000 characters.');
+    return;
+  }
+  
   const btn = document.getElementById('btn-report-submit');
   if (btn) { btn.disabled = true; btn.textContent = 'Submitting...'; }
   
@@ -3079,7 +3105,8 @@ async function submitReport() {
     await apiCall('/api/users/report', 'POST', {
       reported_user_id: otherId,
       reason,
-      connection_id: currentConnId
+      connection_id: currentConnId,
+      evidence: evidence || null
     });
     closeModal();
     showToast('Report submitted. Our team will review it.');
@@ -3088,6 +3115,15 @@ async function submitReport() {
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Submit Report'; }
   }
+}
+
+// Post-meetup safety: opens the report modal pre-set to the meetup reason.
+function reportBadMeetup() {
+  const reasonEl = document.getElementById('report-reason');
+  if (reasonEl) reasonEl.value = 'unsafe-meetup';
+  const evidenceEl = document.getElementById('report-evidence');
+  if (evidenceEl) evidenceEl.placeholder = 'Describe what happened during the meetup — include the decrypted text of any encrypted messages here so we can review them';
+  openModal('modal-report');
 }
 
 async function blockUser() {

@@ -21,6 +21,7 @@
     "@capacitor/app": "^8.1.1",
     "@capacitor/core": "^8.4.2",
     "@capacitor/local-notifications": "^8.2.1",
+    "@capacitor/preferences": "^8.0.1",
     "@capacitor/push-notifications": "^8.1.2",
     "@supabase/supabase-js": "^2.110.2",
     "bcrypt": "6.0.0",
@@ -35,13 +36,15 @@
     "helmet": "^8.2.0",
     "memorystore": "^1.6.8",
     "multer": "2.2.0",
+    "otplib": "^12.0.1",
     "pino": "^10.3.1",
     "pino-http": "^11.0.0",
+    "qrcode": "^1.5.4",
     "web-push": "^3.6.7"
   },
   "devDependencies": {
-    "@capacitor/android": "^8.4.2",
-    "@capacitor/cli": "^8.4.2",
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/cli": "^8.5.0",
     "supertest": "^7.2.2",
     "vitest": "^4.1.10"
   }

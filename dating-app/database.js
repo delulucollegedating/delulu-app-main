@@ -196,6 +196,7 @@ const userOps = {
       is_onboarded: 0,
       email: null,
       ecosystem: 'rishihood', // Default fallback
+      token_version: 0,
       created_at: new Date().toISOString()
     });
     return userId;
@@ -218,6 +219,7 @@ const userOps = {
       ecosystem,
       public_key: publicKey || null,
       encrypted_private_key: encryptedPrivateKey || null,
+      token_version: 0,
       created_at: new Date().toISOString()
     });
     return userId;
@@ -303,9 +305,18 @@ const userOps = {
     });
   },
 
+  // Revoke every outstanding auth token for this user by bumping token_version.
+  // Bearer tokens are signed with the version at issuance, so any older token
+  // fails verification immediately after this runs.
+  async bumpTokenVersion(userId) {
+    const user = await this.getById(userId);
+    if (!user) return;
+    await this.update(userId, { token_version: (user.token_version || 0) + 1 });
+  },
+
   async update(id, fields) {
     const updatePayload = {};
-    const allowed = ['bio', 'hobbies', 'avatar', 'fcm_tokens', 'username', 'username_changed_at', 'passcode_hash', 'encrypted_private_key', 'public_key'];
+    const allowed = ['bio', 'hobbies', 'avatar', 'fcm_tokens', 'username', 'username_changed_at', 'passcode_hash', 'encrypted_private_key', 'public_key', 'token_version', 'totp_secret', 'totp_enabled', 'totp_backup_codes'];
     for (const key of allowed) {
       if (fields[key] !== undefined) {
         updatePayload[key] = fields[key];
@@ -1748,6 +1759,84 @@ const messageOps = {
     }
   },
 
+  // ── BULK SOFT-DELETE ON CHAT END (evidence preservation) ──────────────────────
+  // Called when a connection ends ("Not Vibing" / end-after-decline). Messages are
+  // tombstoned instead of hard-deleted: they vanish from the users' views immediately
+  // (getForConnection filters deleted_at IS NULL) but the rows survive so harassment
+  // evidence can be reviewed if a report was filed. purgeExpiredSoftDeleted() below
+  // hard-deletes them after the retention window.
+  async softDeleteAllForConnection(connectionId, deletedBy) {
+    try {
+      const supabase = getSupabase();
+      const { error } = await supabase
+        .from('messages')
+        .update({
+          deleted_at: new Date().toISOString(),
+          deleted_by: Number(deletedBy) || 0,
+          reactions: {}  // drop reactions but KEEP content for evidence review
+        })
+        .eq('connection_id', Number(connectionId))
+        .is('deleted_at', null);
+      if (error) throw error;
+      evictLastMessage(Number(connectionId));
+      return { success: true };
+    } catch (err) {
+      console.error('messageOps.softDeleteAllForConnection error:', err.message);
+      return { error: 'Failed to archive messages' };
+    }
+  },
+
+  // ── RETENTION SWEEP ───────────────────────────────────────────────────────────
+  // Hard-deletes tombstoned messages after the retention window. Chats that were
+  // reported keep their evidence longer so the safety team can still review them.
+  // Runs from the 30-minute background sweep; batched so we never load huge pages.
+  async purgeExpiredSoftDeleted() {
+    const UNREPORTED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;  // 7 days
+    const REPORTED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;   // 30 days when reported
+    try {
+      const reportedConnIds = await reportOps.getConnectionIds();
+      const shortCutoff = new Date(Date.now() - UNREPORTED_RETENTION_MS).toISOString();
+      const longCutoff = new Date(Date.now() - REPORTED_RETENTION_MS).toISOString();
+      const supabase = getSupabase();
+      let purged = 0;
+      let lastSeenId = 0;
+
+      while (true) {
+        const { data, error } = await supabase
+          .from('messages')
+          .select('id, connection_id, deleted_at')
+          .not('deleted_at', 'is', null)
+          .lt('deleted_at', shortCutoff)
+          .gt('id', lastSeenId)
+          .order('id', { ascending: true })
+          .limit(1000);
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+
+        lastSeenId = data[data.length - 1].id;
+
+        const toDelete = data.filter(m => {
+          const reported = reportedConnIds.has(Number(m.connection_id));
+          return reported ? String(m.deleted_at) < longCutoff : true;
+        });
+
+        if (toDelete.length > 0) {
+          const { error: delErr } = await supabase
+            .from('messages')
+            .delete()
+            .in('id', toDelete.map(m => m.id));
+          if (delErr) throw delErr;
+          purged += toDelete.length;
+        }
+        if (data.length < 1000) break;
+      }
+      return purged;
+    } catch (err) {
+      console.error('messageOps.purgeExpiredSoftDeleted error:', err.message);
+      return 0;
+    }
+  },
+
   // ── FETCH ALL (internal use, e.g. read-receipt count) ────────────────────────
   // Moved from Firestore unordered collection scan → Supabase ordered query.
   async getForConnection(connectionId) {
@@ -1981,7 +2070,7 @@ const otpOps = {
 
 // ===== Report & Block Operations =====
 const reportOps = {
-  async create(reporterId, reportedUserId, reason, connectionId = null) {
+  async create(reporterId, reportedUserId, reason, connectionId = null, evidence = null) {
     const firestore = getDB();
     const reportId = await getNextId('reports');
     await firestore.collection('reports').doc(String(reportId)).set({
@@ -1990,10 +2079,31 @@ const reportOps = {
       reported_user_id: Number(reportedUserId),
       reason: reason || 'No reason provided',
       connection_id: connectionId,
+      // Reporter-supplied evidence — e.g. decrypted E2EE message content that
+      // the server cannot read itself. Stored so safety review can act on it.
+      evidence: evidence || null,
       status: 'pending',
       created_at: new Date().toISOString()
     });
     return reportId;
+  },
+
+  // Set of connection_ids that have at least one report within the retention window (default 30 days).
+  // Used by the retention sweep so message evidence is kept longer for reported chats.
+  async getConnectionIds(sinceMs = 30 * 24 * 60 * 60 * 1000) {
+    const firestore = getDB();
+    const cutoffIso = new Date(Date.now() - sinceMs).toISOString();
+    const snapshot = await firestore.collection('reports')
+      .where('created_at', '>=', cutoffIso)
+      .get();
+    const ids = new Set();
+    snapshot.forEach(doc => {
+      const connId = doc.data().connection_id;
+      if (connId !== null && connId !== undefined) {
+        ids.add(Number(connId));
+      }
+    });
+    return ids;
   }
 };
 

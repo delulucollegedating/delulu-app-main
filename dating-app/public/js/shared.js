@@ -18,6 +18,70 @@ function resolveUrl(url) {
   return `${API_BASE}${cleanUrl}`;
 }
 
+// ===== Secure auth-token storage =====
+// Web: the session is carried entirely by the server's httpOnly Secure SameSite=Lax
+// cookie — no auth token is ever written to window.localStorage on web.
+// Android (Capacitor): the revocable HMAC token lives in native secure storage
+// (@capacitor/preferences) instead of localStorage, so it is not readable by JS
+// XSS as a plain localStorage entry.
+const AUTH_TOKEN_KEY = 'auth_token';
+
+function getCapacitorPreferences() {
+  if (!isCapacitorNative || typeof window === 'undefined' || !window.Capacitor) return null;
+  return window.Capacitor.Plugins?.Preferences || window.Capacitor.Preferences || null;
+}
+
+async function getStoredAuthToken() {
+  const prefs = getCapacitorPreferences();
+  if (prefs) {
+    try {
+      const { value } = await prefs.get({ key: AUTH_TOKEN_KEY });
+      return value || null;
+    } catch (e) { return null; }
+  }
+  return null; // web: cookie-only auth, token deliberately never stored
+}
+
+async function setStoredAuthToken(token) {
+  if (!token) {
+    await removeStoredAuthToken();
+    return;
+  }
+  const prefs = getCapacitorPreferences();
+  if (prefs) {
+    try {
+      await prefs.set({ key: AUTH_TOKEN_KEY, value: token });
+    } catch (e) {}
+  }
+  // web: do nothing — never persist the token anywhere readable by JS
+}
+
+async function removeStoredAuthToken() {
+  const prefs = getCapacitorPreferences();
+  if (prefs) {
+    try {
+      await prefs.remove({ key: AUTH_TOKEN_KEY });
+    } catch (e) {}
+  }
+  window.localStorage.removeItem(AUTH_TOKEN_KEY); // purge legacy value from old builds
+}
+
+// One-time migration: remove any legacy auth_token from localStorage.
+// On Android it is moved into native Capacitor storage first; on web it is
+// simply deleted (the httpOnly cookie is the only credential).
+(async function migrateLegacyAuthToken() {
+  try {
+    const legacy = window.localStorage.getItem(AUTH_TOKEN_KEY);
+    if (legacy) {
+      const prefs = getCapacitorPreferences();
+      if (prefs) {
+        await prefs.set({ key: AUTH_TOKEN_KEY, value: legacy });
+      }
+      window.localStorage.removeItem(AUTH_TOKEN_KEY);
+    }
+  } catch (e) {}
+})();
+
 let currentUser = null;
 // Real-time delivery uses SSE exclusively. There is deliberately no WebSocket
 // fallback or client shim: adding one would create a second event pipeline.
@@ -47,6 +111,29 @@ function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
+}
+
+// ===== Password strength (mirrors the server policy in server.js) =====
+// Client-side mirror catches weak passwords before submission so the user gets
+// instant feedback; the server re-validates authoritatively (incl. the
+// HaveIBeenPwned check) and can never be bypassed from the browser.
+const MIN_PASSWORD_LENGTH = 12;
+const COMMON_WEAK_PASSWORDS = [
+  '123456','password','12345678','qwerty','123456789','12345','1234567','password1',
+  '1234567890','123123','abc123','iloveyou','letmein','admin','welcome','monkey',
+  'dragon','master','111111','000000','1234','qwerty123','sunshine','princess',
+  'football','baseball','superman','trustno1','delulu','delulu123','college123',
+  'password123456','qwerty123456','123456789012'
+];
+
+function getPasswordStrengthError(password) {
+  if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH) {
+    return `Password must be at least ${MIN_PASSWORD_LENGTH} characters`;
+  }
+  if (COMMON_WEAK_PASSWORDS.includes(password.toLowerCase().trim())) {
+    return 'This password is too common. Please choose a stronger password.';
+  }
+  return null;
 }
 
 // Generated from config/profanity.json and loaded before this file. Keeping the
@@ -79,9 +166,10 @@ function hasForbiddenText(text) {
 }
 
 // Ensure we have user data on protected routes (Optimistic Session Cache)
-// For Capacitor APK: session cookies may not persist from file:// origin,
-// so we rely on the auth_token in localStorage sent via Authorization header.
-// CORS middleware on server now allows file:// and null origins.
+// Web: authenticated via the server's httpOnly Secure SameSite=Lax cookie — no
+// token in localStorage. For Capacitor APK: session cookies don't persist from
+// the file:///capacitor:// origin, so the revocable HMAC token is read from
+// native Capacitor storage (@capacitor/preferences) and sent as Authorization.
 async function requireAuth() {
   const cachedUserStr = window.localStorage.getItem('cached_user');
   
@@ -91,31 +179,31 @@ async function requireAuth() {
       updateHeaderAvatar();
       
       // Perform session verification in background (non-blocking — page renders immediately with cached data)
-      // auth_token from localStorage is sent as Authorization header for every apiCall
+      // Any token minted by /api/session is stored via setStoredAuthToken() — native on Android, never on web.
       // Extended timeout (8s) prevents false-positive logout on slow connections / cold-start servers
       const safeTimeout = (ms) => new Promise(resolve => setTimeout(() => resolve(null), ms));
-      Promise.race([apiCall('/api/session'), safeTimeout(8000)]).then(result => {
+      Promise.race([apiCall('/api/session'), safeTimeout(8000)]).then(async result => {
         if (!result) return; // timeout or network error, keep cached data
         if (result.authenticated && result.user) {
           currentUser = result.user;
           window.localStorage.setItem('cached_user', JSON.stringify(result.user));
           if (result.token) {
-            window.localStorage.setItem('auth_token', result.token);
+            await setStoredAuthToken(result.token);
           }
           updateHeaderAvatar();
           // Init push notifications after auth confirmed
           setTimeout(initPushNotifications, 3000);
         } else if (result.authenticated === false) {
           // Retry once with timeout before redirecting — server may have been cold-starting
-          Promise.race([apiCall('/api/session'), safeTimeout(6000)]).then(retryResult => {
+          Promise.race([apiCall('/api/session'), safeTimeout(6000)]).then(async retryResult => {
             if (retryResult && retryResult.authenticated && retryResult.user) {
               currentUser = retryResult.user;
               window.localStorage.setItem('cached_user', JSON.stringify(retryResult.user));
-              if (retryResult.token) window.localStorage.setItem('auth_token', retryResult.token);
+              if (retryResult.token) await setStoredAuthToken(retryResult.token);
               updateHeaderAvatar();
             } else {
               window.localStorage.removeItem('cached_user');
-              window.localStorage.removeItem('auth_token');
+              await removeStoredAuthToken();
               window.localStorage.removeItem('e2ee_private_key');
               window.location.replace('login.html');
             }
@@ -126,7 +214,7 @@ async function requireAuth() {
       return; // Resolve instantly!
     } catch (e) {
       window.localStorage.removeItem('cached_user');
-      window.localStorage.removeItem('auth_token');
+      await removeStoredAuthToken();
     }
   }
 
@@ -139,14 +227,14 @@ async function requireAuth() {
       currentUser = data.user;
       window.localStorage.setItem('cached_user', JSON.stringify(data.user));
       if (data.token) {
-        window.localStorage.setItem('auth_token', data.token);
+        await setStoredAuthToken(data.token);
       }
       updateHeaderAvatar();
       // Init push notifications after auth confirmed
       setTimeout(initPushNotifications, 3000);
     } else if (data && data.authenticated === false) {
       window.localStorage.removeItem('cached_user');
-      window.localStorage.removeItem('auth_token');
+      await removeStoredAuthToken();
       window.location.href = 'login.html';
     } else {
       // Timeout occurred - wait for cached data or redirect
@@ -256,7 +344,7 @@ async function apiCall(url, method = 'GET', body = null) {
     credentials: 'include'
   };
   
-  const token = window.localStorage.getItem('auth_token');
+  const token = await getStoredAuthToken();
   if (token) {
     options.headers['Authorization'] = `Bearer ${token}`;
   }
@@ -297,7 +385,7 @@ async function apiCall(url, method = 'GET', body = null) {
   if (!res.ok) {
     if (res.status === 401) {
       window.localStorage.removeItem('cached_user');
-      window.localStorage.removeItem('auth_token');
+      await removeStoredAuthToken();
       window.localStorage.removeItem('e2ee_private_key');
       const pathname = window.location.pathname;
       if (!pathname.endsWith('login.html') && !pathname.endsWith('login')) {
@@ -369,7 +457,7 @@ function setupLogout() {
       const deviceId = getOrCreateDeviceId();
       await apiCall(`/api/devices/${deviceId}`, 'DELETE').catch(() => {});
       window.localStorage.removeItem('cached_user');
-      window.localStorage.removeItem('auth_token');
+      await removeStoredAuthToken();
       window.localStorage.removeItem('e2ee_private_key');
       await apiCall('/api/users/logout', 'POST').catch(() => {});
       if (socket) socket.disconnect();

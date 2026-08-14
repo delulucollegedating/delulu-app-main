@@ -59,6 +59,8 @@ const fs = require('fs');
 const CircuitBreaker = require('./utils/circuitBreaker');
 const EmailQueue = require('./utils/emailQueue');
 const { hasForbiddenText, FORBIDDEN_MESSAGE_ERROR } = require('./utils/profanity');
+const { authenticator } = require('otplib');
+const QRCode = require('qrcode');
 
 // Circuit breakers for external service isolation
 const brevoBreaker = new CircuitBreaker('BrevoEmailAPI', {
@@ -535,25 +537,34 @@ const sessionMiddleware = session({
   saveUninitialized: false,   // Don't create sessions for unauthenticated visitors
   cookie: {
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days — users stay logged in for a month
-    httpOnly: true,            // Prevent JS access to cookie
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-    secure: process.env.NODE_ENV === 'production'
+    httpOnly: true,            // Prevent JS access to cookie (XSS-safe)
+    sameSite: 'lax',           // First-party web cookie; Capacitor Android uses bearer tokens, not cookies
+    secure: process.env.NODE_ENV === 'production' // HTTPS-only in prod
   }
 });
 
 app.use(sessionMiddleware);
 
 // ===== Token-Based Session Fallback (for mobile WebViews & cross-site apps) =====
-function generateAuthToken(userId) {
+// Bearer tokens are HMAC-signed over `userId:timestamp:tokenVersion`. token_version
+// lives on the user doc and is bumped on logout / password change, so an old token
+// stops working immediately (revocation) instead of staying valid for the 30-day TTL.
+const TOKEN_MAX_AGE = 30 * 24 * 60 * 60 * 1000;
+const _tokenVersionCache = new Map(); // userId -> { version, at }
+const TOKEN_VERSION_CACHE_TTL = 30 * 1000;
+
+function generateAuthToken(userId, version = 0) {
   const numUserId = Number(userId);
   if (!numUserId) return null;
   const timestamp = Date.now();
-  const data = `${numUserId}:${timestamp}`;
+  const data = `${numUserId}:${timestamp}:${Number(version) || 0}`;
   const hmac = crypto.createHmac('sha256', process.env.SESSION_SECRET).update(data).digest('hex');
-  return `${data}:${hmac}`;
+  return `${numUserId}:${timestamp}:${hmac}`;
 }
 
-function verifyAuthToken(tokenStr) {
+// Token wire format is unchanged (3 colon-separated parts) for backward compatibility
+// — token_version is folded into the HMAC, not the payload.
+function verifyAuthToken(tokenStr, version = 0) {
   if (!tokenStr || typeof tokenStr !== 'string') return null;
   const parts = tokenStr.split(':');
   if (parts.length !== 3) return null;
@@ -562,31 +573,150 @@ function verifyAuthToken(tokenStr) {
   const timestamp = Number(timestampStr);
   if (!userId || !timestamp || isNaN(userId) || isNaN(timestamp)) return null;
 
-  // Maximum token age: 30 days
-  const MAX_AGE = 30 * 24 * 60 * 60 * 1000;
-  if (Date.now() - timestamp > MAX_AGE) return null;
+  if (Date.now() - timestamp > TOKEN_MAX_AGE) return null;
 
-  try {
-    const expectedHmac = crypto.createHmac('sha256', process.env.SESSION_SECRET).update(`${userIdStr}:${timestampStr}`).digest('hex');
-    if (crypto.timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expectedHmac, 'hex'))) {
-      return userId;
+  const v = Number(version) || 0;
+  const safeEqual = (sig, expected) => {
+    try {
+      // Strict comparison: reject non-hex or length-mismatched signatures instead of
+      // letting Buffer.from(hex) silently ignore trailing/invalid characters.
+      if (typeof sig !== 'string' || typeof expected !== 'string') return false;
+      if (sig.length !== expected.length) return false;
+      if (!/^[0-9a-f]+$/i.test(sig)) return false;
+      return crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expected, 'hex'));
+    } catch (e) {
+      return false;
     }
-  } catch (e) {}
+  };
+
+  // Tokens issued under the account's current token_version
+  const currentHmac = crypto.createHmac('sha256', process.env.SESSION_SECRET)
+    .update(`${userIdStr}:${timestampStr}:${v}`).digest('hex');
+  if (safeEqual(signature, currentHmac)) return userId;
+
+  // Legacy tokens (issued before token_version existed) were signed without the
+  // version suffix. Only accept them while the account is still at version 0 —
+  // after a logout or password change the user must re-authenticate.
+  if (v === 0) {
+    const legacyHmac = crypto.createHmac('sha256', process.env.SESSION_SECRET)
+      .update(`${userIdStr}:${timestampStr}`).digest('hex');
+    if (safeEqual(signature, legacyHmac)) return userId;
+  }
   return null;
 }
 
+// ===== Two-Factor Authentication (TOTP) =====
+// Opt-in 2FA: users enroll a standard authenticator app (Google Authenticator,
+// Authy, 1Password...). The login route gates on totp_enabled and hands out a
+// short-lived, stateless challenge (HMAC-signed, works with cookies AND the
+// Android bearer-token flow) that the second step redeems with a 6-digit code.
+const TOTP_ISSUER = 'Delulu';
+const TOTP_DRIFT_WINDOW = 1;                // tolerate ±1 time-step (30s) of clock drift
+const TOTP_CHALLENGE_TTL_MS = 10 * 60 * 1000; // 2FA challenge expires after 10 minutes
+const TOTP_BACKUP_CODE_COUNT = 10;          // one-time recovery codes issued at enrollment
+const TOTP_BACKUP_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I/O/0/1 lookalikes
+
+// otplib v12's window is an INSTANCE option (per-call verify() ignores it).
+// window: 1 = accept codes from ±1 time-step, standard RFC 6238 drift tolerance.
+authenticator.options = { window: TOTP_DRIFT_WINDOW };
+
+function generateTotpSecret() {
+  return authenticator.generateSecret();
+}
+
+function verifyTotpCode(secret, code) {
+  if (!secret || !code || typeof code !== 'string' || !/^\d{6}$/.test(code)) return false;
+  try {
+    return authenticator.verify({ secret, token: code });
+  } catch (e) {
+    return false;
+  }
+}
+
+function totpUri(secret, email) {
+  return authenticator.keyuri(email, TOTP_ISSUER, secret);
+}
+
+// Backup codes are never stored plaintext — only an HMAC (keyed by SESSION_SECRET).
+function hashBackupCode(code) {
+  return crypto.createHmac('sha256', process.env.SESSION_SECRET || '')
+    .update(`totp-backup:${code}`).digest('hex');
+}
+
+function generateBackupCodes() {
+  const codes = [];
+  for (let i = 0; i < TOTP_BACKUP_CODE_COUNT; i++) {
+    let c = '';
+    for (let j = 0; j < 8; j++) c += TOTP_BACKUP_ALPHABET[crypto.randomInt(TOTP_BACKUP_ALPHABET.length)];
+    codes.push(c);
+  }
+  return codes;
+}
+
+// Stateless 2FA login challenge: base64url(userId:expires:hmac). No server-side
+// state, so it survives cookie loss on the Android WebView and multi-instance deploys.
+function signTotpChallenge(userId) {
+  const numUserId = Number(userId);
+  if (!numUserId) return null;
+  const expires = Date.now() + TOTP_CHALLENGE_TTL_MS;
+  const payload = `${numUserId}:${expires}`;
+  const hmac = crypto.createHmac('sha256', process.env.SESSION_SECRET).update(payload).digest('hex');
+  return Buffer.from(`${payload}:${hmac}`, 'utf8').toString('base64url');
+}
+
+function verifyTotpChallenge(challenge) {
+  if (!challenge || typeof challenge !== 'string') return null;
+  try {
+    const decoded = Buffer.from(challenge, 'base64url').toString('utf8');
+    const [userIdStr, expiresStr, hmac] = decoded.split(':');
+    const userId = Number(userIdStr);
+    const expires = Number(expiresStr);
+    if (!Number.isInteger(userId) || !Number.isFinite(expires) || Date.now() > expires) return null;
+    const expected = crypto.createHmac('sha256', process.env.SESSION_SECRET)
+      .update(`${userIdStr}:${expiresStr}`).digest('hex');
+    if (hmac !== expected) return null;
+    return userId;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Current token_version for a user (short-TTL cache; invalidated on bump).
+async function getTokenVersion(userId) {
+  const numUserId = Number(userId);
+  if (!numUserId) return 0;
+  const cached = _tokenVersionCache.get(numUserId);
+  if (cached && Date.now() - cached.at < TOKEN_VERSION_CACHE_TTL) return cached.version;
+  const user = await userOps.getById(numUserId);
+  const version = (user && user.token_version) || 0;
+  _tokenVersionCache.set(numUserId, { version, at: Date.now() });
+  return version;
+}
+
+function bumpTokenVersionCache(userId) {
+  _tokenVersionCache.delete(Number(userId));
+}
+
 // Token & Session Auth Bridge Middleware (populates req.session.userId from Authorization header if cookie missing)
-app.use((req, res, next) => {
-  if (!req.session?.userId) {
-    const authHeader = req.headers.authorization || req.headers['x-session-token'];
-    if (authHeader) {
-      const tokenStr = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
-      const userId = verifyAuthToken(tokenStr);
-      if (userId) {
-        if (!req.session) req.session = {};
-        req.session.userId = userId;
+app.use(async (req, res, next) => {
+  try {
+    if (!req.session?.userId) {
+      const authHeader = req.headers.authorization || req.headers['x-session-token'];
+      if (authHeader) {
+        const tokenStr = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
+        const userIdFromToken = Number(tokenStr.split(':')[0]);
+        if (userIdFromToken) {
+          const version = await getTokenVersion(userIdFromToken);
+          const userId = verifyAuthToken(tokenStr, version);
+          if (userId) {
+            if (!req.session) req.session = {};
+            req.session.userId = userId;
+          }
+        }
       }
     }
+  } catch (e) {
+    // Token auth must never break the request pipeline — treat as unauthenticated
   }
   next();
 });
@@ -667,6 +797,10 @@ app.use('/uploads', requireAuth);
 // Static asset names are not fingerprinted, so a one-year immutable cache would
 // keep users on stale client code after a deploy. Keep a short browser cache.
 app.use(express.static(path.join(__dirname, 'public'), {
+  // index.html is the Capacitor WebView entry (redirects to login.html) — it must
+  // NOT be served as the default document at '/'. The '/' route below serves the
+  // real landing page (login.html) so the root URL is indexable, not a redirect stub.
+  index: false,
   maxAge: '0',
   setHeaders: (res, filePath) => {
     if (filePath.endsWith('.html') || filePath.endsWith('.js') || filePath.endsWith('.css')) {
@@ -695,9 +829,58 @@ function sanitizeText(str) {
   return str.replace(/<[a-zA-Z\/!?][^>]*>/g, '');
 }
 
+// ===== Password policy =====
+// Minimum length + common/breached-password rejection so "123456"-style
+// credentials can never be set. The HaveIBeenPwned check uses k-anonymity
+// (only the first 5 chars of the SHA-1 hash leave the server) and FAILS OPEN
+// on network errors, so signup/reset can never be blocked by an outage.
+const MIN_PASSWORD_LENGTH = 12;
+const COMMON_WEAK_PASSWORDS = new Set([
+  '123456','password','12345678','qwerty','123456789','12345','1234567','password1',
+  '1234567890','123123','abc123','iloveyou','letmein','admin','welcome','monkey',
+  'dragon','master','111111','000000','1234','qwerty123','sunshine','princess',
+  'football','baseball','superman','trustno1','delulu','delulu123','college123',
+  'password123456','qwerty123456','123456789012'
+]);
+
+function isCommonPassword(password) {
+  return typeof password === 'string' && COMMON_WEAK_PASSWORDS.has(password.toLowerCase().trim());
+}
+
+async function checkPwnedPassword(password, fetcher = null) {
+  try {
+    const sha1 = crypto.createHash('sha1').update(password, 'utf8').digest('hex').toUpperCase();
+    const prefix = sha1.slice(0, 5);
+    const suffix = sha1.slice(5);
+    const doFetch = fetcher || ((url) => fetch(url, { signal: AbortSignal.timeout(2000) }));
+    const res = await doFetch(`https://api.pwnedpasswords.com/range/${prefix}`);
+    if (!res || !res.ok) return false;
+    const body = typeof res.text === 'function' ? await res.text() : String(res.body || '');
+    return body.split('\n').some(line => line.trim().split(':')[0].toUpperCase() === suffix);
+  } catch (e) {
+    return false; // fail-open: never block signup because HIBP is unreachable
+  }
+}
+
+async function validatePasswordStrength(password, fetcher = null) {
+  if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH) {
+    return { valid: false, error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters` };
+  }
+  if (isCommonPassword(password)) {
+    return { valid: false, error: 'This password is too common. Please choose a stronger password.' };
+  }
+  const breached = await checkPwnedPassword(password, fetcher);
+  if (breached) {
+    return { valid: false, error: 'This password has appeared in known data breaches. Please choose a different one.' };
+  }
+  return { valid: true, error: null };
+}
+
 function sanitizeUser(user) {
   if (!user) return null;
-  const { passcode_hash, ...safeUser } = user;
+  // Never leak the TOTP secret or the (hashed) backup codes to the client —
+  // totp_enabled is fine to expose so the UI can reflect 2FA status.
+  const { passcode_hash, totp_secret, totp_backup_codes, ...safeUser } = user;
   if (typeof safeUser.hobbies === 'string') {
     try { safeUser.hobbies = JSON.parse(safeUser.hobbies); } 
     catch(e) { safeUser.hobbies = []; }
@@ -754,10 +937,10 @@ function requireActiveConnection(conn, res) {
 app.get('/api/session', async (req, res) => {
   try {
     if (req.session && req.session.userId) {
-      const token = generateAuthToken(req.session.userId);
       const cached = getCachedUser(req.session.userId);
       if (cached) {
         req.session.user = cached;
+        const token = generateAuthToken(req.session.userId, cached.token_version || 0);
         return res.json({ authenticated: true, user: cached, token });
       }
       
@@ -766,6 +949,7 @@ app.get('/api/session', async (req, res) => {
         const safeUser = sanitizeUser(user);
         req.session.user = safeUser;
         setCachedUser(req.session.userId, safeUser);
+        const token = generateAuthToken(req.session.userId, user.token_version || 0);
         return res.json({ authenticated: true, user: safeUser, token });
       }
     }
@@ -896,7 +1080,7 @@ app.post('/api/auth/verify-otp', otpLimiter, async (req, res) => {
     req.session.userId = user.id;
     req.session.user = sanitizeUser(user);
     setCachedUser(user.id, req.session.user);
-    token = generateAuthToken(user.id);
+    token = generateAuthToken(user.id, user.token_version || 0);
   }
   await new Promise((resolve) => req.session.save(resolve));
 
@@ -938,7 +1122,7 @@ app.post('/api/auth/verify-token', async (req, res) => {
       req.session.userId = user.id;
       req.session.user = sanitizeUser(user);
       setCachedUser(user.id, req.session.user);
-      authToken = generateAuthToken(user.id);
+      authToken = generateAuthToken(user.id, user.token_version || 0);
     }
     await new Promise((resolve) => req.session.save(resolve));
 
@@ -1018,8 +1202,9 @@ app.post('/api/auth/reset-password', otpLimiter, async (req, res) => {
   if (!email || typeof email !== 'string') {
     return res.status(400).json({ error: 'Email address is required' });
   }
-  if (typeof newPassword !== 'string' || newPassword.length < 6) {
-    return res.status(400).json({ error: 'New password must be at least 6 characters' });
+  const pwStrength = await validatePasswordStrength(newPassword);
+  if (!pwStrength.valid) {
+    return res.status(400).json({ error: pwStrength.error });
   }
 
   const cleanEmail = email.trim().toLowerCase();
@@ -1061,6 +1246,10 @@ app.post('/api/auth/reset-password', otpLimiter, async (req, res) => {
     // Clear session/DB caches so subsequent requests see the fresh password
     invalidateCache(user.id);
     invalidateUserCache(user.id);
+
+    // Password changed → every previously issued token is now invalid
+    await userOps.bumpTokenVersion(user.id);
+    bumpTokenVersionCache(user.id);
 
     res.json({ success: true, message: 'Password updated successfully' });
   } catch (err) {
@@ -1104,15 +1293,79 @@ app.post('/api/users/login', authLimiter, async (req, res) => {
       return res.status(401).json({ error: 'Incorrect username/email or password' });
     }
 
+    // Two-factor authentication gate: the session/token is only issued after
+    // a valid TOTP code (or one-time backup code) is presented at /api/users/login/2fa.
+    if (user.totp_enabled) {
+      return res.json({
+        success: false,
+        totpRequired: true,
+        challenge: signTotpChallenge(user.id),
+        message: 'Enter your two-factor authentication code'
+      });
+    }
+
     req.session.userId = user.id;
     const safeUser = sanitizeUser(user);
     req.session.user = safeUser;
     setCachedUser(user.id, safeUser);
-    const token = generateAuthToken(user.id);
+    const token = generateAuthToken(user.id, user.token_version || 0);
     await new Promise((resolve) => req.session.save(resolve));
     res.json({ success: true, user: safeUser, token });
   } catch (err) {
     console.error('Login error:', err);
+    res.status(500).json({ error: 'Internal server error', details: err.message });
+  }
+});
+
+// Complete login with a two-factor authentication code (or a one-time backup code).
+// The challenge is stateless and expires after 10 minutes; the same code path
+// serves web (session cookie) and Android (bearer token) clients.
+app.post('/api/users/login/2fa', authLimiter, async (req, res) => {
+  const { challenge, code } = req.body;
+  if (!challenge || !code) {
+    return res.status(400).json({ error: 'Challenge and code are required' });
+  }
+
+  const userId = verifyTotpChallenge(challenge);
+  if (!userId) {
+    return res.status(401).json({ error: 'This login attempt has expired. Please sign in again.' });
+  }
+
+  try {
+    const user = await userOps.getById(userId);
+    if (!user || !user.totp_enabled) {
+      return res.status(401).json({ error: 'Two-factor authentication is not enabled for this account' });
+    }
+
+    const rawCode = String(code).trim();
+    let codeOk = await verifyTotpCode(user.totp_secret, rawCode);
+
+    // Fall back to one-time backup codes (stored only as HMACs).
+    if (!codeOk && Array.isArray(user.totp_backup_codes) && user.totp_backup_codes.length) {
+      const normalized = rawCode.toUpperCase().replace(/\s+/g, '');
+      const idx = user.totp_backup_codes.indexOf(hashBackupCode(normalized));
+      if (idx !== -1) {
+        // Burn the used code so it can never be replayed.
+        const remaining = user.totp_backup_codes.slice();
+        remaining.splice(idx, 1);
+        await userOps.update(user.id, { totp_backup_codes: remaining });
+        codeOk = true;
+      }
+    }
+
+    if (!codeOk) {
+      return res.status(401).json({ error: 'Invalid two-factor authentication code' });
+    }
+
+    req.session.userId = user.id;
+    const safeUser = sanitizeUser(user);
+    req.session.user = safeUser;
+    setCachedUser(user.id, safeUser);
+    const token = generateAuthToken(user.id, user.token_version || 0);
+    await new Promise((resolve) => req.session.save(resolve));
+    res.json({ success: true, user: safeUser, token });
+  } catch (err) {
+    console.error('2FA login error:', err);
     res.status(500).json({ error: 'Internal server error', details: err.message });
   }
 });
@@ -1128,8 +1381,9 @@ app.post('/api/auth/complete-profile', async (req, res) => {
     if (!['male', 'female', 'other'].includes(gender)) {
       return res.status(400).json({ error: 'Invalid gender' });
     }
-    if (password.length < 6) {
-      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    const pwStrength = await validatePasswordStrength(password);
+    if (!pwStrength.valid) {
+      return res.status(400).json({ error: pwStrength.error });
     }
     
     const usernameStr = String(username).trim();
@@ -1182,7 +1436,7 @@ app.post('/api/auth/complete-profile', async (req, res) => {
     const safeUser = sanitizeUser(user);
     req.session.user = safeUser;
     setCachedUser(Number(userId), safeUser);
-    const token = generateAuthToken(userId);
+    const token = generateAuthToken(userId, user.token_version || 0);
     await new Promise((resolve) => req.session.save(resolve));
     res.json({ success: true, user: safeUser, token });
   } catch (err) {
@@ -1192,11 +1446,15 @@ app.post('/api/auth/complete-profile', async (req, res) => {
 });
 
 // Logout
-app.post('/api/users/logout', (req, res) => {
+app.post('/api/users/logout', async (req, res) => {
   const userId = req.session?.userId;
   if (userId) {
     invalidateCache(userId);
     invalidateUserCache && invalidateUserCache(userId);
+    // Revoke outstanding bearer tokens so a stolen token dies with the session
+    // instead of remaining valid for the rest of its 30-day TTL.
+    await userOps.bumpTokenVersion(userId).catch(() => {});
+    bumpTokenVersionCache(userId);
   }
   req.session.destroy();
   res.json({ success: true });
@@ -1283,11 +1541,97 @@ app.get('/api/settings/user-info', requireAuth, async (req, res) => {
       username_changed_at: user.username_changed_at || null,
       can_change_username: canChangeUsername,
       days_remaining: daysRemaining,
-      next_allowed_at: nextAllowedAt
+      next_allowed_at: nextAllowedAt,
+      totp_enabled: !!user.totp_enabled
     });
   } catch (err) {
     console.error('Get user settings error:', err);
     res.status(500).json({ error: 'Failed to load user settings' });
+  }
+});
+
+// 1b. Two-factor authentication (TOTP) enrollment / management
+
+// Current 2FA status
+app.get('/api/settings/2fa', requireAuth, async (req, res) => {
+  try {
+    const user = await userOps.getById(req.session.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json({ enabled: !!user.totp_enabled });
+  } catch (err) {
+    console.error('2FA status error:', err);
+    res.status(500).json({ error: 'Failed to load two-factor settings' });
+  }
+});
+
+// Step 1 — generate and persist a fresh TOTP secret, return QR + manual secret.
+// 2FA is NOT enabled yet; that only happens on verify.
+app.post('/api/settings/2fa/setup', requireAuth, async (req, res) => {
+  try {
+    const user = await userOps.getById(req.session.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.totp_enabled) return res.status(400).json({ error: 'Two-factor authentication is already enabled' });
+
+    const secret = generateTotpSecret();
+    const email = (user.email && String(user.email).trim()) || `user${user.id}@delulu.app`;
+    await userOps.update(user.id, { totp_secret: secret });
+    const uri = totpUri(secret, email);
+    const qrDataUrl = await QRCode.toDataURL(uri);
+    res.json({ secret, qrDataUrl, otpauthUrl: uri });
+  } catch (err) {
+    console.error('2FA setup error:', err);
+    res.status(500).json({ error: 'Failed to start two-factor setup' });
+  }
+});
+
+// Step 2 — verify a live code from the authenticator app, then enable 2FA and
+// issue one-time backup codes (returned plaintext once, stored as HMACs).
+app.post('/api/settings/2fa/verify', requireAuth, async (req, res) => {
+  const { code } = req.body;
+  if (!code) return res.status(400).json({ error: 'Enter the 6-digit code from your authenticator app' });
+  try {
+    const user = await userOps.getById(req.session.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.totp_enabled) return res.status(400).json({ error: 'Two-factor authentication is already enabled' });
+    if (!user.totp_secret) return res.status(400).json({ error: 'Start two-factor setup first' });
+
+    const ok = await verifyTotpCode(user.totp_secret, String(code).trim());
+    if (!ok) return res.status(401).json({ error: 'Invalid code. Check that your device clock is correct, then try again.' });
+
+    const backupCodes = generateBackupCodes();
+    await userOps.update(user.id, {
+      totp_enabled: true,
+      totp_backup_codes: backupCodes.map(hashBackupCode)
+    });
+    res.json({ success: true, backupCodes, message: 'Two-factor authentication enabled' });
+  } catch (err) {
+    console.error('2FA verify error:', err);
+    res.status(500).json({ error: 'Failed to enable two-factor authentication' });
+  }
+});
+
+// Disable 2FA — requires the CURRENT TOTP code so a stolen session alone can't
+// turn off the protection and lock the real owner out.
+app.post('/api/settings/2fa/disable', requireAuth, async (req, res) => {
+  const { code } = req.body;
+  if (!code) return res.status(400).json({ error: 'Enter your current two-factor authentication code' });
+  try {
+    const user = await userOps.getById(req.session.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (!user.totp_enabled) return res.status(400).json({ error: 'Two-factor authentication is not enabled' });
+
+    const ok = await verifyTotpCode(user.totp_secret, String(code).trim());
+    if (!ok) return res.status(401).json({ error: 'Invalid code' });
+
+    await userOps.update(user.id, {
+      totp_enabled: false,
+      totp_secret: null,
+      totp_backup_codes: []
+    });
+    res.json({ success: true, message: 'Two-factor authentication disabled' });
+  } catch (err) {
+    console.error('2FA disable error:', err);
+    res.status(500).json({ error: 'Failed to disable two-factor authentication' });
   }
 });
 
@@ -1420,8 +1764,9 @@ app.post('/api/settings/password-reset/verify-and-update', requireAuth, otpLimit
   if (!otp || !newPassword) {
     return res.status(400).json({ error: 'Verification code and new password are required' });
   }
-  if (typeof newPassword !== 'string' || newPassword.length < 6) {
-    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  const pwStrength = await validatePasswordStrength(newPassword);
+  if (!pwStrength.valid) {
+    return res.status(400).json({ error: pwStrength.error });
   }
 
   try {
@@ -1447,6 +1792,10 @@ app.post('/api/settings/password-reset/verify-and-update', requireAuth, otpLimit
 
     invalidateCache(user.id);
     invalidateUserCache && invalidateUserCache(user.id);
+
+    // Password changed → revoke tokens issued under the old password
+    await userOps.bumpTokenVersion(user.id);
+    bumpTokenVersionCache(user.id);
 
     res.json({ success: true, message: 'Password updated successfully!' });
   } catch (err) {
@@ -1499,8 +1848,9 @@ app.post('/api/auth/forgot-password/reset', otpLimiter, async (req, res) => {
   if (!email || !otp || !newPassword) {
     return res.status(400).json({ error: 'Email, verification code, and new password are required' });
   }
-  if (typeof newPassword !== 'string' || newPassword.length < 6) {
-    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  const pwStrength = await validatePasswordStrength(newPassword);
+  if (!pwStrength.valid) {
+    return res.status(400).json({ error: pwStrength.error });
   }
 
   const cleanEmail = email.trim().toLowerCase();
@@ -1529,13 +1879,18 @@ app.post('/api/auth/forgot-password/reset', otpLimiter, async (req, res) => {
     invalidateCache(user.id);
     invalidateUserCache && invalidateUserCache(user.id);
 
+    // Password changed → revoke tokens issued under the old password, then issue
+    // a fresh one for the auto-login below.
+    await userOps.bumpTokenVersion(user.id);
+    bumpTokenVersionCache(user.id);
+
     // Auto log-in user after successful reset
     req.session.userId = user.id;
     const freshUser = await userOps.getById(user.id);
     const safeUser = sanitizeUser(freshUser || user);
     req.session.user = safeUser;
     setCachedUser(user.id, safeUser);
-    const token = generateAuthToken(user.id);
+    const token = generateAuthToken(user.id, (freshUser || user).token_version || 0);
     await new Promise((resolve) => req.session.save(resolve));
 
     res.json({ success: true, message: 'Password updated successfully! Logging you in...', token, user: safeUser });
@@ -1928,13 +2283,11 @@ app.post('/api/connections/end', requireAuth, async (req, res) => {
   invalidateDiscoverFeed(req.session.userId);
   if (result.otherId) invalidateDiscoverFeed(result.otherId);
 
-  // Automatically delete all messages for this connection from Supabase Postgres
-  const { getSupabase } = require('./db/supabase');
-  try {
-    await getSupabase().from('messages').delete().eq('connection_id', Number(connection_id));
-  } catch (e) {
-    console.error('Failed to clean up messages on chat end:', e);
-  }
+  // Archive all messages for this connection (tombstone) instead of hard-deleting.
+  // They vanish from both users' views immediately, but rows are retained so
+  // harassment evidence survives if a report was (or gets) filed. The 30-minute
+  // retention sweep hard-deletes them after 7 days (30 days if the chat was reported).
+  await messageOps.softDeleteAllForConnection(connection_id, req.session.userId);
 
   const endedMsg = 'Oops! Bad Luck... The other person was not vibing or ended the chat. This chat has ended and messages have been cleared.';
 
@@ -2025,12 +2378,8 @@ app.post('/api/connections/end-after-decline', requireAuth, async (req, res) => 
   const result = await connectionOps.endAfterDecline(connection_id, req.session.userId);
   if (result.error) return res.status(400).json(result);
 
-  const { getSupabase } = require('./db/supabase');
-  try {
-    await getSupabase().from('messages').delete().eq('connection_id', Number(connection_id));
-  } catch (e) {
-    console.error('Failed to clean up messages after declined reveal:', e.message);
-  }
+  // Same evidence-preserving archive as /api/connections/end
+  await messageOps.softDeleteAllForConnection(connection_id, req.session.userId);
   
   connectionEmitter.emit(`update:${connection_id}`, {
     type: 'ended',
@@ -2497,15 +2846,18 @@ app.post('/api/messages/:id/react', requireAuth, async (req, res) => {
 
 // Report a user
 app.post('/api/users/report', requireAuth, async (req, res) => {
-  const { reported_user_id, reason, connection_id } = req.body;
+  const { reported_user_id, reason, connection_id, evidence } = req.body;
   if (!reported_user_id) return res.status(400).json({ error: 'Missing reported user' });
   if (Number(reported_user_id) === req.session.userId) return res.status(400).json({ error: 'Cannot report yourself' });
   
   // Validate reason length — prevent Firestore document size bloat (1MB max per doc)
   const safeReason = (reason || 'No reason').slice(0, 1000);
+  // Reporter-supplied evidence (e.g. decrypted E2EE message content) that the
+  // server cannot read itself. Kept with the report for safety review.
+  const safeEvidence = (typeof evidence === 'string' ? evidence : '').slice(0, 5000) || null;
   
   try {
-    const reportId = await reportOps.create(req.session.userId, reported_user_id, safeReason, connection_id || null);
+    const reportId = await reportOps.create(req.session.userId, reported_user_id, safeReason, connection_id || null, safeEvidence);
     res.json({ success: true, reportId });
   } catch (err) {
     console.error('Report error:', err);
@@ -2675,8 +3027,13 @@ setInterval(async () => {
   try {
     const sweepResult = await connectionOps.sweepExpired();
     const reqSweep = await connectionOps.sweepExpiredRequests();
-    if (sweepResult.identityRevealsExpired > 0 || sweepResult.faceRevealsExpired > 0 || reqSweep.expiredCount > 0) {
-      console.log(`[Sweep] Expired ${sweepResult.identityRevealsExpired} identity reveals, ${sweepResult.faceRevealsExpired} face reveals, ${reqSweep.expiredCount} pending requests.`);
+    // Hard-delete archived chat messages past their retention window
+    const purgedMessages = await messageOps.purgeExpiredSoftDeleted().catch(err => {
+      console.error('[Sweep] Message retention purge failed:', err);
+      return 0;
+    });
+    if (sweepResult.identityRevealsExpired > 0 || sweepResult.faceRevealsExpired > 0 || reqSweep.expiredCount > 0 || purgedMessages > 0) {
+      console.log(`[Sweep] Expired ${sweepResult.identityRevealsExpired} identity reveals, ${sweepResult.faceRevealsExpired} face reveals, ${reqSweep.expiredCount} pending requests, purged ${purgedMessages} archived messages.`);
     }
     // Emit SSE events for each expired connection so users' UIs update in real-time
     if (sweepResult.expiredConnections && sweepResult.expiredConnections.length > 0) {
@@ -2723,5 +3080,21 @@ module.exports = {
   app,
   server,
   // Kept private-by-convention; used by the focused cursor contract tests.
-  __discoverTestUtils: { createDiscoverCursor, readDiscoverCursor }
+  __discoverTestUtils: { createDiscoverCursor, readDiscoverCursor },
+  // Kept private-by-convention; used by the auth/revocation contract tests.
+  __authTestUtils: {
+    generateAuthToken,
+    verifyAuthToken,
+    validatePasswordStrength,
+    isCommonPassword,
+    checkPwnedPassword,
+    MIN_PASSWORD_LENGTH,
+    generateTotpSecret,
+    verifyTotpCode,
+    hashBackupCode,
+    generateBackupCodes,
+    signTotpChallenge,
+    verifyTotpChallenge,
+    TOTP_BACKUP_CODE_COUNT
+  }
 };

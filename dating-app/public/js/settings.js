@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadUserSettings();
   setupUsernameEvents();
   setupPasswordResetEvents();
+  setup2FAEvents();
 });
 
 // Load Settings User Info
@@ -29,8 +30,181 @@ async function loadUserSettings() {
     }
 
     renderCooldownBanner(data);
+    render2FAStatus(data);
   } catch (err) {
     showToast(`Failed to load settings: ${err.message}`, 'error');
+  }
+}
+
+// Render the two-factor authentication status row from user-info
+function render2FAStatus(data) {
+  const enabled = !!(data && data.totp_enabled);
+  const statusText = document.getElementById('2fa-status-text');
+  const statusIcon = document.getElementById('2fa-status-icon');
+  const btnSetup = document.getElementById('btn-2fa-setup');
+  const btnDisable = document.getElementById('btn-2fa-disable');
+  if (!statusText) return;
+
+  statusText.textContent = enabled ? 'Enabled' : 'Off';
+  if (statusIcon) {
+    statusIcon.textContent = enabled ? 'verified_user' : 'shield';
+    statusIcon.className = `material-symbols-outlined text-xl shrink-0 ${enabled ? 'text-emerald-500' : 'text-outline'}`;
+  }
+  if (btnSetup) btnSetup.classList.toggle('hidden', enabled);
+  if (btnDisable) btnDisable.classList.toggle('hidden', !enabled);
+
+  // Hide any in-progress panels whenever status is (re)rendered
+  hide2FAPanels();
+}
+
+function hide2FAPanels() {
+  ['2fa-setup-panel', '2fa-backup-panel', '2fa-disable-panel'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.classList.add('hidden');
+      el.classList.remove('flex');
+    }
+  });
+  ['2fa-setup-error', '2fa-disable-error'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.add('hidden');
+  });
+  const verifyCode = document.getElementById('2fa-verify-code');
+  const disableCode = document.getElementById('2fa-disable-code');
+  if (verifyCode) verifyCode.value = '';
+  if (disableCode) disableCode.value = '';
+}
+
+function show2FAPanel(id) {
+  hide2FAPanels();
+  const el = document.getElementById(id);
+  if (el) {
+    el.classList.remove('hidden');
+    el.classList.add('flex');
+  }
+}
+
+// Two-factor authentication (TOTP) enrollment / disable
+function setup2FAEvents() {
+  const btnSetup = document.getElementById('btn-2fa-setup');
+  const btnDisable = document.getElementById('btn-2fa-disable');
+  const btnVerify = document.getElementById('btn-2fa-verify');
+  const btnCancelSetup = document.getElementById('btn-2fa-cancel-setup');
+  const btnBackupDone = document.getElementById('btn-2fa-backup-done');
+  const btnDisableConfirm = document.getElementById('btn-2fa-disable-confirm');
+  const btnDisableCancel = document.getElementById('btn-2fa-disable-cancel');
+
+  if (btnSetup) {
+    btnSetup.addEventListener('click', async () => {
+      btnSetup.disabled = true;
+      btnSetup.innerHTML = '<span class="material-symbols-outlined text-sm animate-spin">refresh</span> Generating...';
+      try {
+        const res = await apiCall('/api/settings/2fa/setup', 'POST');
+        const qr = document.getElementById('2fa-qr');
+        const secretEl = document.getElementById('2fa-secret');
+        if (qr) qr.src = res.qrDataUrl;
+        if (secretEl) secretEl.textContent = res.secret;
+        show2FAPanel('2fa-setup-panel');
+        document.getElementById('2fa-verify-code')?.focus();
+      } catch (err) {
+        showToast(err.message || 'Failed to start setup', 'error');
+      } finally {
+        btnSetup.disabled = false;
+        btnSetup.innerHTML = '<span class="material-symbols-outlined text-sm">add</span> Set Up';
+      }
+    });
+  }
+
+  if (btnVerify) {
+    btnVerify.addEventListener('click', async () => {
+      const code = document.getElementById('2fa-verify-code').value.trim();
+      const errEl = document.getElementById('2fa-setup-error');
+      errEl.classList.add('hidden');
+      if (!code || code.length !== 6 || !/^[0-9]{6}$/.test(code)) {
+        errEl.textContent = 'Enter the 6-digit code from your authenticator app';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      btnVerify.disabled = true;
+      btnVerify.innerHTML = '<span class="material-symbols-outlined text-lg animate-spin">refresh</span> Verifying...';
+      try {
+        const res = await apiCall('/api/settings/2fa/verify', 'POST', { code });
+        hapticMedium();
+        // Show the one-time backup codes
+        const backupEl = document.getElementById('2fa-backup-codes');
+        if (backupEl && Array.isArray(res.backupCodes)) {
+          backupEl.innerHTML = res.backupCodes.map(c => `<span class="bg-surface-container-high rounded-lg px-2.5 py-1.5 text-center">${c}</span>`).join('');
+        }
+        show2FAPanel('2fa-backup-panel');
+      } catch (err) {
+        hapticHeavy();
+        errEl.textContent = err.message || 'Failed to enable two-factor authentication';
+        errEl.classList.remove('hidden');
+        document.getElementById('2fa-verify-code').value = '';
+        document.getElementById('2fa-verify-code').focus();
+      } finally {
+        btnVerify.disabled = false;
+        btnVerify.innerHTML = '<span class="material-symbols-outlined text-lg">verified_user</span> Verify & Enable';
+      }
+    });
+  }
+
+  if (btnCancelSetup) {
+    btnCancelSetup.addEventListener('click', () => {
+      hide2FAPanels();
+      // Re-fetch status (an aborted setup leaves 2FA off)
+      loadUserSettings();
+    });
+  }
+
+  if (btnBackupDone) {
+    btnBackupDone.addEventListener('click', async () => {
+      hide2FAPanels();
+      showToast('Two-factor authentication is now enabled', 'success');
+      await loadUserSettings();
+    });
+  }
+
+  if (btnDisable) {
+    btnDisable.addEventListener('click', () => {
+      show2FAPanel('2fa-disable-panel');
+      document.getElementById('2fa-disable-code')?.focus();
+    });
+  }
+
+  if (btnDisableConfirm) {
+    btnDisableConfirm.addEventListener('click', async () => {
+      const code = document.getElementById('2fa-disable-code').value.trim();
+      const errEl = document.getElementById('2fa-disable-error');
+      errEl.classList.add('hidden');
+      if (!code || code.length !== 6 || !/^[0-9]{6}$/.test(code)) {
+        errEl.textContent = 'Enter the 6-digit code from your authenticator app';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      btnDisableConfirm.disabled = true;
+      btnDisableConfirm.textContent = 'Disabling...';
+      try {
+        await apiCall('/api/settings/2fa/disable', 'POST', { code });
+        hapticHeavy();
+        hide2FAPanels();
+        showToast('Two-factor authentication disabled', 'success');
+        await loadUserSettings();
+      } catch (err) {
+        hapticHeavy();
+        errEl.textContent = err.message || 'Failed to disable two-factor authentication';
+        errEl.classList.remove('hidden');
+        document.getElementById('2fa-disable-code').value = '';
+        document.getElementById('2fa-disable-code').focus();
+      } finally {
+        btnDisableConfirm.disabled = false;
+        btnDisableConfirm.textContent = 'Disable Two-Factor Authentication';
+      }
+    });
+  }
+
+  if (btnDisableCancel) {
+    btnDisableCancel.addEventListener('click', hide2FAPanels);
   }
 }
 
@@ -284,8 +458,9 @@ function setupPasswordResetEvents() {
         return;
       }
 
-      if (newPwd.length < 6) {
-        errorMsg.textContent = 'Password must be at least 6 characters long';
+      const pwStrengthErr = getPasswordStrengthError(newPwd);
+      if (pwStrengthErr) {
+        errorMsg.textContent = pwStrengthErr;
         errorMsg.classList.remove('hidden');
         return;
       }

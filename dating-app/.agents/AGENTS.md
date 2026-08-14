@@ -15,7 +15,7 @@
 4. **Icebreakers & Mini-Games**: Built-in interactive icebreakers (`would_you_rather`, `this_or_that`, `question`) start conversations naturally.
 5. **Gradual Identity & Face Reveals**: Identities remain anonymous by design. Day 7 unlocks mutual **Identity Reveal** (username/bio). Day 10 unlocks **Face Reveal** (physical identity) — valid for only a **24-hour window**. Both reveals require mutual consent.
 6. **Time-Bound Chats**: Connections that don't complete a face reveal in the Day 10–11 window are automatically expired by a background sweep.
-7. **"Not Vibing" Termination**: Either user can gracefully end a chat at any time. All messages are instantly purged from Supabase on end.
+7. **"Not Vibing" Termination**: Either user can gracefully end a chat at any time. Messages are tombstoned (`deleted_at` set) so they vanish from users' views instantly, but rows are retained so harassment evidence survives if a report was (or gets) filed. A 30-minute retention sweep hard-deletes tombstones after 7 days (30 days for reported connections).
 
 **Live URL**: https://delulu-college.onrender.com
 **Android APK**: Served via `/delulu.apk` or `/api/download-apk` (built from `builds/delulu.apk` — gitignored, 126MB, distribute manually)
@@ -35,7 +35,7 @@
 | Messages DB | Supabase Postgres | All chat messages (high-write), read receipts |
 | Sessions | `connect-pg-simple` -> Supabase | Persistent 30-day sessions via `SUPABASE_DB_URL` |
 | Session Fallback | `memorystore` | In-memory sessions if no `SUPABASE_DB_URL` |
-| Auth (Hybrid) | Cookie session + HMAC Bearer token | Cookies for browsers, token for Capacitor Android |
+| Auth (Hybrid) | httpOnly Secure SameSite=Lax cookie (web) + HMAC Bearer token (Android) | Web = cookie-only, zero tokens in localStorage; token stored in native `@capacitor/preferences`, revocable via `token_version` |
 | Real-time | SSE (`/api/connections/:id/stream`) | Per-connection live events (message, typing, presence, game) |
 | Per-user RT | SSE (`/api/user/stream`) | Messages list live updates, rich toast notifications |
 | Push (Web) | Web Push (VAPID) + `web-push` library | Browser push notifications |
@@ -118,6 +118,7 @@ dating-app/
   public_key: String|null,       // ECDH P-256 public key (base64) for E2EE
   encrypted_private_key: String|null, // AES-GCM encrypted ECDH private key
   username_changed_at: ISO8601|null,  // used to enforce 15-day username cooldown
+  token_version: Number,              // auth token epoch; bumped on logout / password change to revoke old tokens
   created_at: ISO8601
 }
 ```
@@ -205,7 +206,7 @@ is_encrypted    INTEGER DEFAULT 0       -- 0=plain, 1=E2EE
 iv              TEXT                    -- AES-GCM IV for E2EE
 client_uuid     TEXT                    -- idempotency key (prevents duplicate sends on retry)
 created_at      TIMESTAMPTZ DEFAULT NOW()
-deleted_at      TIMESTAMPTZ             -- soft-delete tombstone
+deleted_at      TIMESTAMPTZ             -- soft-delete tombstone (content is KEPT for evidence)
 deleted_by      INTEGER
 ```
 
@@ -323,7 +324,8 @@ Discovery query ALWAYS filters by `ecosystem === userEcosystem`. This is the cor
     - Neither acts within 24h -> background sweep sets status: "expired"
     |
 [Ended] "Not Vibing" at any time -> status: "rejected", ended_reason: "not_vibing"
-    - All Supabase messages DELETED immediately
+    - All Supabase messages SOFT-DELETED (tombstoned) — hidden from users instantly, retained for evidence
+    - Retention sweep hard-deletes tombstones after 7 days (30 days if the connection was reported)
     - Both users' SSE streams: "ended" event (chat) + "chat_ended" (messages list)
     - Discover feeds for both users invalidated -> can rediscover each other
 ```
@@ -384,19 +386,31 @@ Using browser-native Web Crypto API:
 
 **Login (existing user)**:
 - `POST /api/users/login` (username or email + password) -> bcrypt compare -> sets session + generates HMAC Bearer token
+- **2FA gate (opt-in)**: if `user.totp_enabled`, login returns `{ success: false, totpRequired: true, challenge }` instead of a session/token. The challenge is a stateless HMAC-signed `base64url(userId:expires:hmac)` (10-min TTL, works with cookies AND the Android bearer flow). `POST /api/users/login/2fa` redeems it with a 6-digit TOTP code (or a one-time backup code), then completes login exactly like the plain path. Rate-limited by `authLimiter` (5/15min) so the code can't be brute-forced.
+
+**Two-Factor Authentication (TOTP) — settings routes** (all `requireAuth`):
+- `GET /api/settings/2fa` -> `{ enabled }`
+- `POST /api/settings/2fa/setup` -> generates + persists a fresh `totp_secret`, returns `{ secret, qrDataUrl, otpauthUrl }` (2FA still OFF)
+- `POST /api/settings/2fa/verify` -> verifies a live code, sets `totp_enabled`, returns one-time backup codes (stored only as HMACs via `hashBackupCode`)
+- `POST /api/settings/2fa/disable` -> requires the CURRENT live code (a stolen session alone can't disable it), then clears `totp_secret`/`totp_enabled`/`totp_backup_codes`
+- otplib **v12** (`authenticator`): `authenticator.options = { window: 1 }` (instance-level ±1 step drift tolerance — per-call `window` is ignored by v12). Backup codes are 8-char, single-use (burned on redemption), stored HMAC-SHA256 keyed by `SESSION_SECRET`. `sanitizeUser()` strips `totp_secret` + `totp_backup_codes` (never sent to clients); `totp_enabled` is exposed so UI can reflect status.
+
+**Web auth (browsers)**: cookie-only. `express-session` cookie is `httpOnly`, `Secure` in prod, `SameSite=Lax`. No auth token is ever written to `window.localStorage` — `apiCall()` relies on the cookie.
 
 **Token-based auth (Capacitor Android)**:
-- `generateAuthToken(userId)` -> `"${userId}:${timestamp}:${HMAC}"` (30-day TTL)
+- `generateAuthToken(userId, version)` -> `"${userId}:${timestamp}:${HMAC}"` (30-day TTL); HMAC covers `userId:timestamp:token_version`
 - Sent as `Authorization: Bearer <token>` header
+- Stored in **native** `@capacitor/preferences` (NOT localStorage) via `setStoredAuthToken()` in `shared.js`; a one-time migration purges legacy `auth_token` values from localStorage
 - Middleware populates `req.session.userId` from token if cookie missing
+- **Revocation**: `token_version` on the user doc is bumped on logout and on every password change. Old tokens fail signature verification immediately (legacy pre-version tokens only validate while the account is still at version 0).
 
 **Password Reset (logged out)**:
 - `POST /api/auth/forgot-password/send-code` -> sends OTP
-- `POST /api/auth/forgot-password/reset` -> verifies OTP, hashes new password, auto-logs in user
+- `POST /api/auth/forgot-password/reset` -> verifies OTP, hashes new password, bumps token_version (revokes old tokens), auto-logs in user with a fresh token
 
 **Password Reset (in Settings, logged in)**:
 - `POST /api/settings/password-reset/send-code` -> sends OTP to linked email
-- `POST /api/settings/password-reset/verify-and-update` -> verifies OTP, updates hash + re-encrypted E2EE key
+- `POST /api/settings/password-reset/verify-and-update` -> verifies OTP, updates hash + re-encrypted E2EE key, bumps token_version (revokes old bearer tokens)
 
 **Username Change**:
 - 15-day cooldown enforced server-side via `username_changed_at` field
@@ -497,9 +511,10 @@ Custom middleware blocks `POST/PUT/DELETE/PATCH` from cross-origin non-Capacitor
 
 ### Other Security
 - **Helmet** with CSP (allows `unsafe-inline` for Tailwind compatibility)
+- **Password policy** (`validatePasswordStrength` in `server.js`): min 12 chars + common-password blocklist + HaveIBeenPwned k-anonymity check (SHA-1 prefix, **fails open** on network errors). Applied on every route that sets a password (complete-profile, reset-password, settings verify-and-update, forgot-password/reset). Login is intentionally exempt so existing/legacy short passwords keep working. Mirrored client-side via `getPasswordStrengthError()` in `shared.js`.
 - **`sanitizeText()`**: strips HTML tags before storing user content (XSS defense)
 - **`escapeHtml()`**: used when injecting user content into DOM in JS
-- **`sanitizeUser()`**: always strips `passcode_hash` before sending user data to clients
+- **`sanitizeUser()`**: always strips `passcode_hash`, `totp_secret`, and `totp_backup_codes` before sending user data to clients
 - **`sanitizeConnection()`**: adds derived `my_*` / `other_*` reveal fields; masks partner data
 - **Dummy bcrypt compare**: prevents timing-based username enumeration during login
 - **Uploads protection**: `app.use('/uploads', requireAuth)` — authenticated users only
@@ -519,7 +534,7 @@ Custom middleware blocks `POST/PUT/DELETE/PATCH` from cross-origin non-Capacitor
 
 **Tier 2 — FORBIDDEN_SHORT_TOKENS**: Short ambiguous tokens (`bc`, `mc`, `sex`, `gand`, etc.) matched **only as standalone words** (word-boundary `\b`) to avoid blocking `mac`, `Sussex`, `Gandalf`.
 
-**E2EE ciphertext is never scanned** server-side. The client blocks profanity before encryption.
+**E2EE ciphertext is never scanned** server-side. The client blocks profanity before encryption. To close the moderation gap on reported E2EE chats, the report flow lets the reporter paste the decrypted message content as `evidence` on the report (`POST /api/users/report` -> `reportOps.create(..., evidence)`), stored on the Firestore report doc for safety review.
 
 The keyword `rishihood` is in TIER 1 — blocked as a substring in all messages.
 

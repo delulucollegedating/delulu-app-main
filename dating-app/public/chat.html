@@ -5,6 +5,7 @@
   <meta charset="utf-8"/>
   <meta content="width=device-width, initial-scale=1.0, viewport-fit=cover" name="viewport"/>
   <title>Delulu - Chat</title>
+  <meta name="robots" content="noindex, nofollow"/>
   
   <link href="https://fonts.googleapis.com" rel="preconnect"/>
   <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
@@ -227,7 +228,17 @@
       </div>
       <h3 class="text-2xl font-bold text-primary mb-2">Face Reveal Time!</h3>
       <p class="text-on-surface-variant text-sm mb-2">Ready to meet face-to-face? If both agree, you'll get a Google Meet link to video call each other!</p>
-      <p class="text-on-surface-variant text-xs mb-6">You can still keep chatting even after the call.</p>
+      <p class="text-on-surface-variant text-xs mb-4">You can still keep chatting even after the call.</p>
+      <!-- Safety-first: shown BEFORE the user commits to meeting a stranger -->
+      <div class="bg-error/5 border border-error/15 rounded-xl p-3 mb-5 text-left">
+        <p class="text-xs font-bold text-error mb-1.5 flex items-center gap-1"><span class="material-symbols-outlined text-[14px] material-fill">shield</span> Meet safely</p>
+        <ul class="text-[11px] text-on-surface-variant space-y-1 list-disc list-inside leading-relaxed">
+          <li>Keep the first meeting a video call, not an in-person one. If you do meet in person, pick a busy public place and never invite them somewhere private.</li>
+          <li>Tell a friend where you are and who you're meeting.</li>
+          <li>Keep personal details (address, class schedule, hostel/room) private until you truly trust them.</li>
+          <li>Trust your gut — leave or end the call if anything feels off, and report it below.</li>
+        </ul>
+      </div>
       <button id="face-reveal-yes" class="w-full py-3 bg-gradient-to-r from-primary to-primary-container text-white font-bold rounded-xl hover:shadow-md transition-all mb-3">Yes, Let's Meet!</button>
       <button id="face-reveal-no" class="w-full py-3 bg-surface-variant text-on-surface-variant font-bold rounded-xl hover:bg-surface-dim transition-all">Not ready for this</button>
     </div>
@@ -250,12 +261,23 @@
       </div>
       <h3 class="text-2xl font-bold text-primary mb-2">Video Call Ready!</h3>
       <p class="text-on-surface-variant text-sm mb-2">Your private video call room is ready. Both of you will connect instantly!</p>
-      <p class="text-on-surface-variant text-xs mb-6">Works seamlessly on mobile and desktop with zero login required.</p>
+      <p class="text-on-surface-variant text-xs mb-4">Works seamlessly on mobile and desktop with zero login required.</p>
+      <div class="bg-error/5 border border-error/15 rounded-xl p-3 mb-4 text-left">
+        <p class="text-xs font-bold text-error mb-1.5 flex items-center gap-1"><span class="material-symbols-outlined text-[14px] material-fill">shield</span> Before you join</p>
+        <ul class="text-[11px] text-on-surface-variant space-y-1 list-disc list-inside leading-relaxed">
+          <li>Stay in the app's video room — never move to another platform you don't control.</li>
+          <li>If this turns into a real meetup, keep it public and tell a friend.</li>
+          <li>Feeling uncomfortable? Hang up. You can report anything that happens below.</li>
+        </ul>
+      </div>
       <button id="meet-link-btn" class="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-green-600 text-white font-bold rounded-xl hover:shadow-md hover:opacity-90 transition-all mb-3 flex items-center justify-center gap-2">
         <span class="material-symbols-outlined text-xl">videocam</span> Join Video Call
       </button>
       <button id="meet-copy-btn" class="w-full py-2.5 text-primary font-semibold text-xs hover:underline transition-all mb-2 flex items-center justify-center gap-1">
         <span class="material-symbols-outlined text-sm">content_copy</span> Copy Meeting Link
+      </button>
+      <button id="meet-report-btn" class="w-full py-2.5 text-error font-semibold text-xs hover:underline transition-all mb-1 flex items-center justify-center gap-1">
+        <span class="material-symbols-outlined text-sm">warning</span> Something went wrong at the meetup? Report it
       </button>
       <button data-action="close" class="w-full text-outline font-semibold text-sm py-2 hover:text-on-surface transition-colors">Close</button>
     </div>
@@ -266,8 +288,8 @@
         <span class="material-symbols-outlined text-4xl material-fill">heart_broken</span>
       </div>
       <h3 class="text-xl font-bold text-on-surface mb-1">End this chat?</h3>
-      <p class="text-on-surface-variant text-sm mb-1">This will permanently end the conversation and clear all messages.</p>
-      <p class="text-on-surface-variant/70 text-xs mb-6">This action cannot be undone.</p>
+      <p class="text-on-surface-variant text-sm mb-1">This will permanently end the conversation and clear all messages from your view.</p>
+      <p class="text-on-surface-variant/70 text-xs mb-6">This action cannot be undone. If either of you has reported this chat, a copy is kept for our safety team to review.</p>
       <button id="btn-end-chat-confirm" class="w-full py-3 bg-error text-white font-bold rounded-xl hover:bg-error/90 transition-all mb-3 flex items-center justify-center gap-2">
         <span class="material-symbols-outlined text-lg">heart_broken</span> End Chat
       </button>
@@ -298,12 +320,14 @@
       <select id="report-reason" class="w-full bg-surface-container-low rounded-xl px-4 py-3 border-none focus:ring-2 focus:ring-primary/50 outline-none mb-3">
         <option value="">Select a reason...</option>
         <option value="harassment">Harassment or bullying</option>
+        <option value="unsafe-meetup">Unsafe or inappropriate meetup</option>
         <option value="fake-account">Fake account / catfishing</option>
         <option value="inappropriate">Inappropriate messages</option>
         <option value="spam">Spam or solicitation</option>
         <option value="other">Other</option>
       </select>
       <textarea id="report-details" class="w-full bg-surface-container-low rounded-xl px-4 py-3 border-none focus:ring-2 focus:ring-primary/50 outline-none resize-none h-20 text-sm" placeholder="Additional details (optional)"></textarea>
+      <textarea id="report-evidence" class="w-full bg-surface-container-low rounded-xl px-4 py-3 border-none focus:ring-2 focus:ring-primary/50 outline-none resize-none h-20 text-sm" placeholder="Paste any message content you want us to review (encrypted / E2EE messages can't be read by us — copy the decrypted text here so we can investigate)"></textarea>
       <p id="report-error" class="text-error text-xs font-semibold hidden mt-2"></p>
       <div class="flex gap-3 mt-4">
         <button data-action="close" class="flex-1 py-3 bg-surface-variant text-on-surface-variant font-bold rounded-xl hover:bg-surface-dim transition-all text-sm">Cancel</button>

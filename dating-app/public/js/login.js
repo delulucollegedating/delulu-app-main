@@ -70,10 +70,101 @@ document.addEventListener('DOMContentLoaded', async () => {
   };
 
   // ===== STAGE 0: Email/Username + Password Login =====
+
+  // Two-factor authentication state (accounts with 2FA enabled)
+  let pendingTotpChallenge = null;
+  let pendingTotpPassword = '';
+  const loginCredentialsDiv = document.getElementById('login-credentials');
+  const login2faDiv = document.getElementById('login-2fa');
+  const login2faCode = document.getElementById('login-2fa-code');
+  const login2faError = document.getElementById('login-2fa-error');
+  const loginUsernameInput = document.getElementById('login-username');
+  const loginPasswordInput = document.getElementById('login-password');
+
+  function showLogin2fa() {
+    loginCredentialsDiv.classList.add('hidden');
+    login2faDiv.classList.remove('hidden');
+    // Disable the credential fields so the browser skips their `required`
+    // validation while they're visually hidden.
+    loginUsernameInput.disabled = true;
+    loginPasswordInput.disabled = true;
+    login2faError.classList.add('hidden');
+    login2faCode.value = '';
+    setTimeout(() => login2faCode.focus(), 50);
+  }
+
+  function showLoginCredentials() {
+    login2faDiv.classList.add('hidden');
+    loginCredentialsDiv.classList.remove('hidden');
+    loginUsernameInput.disabled = false;
+    loginPasswordInput.disabled = false;
+    login2faCode.value = '';
+  }
+
+  // Shared post-auth completion: persist token + cached user, decrypt E2EE keys,
+  // then redirect. Used by both the plain login and the 2FA login paths.
+  async function finishLogin(data, password) {
+    const user = data.user;
+    if (data.token) {
+      await setStoredAuthToken(data.token);
+    }
+    window.localStorage.setItem('cached_user', JSON.stringify(user));
+    // If E2EE keys exist, decrypt and store the private key locally
+    if (user.encrypted_private_key && user.email) {
+      try {
+        const pbkdf2Key = await E2EECrypto.deriveKeyFromPassword(password, user.email);
+        const privateKey = await E2EECrypto.decryptPrivateKey(
+          user.encrypted_private_key.ciphertext,
+          user.encrypted_private_key.iv,
+          pbkdf2Key
+        );
+        const jwk = await E2EECrypto.exportKeyToJwk(privateKey);
+        window.localStorage.setItem('e2ee_private_key', JSON.stringify(jwk));
+      } catch (cryptoErr) {
+        console.error('Failed to decrypt private key:', cryptoErr);
+        showToast('Security warning: Could not decrypt your E2EE chat keys. Your chat history may be unreadable on this device.', 'error');
+      }
+    } else {
+      // Clear any old key if logging in as a legacy user
+      window.localStorage.removeItem('e2ee_private_key');
+    }
+    window.location.replace('discover.html');
+  }
+
   document.getElementById('form-login').onsubmit = async (e) => {
     e.preventDefault();
-    const usernameOrEmail = document.getElementById('login-username').value.trim();
-    const password = document.getElementById('login-password').value;
+
+    // Step 1 → Step 2 switch: keep the 6-digit code in the same form so Enter works
+    if (loginCredentialsDiv.classList.contains('hidden')) {
+      const code = login2faCode.value.trim();
+      const btn2fa = document.getElementById('btn-login-2fa');
+      btn2fa.disabled = true;
+      btn2fa.textContent = 'Verifying...';
+      login2faError.classList.add('hidden');
+
+      try {
+        const data = await apiCall('/api/users/login/2fa', 'POST', {
+          challenge: pendingTotpChallenge,
+          code
+        });
+        if (data.success) {
+          await finishLogin(data, pendingTotpPassword);
+        }
+      } catch (err) {
+        console.error(err);
+        login2faError.textContent = err.message || 'Invalid code';
+        login2faError.classList.remove('hidden');
+        login2faCode.value = '';
+        login2faCode.focus();
+      } finally {
+        btn2fa.disabled = false;
+        btn2fa.textContent = 'Verify & Sign In';
+      }
+      return;
+    }
+
+    const usernameOrEmail = loginUsernameInput.value.trim();
+    const password = loginPasswordInput.value;
 
     const btn = document.getElementById('btn-login');
     btn.disabled = true;
@@ -82,32 +173,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     try {
       const data = await apiCall('/api/users/login', 'POST', { usernameOrEmail, password });
-      if (data.success) {
-        const user = data.user;
-        if (data.token) {
-          window.localStorage.setItem('auth_token', data.token);
-        }
-        window.localStorage.setItem('cached_user', JSON.stringify(user));
-        // If E2EE keys exist, decrypt and store the private key locally
-        if (user.encrypted_private_key && user.email) {
-          try {
-            const pbkdf2Key = await E2EECrypto.deriveKeyFromPassword(password, user.email);
-            const privateKey = await E2EECrypto.decryptPrivateKey(
-              user.encrypted_private_key.ciphertext,
-              user.encrypted_private_key.iv,
-              pbkdf2Key
-            );
-            const jwk = await E2EECrypto.exportKeyToJwk(privateKey);
-            window.localStorage.setItem('e2ee_private_key', JSON.stringify(jwk));
-          } catch (cryptoErr) {
-            console.error('Failed to decrypt private key:', cryptoErr);
-            showToast('Security warning: Could not decrypt your E2EE chat keys. Your chat history may be unreadable on this device.', 'error');
-          }
-        } else {
-          // Clear any old key if logging in as a legacy user
-          window.localStorage.removeItem('e2ee_private_key');
-        }
-        window.location.replace('discover.html');
+      if (data.totpRequired) {
+        pendingTotpChallenge = data.challenge;
+        pendingTotpPassword = password;
+        showLogin2fa();
+      } else if (data.success) {
+        await finishLogin(data, password);
       }
     } catch (err) {
       console.error(err);
@@ -117,6 +188,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       btn.disabled = false;
       btn.textContent = 'Sign In';
     }
+  };
+
+  // Back to the credential step (abandon the in-flight 2FA challenge)
+  document.getElementById('btn-login-2fa-back').onclick = () => {
+    pendingTotpChallenge = null;
+    pendingTotpPassword = '';
+    showLoginCredentials();
+    loginUsernameInput.focus();
   };
 
   // ===== STAGE 1: Send Signup Email (Verification link via Brevo) =====
@@ -192,7 +271,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (data.success) {
         currentEmail = emailParam;
         if (data.token) {
-          window.localStorage.setItem('auth_token', data.token);
+          await setStoredAuthToken(data.token);
         }
         if (data.user) {
           window.localStorage.setItem('cached_user', JSON.stringify(data.user));
@@ -277,6 +356,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
+    const pwStrengthErr = getPasswordStrengthError(password);
+    if (pwStrengthErr) {
+      document.getElementById('profile-error').textContent = pwStrengthErr;
+      document.getElementById('profile-error').classList.remove('hidden');
+      return;
+    }
+
     let hobbies = [];
     if (hobbiesStr) {
       hobbies = hobbiesStr.split(',').map(s => s.trim()).filter(Boolean);
@@ -316,7 +402,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
       if (data && data.user) {
         if (data.token) {
-          window.localStorage.setItem('auth_token', data.token);
+          await setStoredAuthToken(data.token);
         }
         window.localStorage.setItem('cached_user', JSON.stringify(data.user));
       }
@@ -430,8 +516,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         return;
       }
 
-      if (newPassword.length < 6) {
-        forgotErr2.textContent = 'Password must be at least 6 characters long';
+      const pwStrengthErr = getPasswordStrengthError(newPassword);
+      if (pwStrengthErr) {
+        forgotErr2.textContent = pwStrengthErr;
         forgotErr2.classList.remove('hidden');
         return;
       }
@@ -465,7 +552,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           if (e2eePayload.privateKeyJwk) {
             window.localStorage.setItem('e2ee_private_key', JSON.stringify(e2eePayload.privateKeyJwk));
           }
-          window.localStorage.setItem('auth_token', res.token);
+          await setStoredAuthToken(res.token);
         }
         if (res.user) {
           window.localStorage.setItem('cached_user', JSON.stringify(res.user));
