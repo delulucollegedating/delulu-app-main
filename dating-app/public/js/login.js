@@ -253,7 +253,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   // ===== Check Verification Token on page load =====
   const urlParams = new URLSearchParams(window.location.search);
   const token = urlParams.get('token');
-  const emailParam = urlParams.get('email');
+
+  // The server embeds the email inside the base64url token as the first
+  // colon-delimited segment (format: email:expiry:hmac). We decode it here
+  // so the flow works even when ?email= is absent from the URL (which is
+  // always the case — the server never appends ?email= to the verify link).
+  let emailParam = urlParams.get('email');
+  if (token && !emailParam) {
+    try {
+      const decoded = atob(token.replace(/-/g, '+').replace(/_/g, '/'));
+      emailParam = decoded.split(':')[0] || null;
+    } catch (_) { /* malformed token — let the server reject it */ }
+  }
 
   if (token && emailParam) {
     showStage(stageOtp);
@@ -264,12 +275,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       verifyBtn.disabled = true;
       verifyBtn.textContent = 'Verifying...';
     }
-    
-    // Auto-verify token
+
+    // Auto-verify token (server only needs the token; email is decoded from it)
     try {
-      const data = await apiCall('/api/auth/verify-token', 'POST', { token, email: emailParam });
+      const data = await apiCall('/api/auth/verify-token', 'POST', { token });
       if (data.success) {
-        currentEmail = emailParam;
+        currentEmail = data.email || emailParam;
         if (data.token) {
           await setStoredAuthToken(data.token);
         }
@@ -280,7 +291,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           showStage(stageProfile);
           document.getElementById('profile-username').focus();
         } else {
-          // If already registered, redirect straight to discover since session is set
+          // Existing user — session is now set, redirect to app
           window.location.replace('discover.html');
         }
       }
