@@ -993,5 +993,40 @@ document.addEventListener('DOMContentLoaded', () => {
   
 });
 
-// Export initPushNotifications so pages can call it after auth
-window.initPushNotifications = initPushNotifications;
+// ─── Explicit window exports ───────────────────────────────────────────────
+// type="module" scripts (login.js, settings.js, etc.) run in strict ES-module
+// scope and cannot see bare function declarations from classic <script> tags.
+// Assigning to window makes every utility reliably available cross-script.
+window.initPushNotifications    = initPushNotifications;
+window.apiCall                  = apiCall;
+window.showToast                = showToast;
+window.showUndoToast            = showUndoToast;
+window.showRichToast            = showRichToast;
+window.setStoredAuthToken       = setStoredAuthToken;
+window.getStoredAuthToken       = getStoredAuthToken;
+window.removeStoredAuthToken    = removeStoredAuthToken;
+window.requireAuth              = requireAuth;
+window.setupLogout              = setupLogout;
+window.getPasswordStrengthError = getPasswordStrengthError;
+window.reencryptE2EEKeysForNewPassword = reencryptE2EEKeysForNewPassword;
+window.escapeHtml               = escapeHtml;
+window.resolveUrl               = resolveUrl;
+window.getAvatarHtml            = getAvatarHtml;
+window.formatTime               = formatTime;
+window.getCountdown             = getCountdown;
+window.setTitleUnread           = setTitleUnread;
+window.getOrCreateDeviceId      = getOrCreateDeviceId;
+window.handlePushNotificationAction = handlePushNotificationAction;
+window.showSkeleton             = showSkeleton;
+window.hasForbiddenText         = hasForbiddenText;
+window.findForbiddenText        = findForbiddenText;
+window.applyTheme               = applyTheme;
+window.toggleTheme              = toggleTheme;
+window.getConnectionProgress    = getConnectionProgress;
+window.hapticLight              = hapticLight;
+window.hapticMedium             = hapticMedium;
+window.hapticHeavy              = hapticHeavy;
+window.updateHeaderAvatar       = updateHeaderAvatar;
+window.prefetchPage             = prefetchPage;
+window.showReconnectBanner      = showReconnectBanner;
+window.hideReconnectBanner      = hideReconnectBanner;
