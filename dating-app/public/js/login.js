@@ -88,6 +88,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     // validation while they're visually hidden.
     loginUsernameInput.disabled = true;
     loginPasswordInput.disabled = true;
+    // Enable the 2FA code field — it is disabled by default (hidden step) so
+    // the hidden `required` input can never block the credentials step.
+    login2faCode.disabled = false;
     login2faError.classList.add('hidden');
     login2faCode.value = '';
     setTimeout(() => login2faCode.focus(), 50);
@@ -98,6 +101,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     loginCredentialsDiv.classList.remove('hidden');
     loginUsernameInput.disabled = false;
     loginPasswordInput.disabled = false;
+    // Re-disable the 2FA code field so its `required` validation can't block
+    // the credentials step when the step is hidden.
+    login2faCode.disabled = true;
     login2faCode.value = '';
   }
 
