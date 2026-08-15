@@ -9,46 +9,12 @@
   
   <link href="https://fonts.googleapis.com" rel="preconnect"/>
   <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
-  <link rel="preconnect" href="https://cdn.tailwindcss.com">
   <link rel="dns-prefetch" href="//fonts.googleapis.com">
-  <link rel="dns-prefetch" href="//cdn.tailwindcss.com">
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..700;1,400..700&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet"/>
   <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
   
-  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/dexie/3.2.4/dexie.min.js"></script>
-  <script id="tailwind-config">
-    tailwind.config = {
-      darkMode: "class",
-      theme: {
-        extend: {
-          colors: {
-            "on-secondary-fixed": "#2b160a", "outline-variant": "#dec0ba", "on-surface": "#1b1c1c",
-            "on-tertiary": "#ffffff", "tertiary-fixed-dim": "#cbc5c2", "surface-bright": "#fbf9f8",
-            "on-tertiary-fixed-variant": "#494644", "primary": "#a53b29", "surface-dim": "#dcd9d9",
-            "on-primary-fixed-variant": "#842415", "tertiary-fixed": "#e7e1de", "error": "#ba1a1a",
-            "error-container": "#ffdad6", "inverse-surface": "#303030", "on-surface-variant": "#57423e",
-            "on-secondary-container": "#795a4a", "primary-fixed": "#ffdad4", "surface": "#fbf9f8",
-            "outline": "#8b716d", "tertiary-container": "#a8a3a0", "on-primary-container": "#731709",
-            "secondary-container": "#fdd4c0", "surface-container-low": "#f5f3f2", "surface-container": "#f0eded",
-            "surface-tint": "#a53b29", "surface-container-highest": "#e4e2e1", "secondary-fixed-dim": "#e6beab",
-            "on-background": "#1b1c1c", "on-error": "#ffffff", "secondary": "#765848",
-            "on-primary-fixed": "#3f0300", "surface-container-high": "#eae8e7", "surface-container-lowest": "#ffffff",
-            "background": "#fbf9f8", "inverse-primary": "#ffb4a6", "on-error-container": "#93000a",
-            "on-tertiary-fixed": "#1d1b19", "on-secondary": "#ffffff", "inverse-on-surface": "#f3f0f0",
-            "secondary-fixed": "#ffdbca", "primary-container": "#ff7e67", "on-primary": "#ffffff",
-            "on-tertiary-container": "#3c3a37", "on-secondary-fixed-variant": "#5c4132", "surface-variant": "#e4e2e1",
-            "primary-fixed-dim": "#ffb4a6", "tertiary": "#615e5b"
-          },
-          borderRadius: { DEFAULT: "1rem", lg: "2rem", xl: "3rem", full: "9999px" },
-          fontFamily: { 
-            sans: ["Plus Jakarta Sans", "sans-serif"],
-            serif: ["Playfair Display", "Georgia", "serif"]
-          }
-        }
-      }
-    };
-  </script>
+  <link rel="stylesheet" href="css/tailwind.css">
+  <script src="js/dexie.min.js"></script>
   <link href="styles.css?v=282" rel="stylesheet"/>
 </head>
 <body class="bg-background text-on-background h-dvh overflow-hidden flex flex-col antialiased chat-page">
@@ -227,7 +193,7 @@
         <span class="material-symbols-outlined text-4xl text-white material-fill">videocam</span>
       </div>
       <h3 class="text-2xl font-bold text-primary mb-2">Face Reveal Time!</h3>
-      <p class="text-on-surface-variant text-sm mb-2">Ready to meet face-to-face? If both agree, you'll get a Google Meet link to video call each other!</p>
+      <p class="text-on-surface-variant text-sm mb-2">Ready to meet face-to-face? If both agree, you'll get a private video call room to talk live!</p>
       <p class="text-on-surface-variant text-xs mb-4">You can still keep chatting even after the call.</p>
       <!-- Safety-first: shown BEFORE the user commits to meeting a stranger -->
       <div class="bg-error/5 border border-error/15 rounded-xl p-3 mb-5 text-left">
@@ -261,7 +227,7 @@
       </div>
       <h3 class="text-2xl font-bold text-primary mb-2">Video Call Ready!</h3>
       <p class="text-on-surface-variant text-sm mb-2">Your private video call room is ready. Both of you will connect instantly!</p>
-      <p class="text-on-surface-variant text-xs mb-4">Works seamlessly on mobile and desktop with zero login required.</p>
+      <p class="text-on-surface-variant text-xs mb-4">Powered by Jitsi Meet — works on mobile and desktop with zero login required.</p>
       <div class="bg-error/5 border border-error/15 rounded-xl p-3 mb-4 text-left">
         <p class="text-xs font-bold text-error mb-1.5 flex items-center gap-1"><span class="material-symbols-outlined text-[14px] material-fill">shield</span> Before you join</p>
         <ul class="text-[11px] text-on-surface-variant space-y-1 list-disc list-inside leading-relaxed">
@@ -274,7 +240,7 @@
         <span class="material-symbols-outlined text-xl">videocam</span> Join Video Call
       </button>
       <button id="meet-copy-btn" class="w-full py-2.5 text-primary font-semibold text-xs hover:underline transition-all mb-2 flex items-center justify-center gap-1">
-        <span class="material-symbols-outlined text-sm">content_copy</span> Copy Meeting Link
+        <span class="material-symbols-outlined text-sm">content_copy</span> Copy Video Call Link
       </button>
       <button id="meet-report-btn" class="w-full py-2.5 text-error font-semibold text-xs hover:underline transition-all mb-1 flex items-center justify-center gap-1">
         <span class="material-symbols-outlined text-sm">warning</span> Something went wrong at the meetup? Report it

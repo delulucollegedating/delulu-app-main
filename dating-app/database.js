@@ -1206,11 +1206,12 @@ const connectionOps = {
         const field = isFrom ? 'from_identity_reveal' : 'to_identity_reveal';
         const otherVal = isFrom ? conn.to_identity_reveal : conn.from_identity_reveal;
         const bothRevealed = otherVal === 1;
-        const meetingCode = bothRevealed ? (conn.meeting_code || generateMeetingCode()) : null;
-        transaction.update(connDocRef, bothRevealed
-          ? { [field]: 1, status: 'revealed', meeting_code: meetingCode }
-          : { [field]: 1 });
-        result = { success: true, bothRevealed, meeting_code: meetingCode };
+        // NOTE: identity reveal (Day 7) NEVER creates a meeting code or moves the
+        // connection to 'revealed'. The meeting flow unlocks only after BOTH
+        // users complete the Day-10 face reveal — enforced server-side here so a
+        // stale or tampered client can never trigger it early.
+        transaction.update(connDocRef, { [field]: 1 });
+        result = { success: true, bothRevealed };
       }));
     } catch (txErr) {
       return { error: 'Failed to process identity reveal. Please try again.' };
@@ -2359,7 +2360,8 @@ const blockOps = {
   }
 };
 
-// Generate a random Google Meet meeting code (xxx-xxxx-xxx format)
+// Generate a random video-room code (xxx-xxxx-xxx format) used to build the
+// Jitsi Meet room URL shown after the mutual Day-10 face reveal.
 function generateMeetingCode() {
   const chars = 'abcdefghijklmnopqrstuvwxyz';
   const p1 = Array.from({ length: 3 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');

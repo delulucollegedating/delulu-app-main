@@ -203,6 +203,15 @@ const outboxQueue = {
     } catch (e) {}
   },
 
+  async updateRetry(clientUuid, item) {
+    try {
+      await CHAT_CACHE_DB.pending.update(clientUuid, {
+        retry_count: (item.retry_count || 0) + 1,
+        terminal_notified: 0
+      });
+    } catch (e) {}
+  },
+
   async getAllPending(connectionId) {
     try {
       if (connectionId) {
@@ -241,38 +250,26 @@ const outboxQueue = {
             payload.is_encrypted = 1;
             payload.iv = item.iv;
           }
-          const res = await fetch(resolveUrl('/api/messages/send'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify(payload)
-          });
-          const data = await res.json();
-          if (res.status === 400) {
+          // Send through the shared authenticated API helper so the current
+          // Android Bearer token (or the web session cookie) is always attached.
+          // This keeps a single auth implementation instead of a second raw-fetch
+          // path that would silently fail once the cookie session expires.
+          const data = await window.apiCall('/api/messages/send', 'POST', payload);
+          if (data && data.success) {
+            await outboxQueue.dequeue(item.client_uuid);
+            outboxQueue.notify('outbox-message-sent', { item, message: data.message });
+          } else {
+            // Server returned success:false — treat as retryable
+            await outboxQueue.updateRetry(item.client_uuid, item);
+          }
+        } catch (e) {
+          if (e && e.status === 400) {
             // Permanently rejected (e.g. blocked/forbidden content) — drop, never retry
             await outboxQueue.dequeue(item.client_uuid);
             continue;
           }
-          if (res.ok && data.success) {
-            await outboxQueue.dequeue(item.client_uuid);
-            outboxQueue.notify('outbox-message-sent', { item, message: data.message });
-          } else {
-            // Increment retry count for non-API errors (server returned error)
-            try {
-              await CHAT_CACHE_DB.pending.update(item.client_uuid, {
-                retry_count: (item.retry_count || 0) + 1,
-                terminal_notified: 0
-              });
-            } catch (e) {}
-          }
-        } catch (e) {
-          // Network failure — increment retry count
-          try {
-            await CHAT_CACHE_DB.pending.update(item.client_uuid, {
-              retry_count: (item.retry_count || 0) + 1,
-              terminal_notified: 0
-            });
-          } catch (innerErr) {}
+          // Network failure or server error — increment retry count
+          await outboxQueue.updateRetry(item.client_uuid, item);
           console.warn('Outbox flush item failed (will retry):', e);
         }
       }

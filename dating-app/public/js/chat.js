@@ -82,7 +82,7 @@ function resetIdleTimer() {
   lastActivityTime = Date.now();
   if (isIdle) {
     isIdle = false;
-    console.log('User active — resuming polling fallback');
+    dbg('User active — resuming polling fallback');
     pollInterval = 3000;
     scheduleNextPoll();
   }
@@ -248,14 +248,24 @@ function clientSanitizeConnection(c, userId) {
   };
 }
 
-function initRealtimeStream() {
-  if (!currentConnId || eventSource) return;
+let _sseOpening = false;
 
-  console.log('[SSE] Connecting to real-time event stream...');
-  eventSource = new EventSource(resolveUrl(`/api/connections/${currentConnId}/stream`), { withCredentials: true });
+async function initRealtimeStream() {
+  if (!currentConnId || eventSource || _sseOpening) return;
+  _sseOpening = true;
+  try {
+    // EventSource cannot send an Authorization header (and Capacitor Android has
+    // no session cookie), so exchange the regular auth for a short-lived signed
+    // stream token that is passed as a query parameter.
+    const streamUrl = await buildSSEUrl(`/api/connections/${currentConnId}/stream`);
+    dbg('[SSE] Connecting to real-time event stream...');
+    eventSource = new EventSource(streamUrl);
+  } finally {
+    _sseOpening = false;
+  }
 
   eventSource.onopen = () => {
-    console.log('[SSE] Connection established successfully.');
+    dbg('[SSE] Connection established successfully.');
     streamReady = true;
     stopPollingFallback();
     stopStatusPollingFallback();
@@ -268,7 +278,7 @@ function initRealtimeStream() {
     }
 
     // Resync connection state & fetch message delta when connecting/reconnecting
-    console.log('[SSE] Stream connected. Syncing connection info & message state.');
+    dbg('[SSE] Stream connected. Syncing connection info & message state.');
     scheduleChatInfoRefresh();
     if (currentConnId && typeof loadMessages === 'function') {
       // The stream already contains message payloads. A delta refresh repairs
@@ -289,7 +299,7 @@ function initRealtimeStream() {
     }
 
     if (streamEvent.type === 'game') {
-      console.log('[SSE] Received game update event. Refreshing chat state...');
+      dbg('[SSE] Received game update event. Refreshing chat state...');
       if (Object.prototype.hasOwnProperty.call(streamEvent, 'active_game')) {
         syncActiveGame({
           from_user_id: streamEvent.from_user_id,
@@ -348,7 +358,7 @@ function initRealtimeStream() {
         handlePresenceChange(streamEvent.status === 'online');
       }
     } else if (streamEvent.type === 'messages') {
-      console.log('[SSE] Received message update event. Refreshing messages...');
+      dbg('[SSE] Received message update event. Refreshing messages...');
       loadMessages(false, true).catch(() => {});
     } else if (streamEvent.type === 'ended') {
       sessionStorage.setItem('connection_ended_message', 'This chat has ended.');
@@ -357,7 +367,7 @@ function initRealtimeStream() {
   };
 
   eventSource.onerror = () => {
-    console.warn('[SSE] EventSource disconnected. Falling back to HTTP polling.');
+    dbgWarn('[SSE] EventSource disconnected. Falling back to HTTP polling.');
     
     streamReady = false;
     isReconnecting = true;
@@ -667,7 +677,7 @@ async function initializeChat() {
     socket.on('status_change', (data) => {
       if (Number(data.connection_id) === Number(currentConnId)) {
         if (!streamReady) {
-          console.log('[Socket] status_change received — updating chat info');
+          dbg('[Socket] status_change received — updating chat info');
           loadChatInfo();
         }
       }
@@ -677,7 +687,7 @@ async function initializeChat() {
     socket.on('game_update', (data) => {
       const connId = data.connection_id || data.connectionId;
       if (Number(connId) === Number(currentConnId)) {
-        console.log('[Socket] game_update received:', data);
+        dbg('[Socket] game_update received:', data);
         syncActiveGame({
           from_user_id: data.from_user_id,
           to_user_id: data.to_user_id,
@@ -688,16 +698,9 @@ async function initializeChat() {
 
     socket.on('identity-revealed', (data) => {
       if (data.connection_id == currentConnId) {
-        // This event only fires when BOTH have revealed (server condition).
-        // Meeting code is always present — show modal and update status directly.
-        if (data.meeting_code) showMeetingModal(data.meeting_code);
-        
-        // Update status bar directly — no API fetch needed
-        const statusEl = document.getElementById('chat-status');
-        if (statusEl && data.meeting_code) {
-          statusEl.innerHTML = `<span class="flex items-center gap-1 text-green-600"><span class="material-symbols-outlined text-[14px]">videocam</span> Meeting ready! <a href="#" onclick="showMeetingModal('${data.meeting_code}'); return false;" class="underline font-semibold">Join</a></span>`;
-        }
-        // Hide the reveal button since both agreed
+        // Day-7 identity reveal never unlocks the meeting flow — only the Day-10
+        // face reveal does. Refresh so the UI reflects the revealed state.
+        loadChatInfo();
         const idBtn = document.getElementById('btn-identity-reveal');
         if (idBtn) idBtn.classList.add('hidden');
       }
@@ -932,6 +935,14 @@ async function initializeChat() {
     if (hasForbiddenText(content)) {
       showToast(FORBIDDEN_MESSAGE_ERROR, 'error');
       chatInput.focus();
+      return;
+    }
+    // Never silently downgrade to plaintext: if E2EE could not be established,
+    // the composer is disabled (see showE2EEUnavailable) — guard here as well in
+    // case the input was enabled before the key check completed.
+    if (!isE2EEActive) {
+      showToast('End-to-end encryption is unavailable for this chat. Sending is disabled to protect your privacy.', 'error');
+      showE2EEUnavailable();
       return;
     }
     isSending = true;
@@ -1442,6 +1453,40 @@ function scheduleChatInfoRefresh() {
   });
 }
 
+let e2eeUnavailableShown = false;
+
+// If E2EE cannot be established (missing local private key or partner public
+// key), the app must never silently send plaintext while the user may believe
+// the chat is encrypted. Show an explicit warning and block sending until
+// encryption is restored. Chat history remains readable.
+function showE2EEUnavailable() {
+  const chatInput = document.getElementById('chat-input');
+  const sendBtn = document.getElementById('btn-chat-send');
+  const chatForm = document.getElementById('chat-form');
+  if (chatInput) {
+    chatInput.disabled = true;
+    chatInput.placeholder = 'Encryption unavailable — sending disabled';
+  }
+  if (sendBtn) sendBtn.disabled = true;
+  if (chatForm) chatForm.classList.add('opacity-50');
+
+  const statusEl = document.getElementById('chat-status');
+  if (statusEl) {
+    statusEl.innerHTML = '<span class="flex items-center gap-1 text-error font-semibold"><span class="material-symbols-outlined text-[14px]">lock_open</span> End-to-end encryption unavailable — sending disabled</span>';
+  }
+
+  if (e2eeUnavailableShown) return;
+  e2eeUnavailableShown = true;
+  const cont = document.getElementById('chat-messages');
+  if (cont) {
+    const banner = document.createElement('div');
+    banner.id = 'e2ee-unavailable-banner';
+    banner.className = 'mx-3 mt-2 px-3 py-2 rounded-xl bg-error/10 border border-error/25 text-error text-[11px] font-medium flex items-start gap-2';
+    banner.innerHTML = '<span class="material-symbols-outlined text-[14px] shrink-0 mt-px">lock_open</span><span>End-to-end encryption could not be established for this chat because a secure key is missing. To protect your privacy, sending new messages is disabled until encryption is available. You can still read your chat history.</span>';
+    cont.prepend(banner);
+  }
+}
+
 async function loadChatInfo() {
   try {
     const data = await apiCall(`/api/connections/${currentConnId}`);
@@ -1460,12 +1505,14 @@ async function loadChatInfo() {
         otherPublicKey = await E2EECrypto.importPublicKeyFromJwk(c.other_public_key);
         sharedSecretKey = await E2EECrypto.deriveSharedSecret(myPrivateKey, otherPublicKey);
         isE2EEActive = true;
-        console.log('E2EE is active for this chat!');
+        dbg('E2EE is active for this chat!');
       } catch (cryptoErr) {
         console.error('Failed to establish E2EE key agreement:', cryptoErr);
+        showE2EEUnavailable();
       }
     } else {
-      console.log('E2EE fallback: Missing keys. Chatting in plain text.');
+      dbgWarn('E2EE unavailable: missing keys.');
+      showE2EEUnavailable();
     }
     
     // Display lock icon next to name if encrypted
@@ -1535,9 +1582,11 @@ function updateIdentityRevealModal(c) {
   const identityRevealAt = c.identity_reveal_available_at ? new Date(c.identity_reveal_available_at).getTime() : null;
   const daysSinceChatStarted = Math.floor((now - chatStarted) / (24 * 60 * 60 * 1000));
 
-  // If both already revealed — show meeting modal instead
+  // Both users completed the Day-7 identity reveal. The meeting flow is NOT
+  // unlocked here — it only becomes available after the Day-10 face reveal, so
+  // show the waiting state (the server never exposes a meeting code pre-face-reveal).
   if (c.both_identity_revealed) {
-    if (c.meeting_code) showMeetingModal(c.meeting_code);
+    waitingDiv.classList.remove('hidden');
     return;
   }
 
@@ -1619,8 +1668,8 @@ function updateChatStatus(c) {
     const isFaceRevealDue = now >= faceRevealAt;
     
     // Both agreed to face reveal — show meeting
-    if (c.both_face_revealed) {
-      if (c.meeting_code && !document.getElementById('modal-google-meet').classList.contains('scale-100')) {
+    if (c.both_face_revealed && c.meeting_code) {
+      if (!document.getElementById('modal-google-meet').classList.contains('scale-100')) {
         showMeetingModal(c.meeting_code);
       }
       if (statusEl) {
@@ -1656,7 +1705,13 @@ function updateChatStatus(c) {
       statusEl.innerHTML = `<span class="text-on-surface-variant/80">Face reveal in ${daysUntilFace}d</span>`;
     }
   } else if (c.status === 'revealed') {
-    if (statusEl) statusEl.innerHTML = `<span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold"><span class="material-symbols-outlined text-[14px]">videocam</span> Meeting ready! <a href="#" onclick="showMeetingModal('${c.meeting_code}'); return false;" class="underline font-bold">Join</a></span>`;
+    // 'revealed' is only ever set by the Day-10 face reveal — but guard on the
+    // code anyway so a legacy doc without one can never open a bogus room.
+    if (statusEl && c.meeting_code) {
+      statusEl.innerHTML = `<span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold"><span class="material-symbols-outlined text-[14px]">videocam</span> Meeting ready! <a href="#" onclick="showMeetingModal('${c.meeting_code}'); return false;" class="underline font-bold">Join</a></span>`;
+    } else if (statusEl) {
+      statusEl.textContent = 'Revealed';
+    }
   } else {
     if (statusEl) statusEl.textContent = c.status;
   }
@@ -2557,7 +2612,10 @@ function openExternalUrl(url) {
 }
 
 function showMeetingModal(meetingCode) {
-  const cleanCode = (meetingCode || '').replace(/[^a-zA-Z0-9-]/g, '').toLowerCase() || 'delulu-room';
+  // The meeting flow only exists after both users complete the Day-10 face
+  // reveal — a missing code means the meeting is not available yet.
+  if (!meetingCode) return;
+  const cleanCode = String(meetingCode).replace(/[^a-zA-Z0-9-]/g, '').toLowerCase() || 'delulu-room';
   
   // Instant direct 1-click working video room (Jitsi Meet — 100% free, no login, camera & mic work)
   const videoCallUrl = `https://meet.jit.si/Delulu-Meet-${cleanCode}`;
@@ -2918,9 +2976,9 @@ async function startGame(gameType) {
 }
 
 function syncActiveGame(c) {
-  console.log("[syncActiveGame] c.active_game:", JSON.stringify(c.active_game || null));
-  console.log("[syncActiveGame] currentUser:", JSON.stringify(currentUser));
-  console.log("[syncActiveGame] connection info:", `from=${c.from_user_id}, to=${c.to_user_id}`);
+  dbg("[syncActiveGame] c.active_game:", JSON.stringify(c.active_game || null));
+  dbg("[syncActiveGame] currentUser:", JSON.stringify(currentUser));
+  dbg("[syncActiveGame] connection info:", `from=${c.from_user_id}, to=${c.to_user_id}`);
   const existingGame = document.querySelector('[id^="game-"]');
   if (!c.active_game) {
     // If the game card is currently displaying the match result to the user,

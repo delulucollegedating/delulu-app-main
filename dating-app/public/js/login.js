@@ -140,20 +140,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     const email = inputEmail.value.trim().toLowerCase();
     const domain = email.split('@')[1];
 
-    // Client-side validation
+    // Client-side validation — UX mirror only. The server is the authoritative
+    // source of truth (ALLOWED_EMAIL_DOMAINS in server.js); this list must stay
+    // in sync with it and is never a security boundary.
     const allowedDomains = [
-      'rishihood.edu.in', 
-      'vitbhopal.ac.in', 
-      'nst.rishihood.edu.in', 
+      'rishihood.edu.in',
+      'vitbhopal.ac.in',
+      'nst.rishihood.edu.in',
       'psy.rishihood.edu.in',
-      'csds.rishihood.edu.in',
-      'makers.rishihood.edu.in',
-      'design.rishihood.edu.in',
-      // Chandigarh University
-      'cuchd.in',
-      'cumail.in',
-      // Amity University
-      's.amity.edu'
+      'som.rishihood.edu.in',
+      'sod.rishihood.edu.in',
+      'soh.rishihood.edu.in'
     ];
     if (!domain || !allowedDomains.includes(domain)) {
       errEl.textContent = 'Invalid email';

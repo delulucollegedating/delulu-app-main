@@ -271,16 +271,18 @@ app.use((req, res, next) => {
 });
 
 // Security headers via Helmet with Content Security Policy allowlist.
-// NOTE: 'unsafe-inline'/'unsafe-eval' are required by the Tailwind Play CDN and
-// the inline theme-bootstrapping scripts in every HTML page. `http:` is removed
-// everywhere so the site never loads subresources over plaintext, and the CDN
-// hosts are pinned explicitly. Moving the inline scripts to files/nonces would
-// let us drop 'unsafe-inline' too — tracked as a follow-up.
+// Runtime dependencies are now bundled locally (compiled Tailwind CSS, vendored
+// Dexie and Three.js), so the script-src CDN hosts were removed — the app loads
+// no third-party scripts at runtime. Google Fonts stylesheets are the only
+// remaining external resource. 'unsafe-inline' remains for the inline
+// theme-bootstrapping scripts in every HTML page; the Tailwind Play CDN and its
+// 'unsafe-eval' requirement are gone. `http:` is blocked everywhere so the site
+// never loads subresources over plaintext.
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'", "https:"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "blob:", "https://cdn.tailwindcss.com", "https://cdnjs.cloudflare.com", "https:"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "blob:", "https:"],
       scriptSrcAttr: ["'self'", "'unsafe-inline'"],
       styleSrc: ["'self'", "'unsafe-inline'", "https:"],
       fontSrc: ["'self'", "https:", "data:"],
@@ -737,6 +739,44 @@ function verifyAuthToken(tokenStr, version = 0) {
   return null;
 }
 
+// ── Short-lived SSE access tokens ───────────────────────────────────────────
+// EventSource cannot attach an Authorization header (and Capacitor Android has
+// no session cookie), so the client mints a signed, single-purpose token via the
+// authenticated API and passes it as a query parameter. The token is bound to
+// the user id, expires in 60 seconds, and is signed with SESSION_SECRET — even
+// if it appears in logs, it can only open a temporary stream as that user and
+// can never be used to read or write account data. The long-lived HMAC bearer
+// token is deliberately never placed in an SSE URL.
+const SSE_TOKEN_TTL_MS = 60 * 1000;
+
+function generateSSEToken(userId) {
+  const numUserId = Number(userId);
+  if (!numUserId) return null;
+  const expires = Date.now() + SSE_TOKEN_TTL_MS;
+  const data = `${numUserId}:${expires}`;
+  const hmac = crypto.createHmac('sha256', process.env.SESSION_SECRET).update(data).digest('hex');
+  return `${numUserId}:${expires}:${hmac}`;
+}
+
+function verifySSEToken(tokenStr) {
+  if (!tokenStr || typeof tokenStr !== 'string') return null;
+  const parts = tokenStr.split(':');
+  if (parts.length !== 3) return null;
+  const [userIdStr, expiresStr, signature] = parts;
+  const userId = Number(userIdStr);
+  const expires = Number(expiresStr);
+  if (!userId || !expires || isNaN(userId) || isNaN(expires)) return null;
+  if (Date.now() > expires) return null;
+  const expected = crypto.createHmac('sha256', process.env.SESSION_SECRET)
+    .update(`${userIdStr}:${expiresStr}`).digest('hex');
+  if (typeof signature !== 'string' || signature.length !== expected.length || !/^[0-9a-f]+$/i.test(signature)) return null;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expected, 'hex')) ? userId : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 // Current token_version for a user (short-TTL cache; invalidated on bump).
 async function getTokenVersion(userId) {
   const numUserId = Number(userId);
@@ -776,6 +816,24 @@ app.use(async (req, res, next) => {
   }
   next();
 });
+
+// SSE streams are opened by EventSource, which cannot attach an Authorization
+// header and (on Capacitor Android) has no session cookie. Accept the short-lived
+// signed sse_token query parameter when the session is absent. The token only
+// grants a temporary stream; all other API routes keep requiring full auth.
+function requireSSEAuth(req, res, next) {
+  if (req.session && req.session.userId) return next();
+  const tokenStr = (typeof req.query.sse_token === 'string' && req.query.sse_token.length <= 256)
+    ? req.query.sse_token
+    : null;
+  const userId = verifySSEToken(tokenStr);
+  if (!userId) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+  if (!req.session) req.session = {};
+  req.session.userId = userId;
+  next();
+}
 
 // Body parsing with explicit size limits so oversized JSON/form payloads are
 // rejected by the parser (HTTP 413) before application validation runs. 32kb
@@ -968,6 +1026,14 @@ function sanitizeConnection(c, userId) {
   const identityRevealAvailable = c.identity_reveal_available_at || c.reveal_available_at || null;
   const faceRevealAvailable = c.face_reveal_available_at || c.reveal_available_at || null;
   
+  // The meeting code (video room) must only ever reach the client after BOTH
+  // users complete the Day-10 face reveal — never from the Day-7 identity reveal
+  // and never from legacy documents that still carry an old meeting code.
+  const bothFaceRevealed = (c.from_face_reveal || 0) === 1 && (c.to_face_reveal || 0) === 1;
+  if (!bothFaceRevealed) {
+    delete copy.meeting_code;
+  }
+
   return {
     ...copy,
     identity_reveal_available_at: identityRevealAvailable,
@@ -977,7 +1043,7 @@ function sanitizeConnection(c, userId) {
     both_identity_revealed: fromIdentityReveal === 1 && toIdentityReveal === 1,
     my_face_reveal: isFrom ? c.from_face_reveal || 0 : c.to_face_reveal || 0,
     other_face_reveal: isFrom ? c.to_face_reveal || 0 : c.from_face_reveal || 0,
-    both_face_revealed: (c.from_face_reveal || 0) === 1 && (c.to_face_reveal || 0) === 1,
+    both_face_revealed: bothFaceRevealed,
     face_reveal_declined_by_other: isFrom 
       ? c.face_reveal_declined_by === c.to_user_id 
       : c.face_reveal_declined_by === c.from_user_id
@@ -1016,6 +1082,21 @@ app.get('/api/session', async (req, res) => {
   } catch (err) {
     console.error('GET /api/session error:', err);
     res.status(500).json({ error: 'Failed to verify session', details: err.message });
+  }
+});
+
+// Mint a short-lived SSE access token for EventSource streams. The Android app
+// cannot send an Authorization header from EventSource, so it exchanges its
+// regular HMAC bearer token for this temporary, single-purpose stream token.
+// The long-lived HMAC token is never exposed in a stream URL.
+app.get('/api/sse-token', requireAuth, async (req, res) => {
+  try {
+    const token = generateSSEToken(req.session.userId);
+    if (!token) return res.status(500).json({ error: 'Failed to issue stream token' });
+    res.json({ token, expires_in_ms: SSE_TOKEN_TTL_MS });
+  } catch (err) {
+    console.error('GET /api/sse-token error:', err);
+    res.status(500).json({ error: 'Failed to issue stream token' });
   }
 });
 
@@ -2086,8 +2167,19 @@ const activeRoomUsers = new Map(); // connectionId -> Set<userId>
 // Each open SSE stream holds a socket, an EventEmitter listener and a heartbeat
 // interval, so a malicious or careless client can exhaust server resources by
 // opening many of them. Cap per user and per IP; excess connections get 429.
-const MAX_SSE_PER_USER = 5;
-const MAX_SSE_PER_IP = 20;
+//
+// The per-user cap is the real protection against tab explosion / one-account
+// floods and stays tight. The per-IP cap must stay HIGH: campus WiFi NATs every
+// student behind one public IP, so a low hardcoded value (e.g. 20) would refuse
+// the 21st concurrent student with a 429. Both caps are env-tunable so ops can
+// raise MAX_SSE_PER_IP further if a single NAT carries more concurrent students
+// (the distributed load test is the check that finds this).
+function resolveSseCap(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : fallback;
+}
+const MAX_SSE_PER_USER = resolveSseCap(process.env.MAX_SSE_PER_USER, 5);
+const MAX_SSE_PER_IP = resolveSseCap(process.env.MAX_SSE_PER_IP, 500);
 const _sseCounts = new Map(); // key -> count
 
 function trackSSEConnection(key, max) {
@@ -2136,7 +2228,7 @@ function removeRoomPresence(connectionId, userId) {
 }
 
 // SSE Endpoint for real-time game/status/typing/presence updates
-app.get('/api/connections/:id/stream', requireAuth, async (req, res) => {
+app.get('/api/connections/:id/stream', requireSSEAuth, async (req, res) => {
   const connectionId = req.params.id;
   const userId = req.session.userId;
 
@@ -2226,7 +2318,7 @@ app.post('/api/connections/:id/typing', requireAuth, typingLimiter, async (req, 
 // ── Per-User SSE Stream (powers messages list real-time updates) ─────────────
 // Each user connects here once from the messages list page.
 // Events: { type: 'message', connectionId, lastMessage, lastMessageTime, senderId }
-app.get('/api/user/stream', requireAuth, (req, res) => {
+app.get('/api/user/stream', requireSSEAuth, (req, res) => {
   const userId = req.session.userId;
 
   // Enforce per-user/per-IP connection caps before opening the stream.
@@ -2324,11 +2416,9 @@ app.post('/api/connections/identity-reveal', requireAuth, async (req, res) => {
   if (result.error) return res.status(400).json(result);
   
   if (result.bothRevealed) {
-    // Both users revealed identity — the connection SSE stream carries the code.
-    connectionEmitter.emit(`update:${connection_id}`, { 
-      type: 'revealed', 
-      meeting_code: result.meeting_code 
-    });
+    // Both users revealed their identity (Day 7). No meeting code is involved —
+    // the meeting flow only unlocks after the Day-10 face reveal.
+    connectionEmitter.emit(`update:${connection_id}`, { type: 'identity-revealed' });
   } else {
     // Only this user revealed, waiting for the other
     connectionEmitter.emit(`update:${connection_id}`, { type: 'game' });
@@ -3254,9 +3344,16 @@ module.exports = {
   __authTestUtils: {
     generateAuthToken,
     verifyAuthToken,
+    generateSSEToken,
+    verifySSEToken,
     validatePasswordStrength,
     isCommonPassword,
     checkPwnedPassword,
-    MIN_PASSWORD_LENGTH
+    MIN_PASSWORD_LENGTH,
+    resolveSseCap
+  },
+  // Kept private-by-convention; used by the connection/meeting-flow contract tests.
+  __connectionTestUtils: {
+    sanitizeConnection
   }
 };

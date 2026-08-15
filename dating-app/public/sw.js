@@ -22,13 +22,14 @@
 // ── Cache Version ─────────────────────────────────────────────────────────────
 // Increment this string whenever you deploy a new version of the app.
 // This causes the service worker to delete the old cache and re-download assets.
-const CACHE_VERSION = 'delulu-v7';
+const CACHE_VERSION = 'delulu-v8';
 
 // ── Static Assets to Pre-Cache on Install ─────────────────────────────────────
 // These files are cached immediately when the service worker installs.
 // Keep this list lean — only include files that change rarely.
 const PRECACHE_ASSETS = [
   '/styles.css',
+  '/css/tailwind.css',
   '/js/shared.js',
   '/js/profanity-words.generated.js',
   '/js/chat-cache.js',
@@ -40,6 +41,7 @@ const PRECACHE_ASSETS = [
   '/js/crypto.js',
   '/js/image-compress.js',
   '/js/dexie.min.js',
+  '/js/three.min.js',
   '/logo.png',
   '/favicon.png',
   '/favicon.ico'
@@ -60,11 +62,8 @@ const BYPASS_PATTERNS = [
   /\/api\//,
   /\/stream$/,
   /\/uploads\//,
-  /cdn\.tailwindcss\.com/,
   /fonts\.googleapis\.com/,
   /fonts\.gstatic\.com/,
-  /cdn\.jsdelivr\.net/,
-  /cdnjs\.cloudflare\.com/,
 ];
 
 // ── Install: Pre-Cache Static Assets ─────────────────────────────────────────

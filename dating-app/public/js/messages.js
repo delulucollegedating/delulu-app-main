@@ -4,9 +4,20 @@ let _sseBackoffMs = 2000; // starts at 2s, doubles up to 30s
 let _sseBackoffTimer = null;
 let _totalUnread = 0;
 
-function initUserStream() {
-  if (userEventSource) return;
-  userEventSource = new EventSource(resolveUrl('/api/user/stream'));
+let _userStreamOpening = false;
+
+async function initUserStream() {
+  if (userEventSource || _userStreamOpening) return;
+  _userStreamOpening = true;
+  try {
+    // EventSource cannot send an Authorization header (and Capacitor Android has
+    // no session cookie), so exchange the regular auth for a short-lived signed
+    // stream token passed as a query parameter.
+    const streamUrl = await buildSSEUrl('/api/user/stream');
+    userEventSource = new EventSource(streamUrl);
+  } finally {
+    _userStreamOpening = false;
+  }
 
   userEventSource.onmessage = (event) => {
     if (!event.data || event.data.startsWith(':')) return;

@@ -10,6 +10,25 @@ const isLocalEnv = !isCapacitorNative && typeof window !== 'undefined' && (
   (window.location.port === '3000' || window.location.port === '5000' || window.location.port === '8080')
 );
 
+// ===== Debug logging gate =====
+// Production builds must not log sensitive client state (SSE lifecycle, E2EE
+// status, connection ids, active user). Debug output only runs when explicitly
+// enabled with ?debug=1 on the URL or window.__DELULU_DEBUG=true (dev console).
+const DEBUG_LOGGING = typeof window !== 'undefined' && (
+  (typeof window.__DELULU_DEBUG === 'boolean' && window.__DELULU_DEBUG) ||
+  (typeof window.location !== 'undefined' && new URLSearchParams(window.location.search).get('debug') === '1')
+);
+
+function dbg(...args) {
+  if (!DEBUG_LOGGING) return;
+  console.log(...args);
+}
+
+function dbgWarn(...args) {
+  if (!DEBUG_LOGGING) return;
+  console.warn(...args);
+}
+
 const API_BASE = isLocalEnv ? window.location.origin : 'https://delulu-college.onrender.com';
 function resolveUrl(url) {
   if (!url) return '';
@@ -393,9 +412,42 @@ async function apiCall(url, method = 'GET', body = null) {
         return new Promise(() => {}); // Return pending promise to halt further execution while redirecting
       }
     }
-    throw new Error(data?.error || `Server error (${res.status})`);
+    // Attach the HTTP status so callers (e.g. the offline outbox) can tell
+    // permanent rejections (400) apart from transient server/network failures.
+    const err = new Error(data?.error || `Server error (${res.status})`);
+    err.status = res.status;
+    throw err;
   }
   return data;
+}
+
+// ===== Short-lived SSE access tokens =====
+// EventSource cannot attach an Authorization header, and Capacitor Android has
+// no session cookie — so before opening a stream the client exchanges its
+// regular auth (cookie or HMAC bearer token) for a signed, 60-second,
+// single-purpose stream token via /api/sse-token, then passes it as a query
+// parameter. The long-lived HMAC token is never placed in a stream URL.
+let _sseToken = null;
+let _sseTokenExpiresAt = 0;
+
+async function getSSEToken() {
+  if (_sseToken && Date.now() < _sseTokenExpiresAt - 5000) return _sseToken;
+  try {
+    const data = await apiCall('/api/sse-token');
+    if (data && data.token) {
+      _sseToken = data.token;
+      _sseTokenExpiresAt = Date.now() + (Number(data.expires_in_ms) || 60000);
+      return _sseToken;
+    }
+  } catch (e) { /* caller retries with backoff */ }
+  return null;
+}
+
+async function buildSSEUrl(path) {
+  const base = resolveUrl(path);
+  const token = await getSSEToken();
+  if (!token) return base; // web fallback: same-origin cookies still authenticate
+  return `${base}${base.includes('?') ? '&' : '?'}sse_token=${encodeURIComponent(token)}`;
 }
 
 function getAvatarHtml(username, avatar, options = {}) {
@@ -835,10 +887,10 @@ async function initPushNotifications() {
         web_push_subscription: sub.toJSON(),
         app_version: '1.0.0'
       }).catch(() => {});
-      console.log('Web Push device registered');
+      dbg('Web Push device registered');
     }
   } catch (err) {
-    console.log('Push notification setup deferred:', err.message);
+    dbg('Push notification setup deferred:', err.message);
   }
 }
 
@@ -999,6 +1051,8 @@ document.addEventListener('DOMContentLoaded', () => {
 // Assigning to window makes every utility reliably available cross-script.
 window.initPushNotifications    = initPushNotifications;
 window.apiCall                  = apiCall;
+window.getSSEToken              = getSSEToken;
+window.buildSSEUrl              = buildSSEUrl;
 window.showToast                = showToast;
 window.showUndoToast            = showUndoToast;
 window.showRichToast            = showRichToast;
@@ -1030,3 +1084,5 @@ window.updateHeaderAvatar       = updateHeaderAvatar;
 window.prefetchPage             = prefetchPage;
 window.showReconnectBanner      = showReconnectBanner;
 window.hideReconnectBanner      = hideReconnectBanner;
+window.dbg                      = dbg;
+window.dbgWarn                  = dbgWarn;
