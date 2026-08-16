@@ -3,7 +3,7 @@ import crypto from 'crypto';
 
 const { app, __authTestUtils, __connectionTestUtils } = require('../server.js');
 const { generateSSEToken, verifySSEToken, resolveSseCap } = __authTestUtils;
-const { sanitizeConnection } = __connectionTestUtils;
+const { sanitizeConnection, createMeetingRoom, normalizeMeetBaseUrl } = __connectionTestUtils;
 
 describe('SSE connection caps (campus NAT-friendly defaults)', () => {
   it('defaults the per-user cap to 5 (tab-explosion guard)', () => {
@@ -82,10 +82,11 @@ describe('Meeting flow gate (meeting code only after Day-10 face reveal)', () =>
     meeting_code: 'abc-defg-hij'
   };
 
-  it('strips the meeting code when only identity reveal (Day 7) is done', () => {
+  it('no longer exposes the removed Day-7 identity reveal fields', () => {
     const out = sanitizeConnection({ ...base, from_identity_reveal: 1, to_identity_reveal: 1 }, 1);
+    expect(out.both_identity_revealed).toBeUndefined();
+    expect(out.my_identity_reveal).toBeUndefined();
     expect(out.meeting_code).toBeUndefined();
-    expect(out.both_identity_revealed).toBe(true);
   });
 
   it('strips the meeting code when only one user face-revealed', () => {
@@ -102,5 +103,47 @@ describe('Meeting flow gate (meeting code only after Day-10 face reveal)', () =>
   it('also strips legacy meeting codes on documents with no reveal flags', () => {
     const out = sanitizeConnection({ ...base }, 1);
     expect(out.meeting_code).toBeUndefined();
+  });
+});
+
+describe('Meeting room provider chain (Daily → MEET_BASE_URL → public Jitsi)', () => {
+  const roomUrlPattern = (origin) => new RegExp(`^https://${origin}/Delulu-Meet-[a-z]{3}-[a-z]{4}-[a-z]{3}$`);
+
+  it('normalizes MEET_BASE_URL into a clean https origin', () => {
+    expect(normalizeMeetBaseUrl('meet.example.com')).toBe('https://meet.example.com');
+    expect(normalizeMeetBaseUrl('https://meet.example.com/')).toBe('https://meet.example.com');
+    expect(normalizeMeetBaseUrl('  https://meet.example.com  ')).toBe('https://meet.example.com');
+    expect(normalizeMeetBaseUrl('')).toBe('');
+    expect(normalizeMeetBaseUrl(null)).toBe('');
+    expect(normalizeMeetBaseUrl('http://bad host!!')).toBe('');
+    expect(normalizeMeetBaseUrl('javascript:alert(1)')).toBe('');
+  });
+
+  it('builds room links on the self-hosted MEET_BASE_URL when no Daily key is set', async () => {
+    const savedKey = process.env.DAILY_API_KEY;
+    const savedBase = process.env.MEET_BASE_URL;
+    delete process.env.DAILY_API_KEY;
+    process.env.MEET_BASE_URL = 'meet.example.com';
+    try {
+      const url = await createMeetingRoom();
+      expect(url).toMatch(roomUrlPattern('meet\\.example\\.com'));
+    } finally {
+      if (savedKey === undefined) delete process.env.DAILY_API_KEY; else process.env.DAILY_API_KEY = savedKey;
+      if (savedBase === undefined) delete process.env.MEET_BASE_URL; else process.env.MEET_BASE_URL = savedBase;
+    }
+  });
+
+  it('falls back to the public Jitsi room when no provider is configured', async () => {
+    const savedKey = process.env.DAILY_API_KEY;
+    const savedBase = process.env.MEET_BASE_URL;
+    delete process.env.DAILY_API_KEY;
+    delete process.env.MEET_BASE_URL;
+    try {
+      const url = await createMeetingRoom();
+      expect(url).toMatch(roomUrlPattern('meet\\.jit\\.si'));
+    } finally {
+      if (savedKey === undefined) delete process.env.DAILY_API_KEY; else process.env.DAILY_API_KEY = savedKey;
+      if (savedBase === undefined) delete process.env.MEET_BASE_URL; else process.env.MEET_BASE_URL = savedBase;
+    }
   });
 });

@@ -68,7 +68,7 @@ const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = rateLimit;
 const { initializeApp: firebaseInitializeApp, cert } = require('firebase-admin/app');
 const { getAuth: getFirebaseAuth } = require('firebase-admin/auth');
-const { getDB, seedDemoUsers, userOps, connectionOps, messageOps, otpOps, authTokenOps, invalidateUserCache, reportOps, blockOps, pushOps } = require('./database');
+const { getDB, seedDemoUsers, userOps, connectionOps, messageOps, otpOps, authTokenOps, invalidateUserCache, reportOps, blockOps, pushOps, createMeetingRoom, normalizeMeetBaseUrl } = require('./database');
 const fs = require('fs');
 const CircuitBreaker = require('./utils/circuitBreaker');
 const EmailQueue = require('./utils/emailQueue');
@@ -1020,15 +1020,12 @@ function sanitizeConnection(c, userId) {
   
   const copy = { ...c };
   
-  // Backward compatibility: map old fields (reveal_available_at, reveal_from/reveal_to) to new ones
-  const fromIdentityReveal = c.from_identity_reveal !== undefined ? c.from_identity_reveal : c.reveal_from || 0;
-  const toIdentityReveal = c.to_identity_reveal !== undefined ? c.to_identity_reveal : c.reveal_to || 0;
-  const identityRevealAvailable = c.identity_reveal_available_at || c.reveal_available_at || null;
+  // Backward compatibility: map the old reveal_available_at field to the Day-10 face reveal
   const faceRevealAvailable = c.face_reveal_available_at || c.reveal_available_at || null;
   
   // The meeting code (video room) must only ever reach the client after BOTH
-  // users complete the Day-10 face reveal — never from the Day-7 identity reveal
-  // and never from legacy documents that still carry an old meeting code.
+  // users complete the Day-10 face reveal — never from legacy documents that
+  // still carry an old meeting code.
   const bothFaceRevealed = (c.from_face_reveal || 0) === 1 && (c.to_face_reveal || 0) === 1;
   if (!bothFaceRevealed) {
     delete copy.meeting_code;
@@ -1036,11 +1033,7 @@ function sanitizeConnection(c, userId) {
 
   return {
     ...copy,
-    identity_reveal_available_at: identityRevealAvailable,
     face_reveal_available_at: faceRevealAvailable,
-    my_identity_reveal: isFrom ? fromIdentityReveal : toIdentityReveal,
-    other_identity_reveal: isFrom ? toIdentityReveal : fromIdentityReveal,
-    both_identity_revealed: fromIdentityReveal === 1 && toIdentityReveal === 1,
     my_face_reveal: isFrom ? c.from_face_reveal || 0 : c.to_face_reveal || 0,
     other_face_reveal: isFrom ? c.to_face_reveal || 0 : c.from_face_reveal || 0,
     both_face_revealed: bothFaceRevealed,
@@ -2407,25 +2400,7 @@ app.post('/api/connections/end', requireAuth, actionLimiter, async (req, res) =>
   res.json(result);
 });
 
-// Submit identity reveal (Day 7)
-app.post('/api/connections/identity-reveal', requireAuth, async (req, res) => {
-    const { connection_id } = req.body;
-    if (!connection_id) return res.status(400).json({ error: 'Missing connection id' });
-    evictConnectionAuth(connection_id); // Invalidate auth cache — status changing
-    const result = await connectionOps.submitIdentityReveal(connection_id, req.session.userId);
-  if (result.error) return res.status(400).json(result);
-  
-  if (result.bothRevealed) {
-    // Both users revealed their identity (Day 7). No meeting code is involved —
-    // the meeting flow only unlocks after the Day-10 face reveal.
-    connectionEmitter.emit(`update:${connection_id}`, { type: 'identity-revealed' });
-  } else {
-    // Only this user revealed, waiting for the other
-    connectionEmitter.emit(`update:${connection_id}`, { type: 'game' });
-  }
-
-  res.json(result);
-});  // Submit face reveal (Day 10)
+// Submit face reveal (Day 10)
   app.post('/api/connections/face-reveal', requireAuth, async (req, res) => {
     const { connection_id } = req.body;
     if (!connection_id) return res.status(400).json({ error: 'Missing connection id' });
@@ -3286,8 +3261,8 @@ setInterval(async () => {
       console.error('[Sweep] Message retention purge failed:', err);
       return 0;
     });
-    if (sweepResult.identityRevealsExpired > 0 || sweepResult.faceRevealsExpired > 0 || reqSweep.expiredCount > 0 || purgedMessages > 0) {
-      console.log(`[Sweep] Expired ${sweepResult.identityRevealsExpired} identity reveals, ${sweepResult.faceRevealsExpired} face reveals, ${reqSweep.expiredCount} pending requests, purged ${purgedMessages} archived messages.`);
+    if (sweepResult.faceRevealsExpired > 0 || reqSweep.expiredCount > 0 || purgedMessages > 0) {
+      console.log(`[Sweep] Expired ${sweepResult.faceRevealsExpired} face reveals, ${reqSweep.expiredCount} pending requests, purged ${purgedMessages} archived messages.`);
     }
     // Housekeeping: sweep expired/used OTPs and single-use auth tokens.
     await otpOps.cleanExpired().catch(() => {});
@@ -3354,6 +3329,8 @@ module.exports = {
   },
   // Kept private-by-convention; used by the connection/meeting-flow contract tests.
   __connectionTestUtils: {
-    sanitizeConnection
+    sanitizeConnection,
+    createMeetingRoom,
+    normalizeMeetBaseUrl
   }
 };

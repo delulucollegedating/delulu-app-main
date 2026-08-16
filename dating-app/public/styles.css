@@ -916,7 +916,6 @@ body.discover-page #app-root, body.profile-page #app-root {
 #btn-send-otp,
 #btn-verify-otp,
 #btn-save-profile,
-#btn-identity-reveal,
 #btn-face-reveal {
   background-color: #a53b29 !important;
   background-image: linear-gradient(135deg, #a53b29 0%, #d94828 100%) !important;

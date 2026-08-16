@@ -227,18 +227,11 @@ function clientSanitizeConnection(c, userId) {
   if (!c) return null;
   const isFrom = Number(c.from_user_id) === Number(userId);
   
-  const fromIdentityReveal = c.from_identity_reveal !== undefined ? c.from_identity_reveal : (c.reveal_from || 0);
-  const toIdentityReveal = c.to_identity_reveal !== undefined ? c.to_identity_reveal : (c.reveal_to || 0);
-  const identityRevealAvailable = c.identity_reveal_available_at || c.reveal_available_at || null;
   const faceRevealAvailable = c.face_reveal_available_at || c.reveal_available_at || null;
   
   return {
     ...c,
-    identity_reveal_available_at: identityRevealAvailable,
     face_reveal_available_at: faceRevealAvailable,
-    my_identity_reveal: isFrom ? fromIdentityReveal : toIdentityReveal,
-    other_identity_reveal: isFrom ? toIdentityReveal : fromIdentityReveal,
-    both_identity_revealed: fromIdentityReveal === 1 && toIdentityReveal === 1,
     my_face_reveal: isFrom ? (c.from_face_reveal || 0) : (c.to_face_reveal || 0),
     other_face_reveal: isFrom ? (c.to_face_reveal || 0) : (c.from_face_reveal || 0),
     both_face_revealed: (c.from_face_reveal || 0) === 1 && (c.to_face_reveal || 0) === 1,
@@ -555,7 +548,6 @@ async function initializeChat() {
     socket.off('connection-ended');
     socket.off('game_update');
 
-    socket.off('identity-revealed');
     socket.off('face-revealed');
     socket.off('face-reveal-declined');
 
@@ -696,16 +688,6 @@ async function initializeChat() {
       }
     });
 
-    socket.on('identity-revealed', (data) => {
-      if (data.connection_id == currentConnId) {
-        // Day-7 identity reveal never unlocks the meeting flow — only the Day-10
-        // face reveal does. Refresh so the UI reflects the revealed state.
-        loadChatInfo();
-        const idBtn = document.getElementById('btn-identity-reveal');
-        if (idBtn) idBtn.classList.add('hidden');
-      }
-    });
-    
     socket.on('face-revealed', (data) => {
       if (data.connection_id == currentConnId) {
         // This event only fires when BOTH have revealed (server condition).
@@ -1067,18 +1049,9 @@ async function initializeChat() {
   const btnChatMore = document.getElementById('btn-chat-more');
   if (btnChatMore) btnChatMore.onclick = () => openModal('modal-chat-more');
 
-  const btnIdentityReveal = document.getElementById('btn-identity-reveal');
-  if (btnIdentityReveal) btnIdentityReveal.onclick = () => openModal('modal-identity-reveal');
-  
   const btnFaceReveal = document.getElementById('btn-face-reveal');
   if (btnFaceReveal) btnFaceReveal.onclick = () => openModal('modal-face-reveal');
   
-  const identityRevealYes = document.getElementById('identity-reveal-yes');
-  if (identityRevealYes) identityRevealYes.onclick = () => submitIdentityRevealAction();
-
-  const identityRevealNo = document.getElementById('identity-reveal-no');
-  if (identityRevealNo) identityRevealNo.onclick = () => { closeModal(); };
-
   const faceRevealYes = document.getElementById('face-reveal-yes');
   if (faceRevealYes) faceRevealYes.onclick = () => submitFaceRevealAction();
 
@@ -1565,96 +1538,10 @@ async function loadChatInfo() {
   }
 }
 
-function updateIdentityRevealModal(c) {
-  const countdownDiv = document.getElementById('identity-state-countdown');
-  const promptDiv = document.getElementById('identity-state-prompt');
-  const waitingDiv = document.getElementById('identity-state-waiting');
-
-  if (!countdownDiv || !promptDiv || !waitingDiv) return;
-
-  // Hide all states
-  countdownDiv.classList.add('hidden');
-  promptDiv.classList.add('hidden');
-  waitingDiv.classList.add('hidden');
-
-  const now = Date.now();
-  const chatStarted = c.chat_started_at ? new Date(c.chat_started_at).getTime() : now;
-  const identityRevealAt = c.identity_reveal_available_at ? new Date(c.identity_reveal_available_at).getTime() : null;
-  const daysSinceChatStarted = Math.floor((now - chatStarted) / (24 * 60 * 60 * 1000));
-
-  // Both users completed the Day-7 identity reveal. The meeting flow is NOT
-  // unlocked here — it only becomes available after the Day-10 face reveal, so
-  // show the waiting state (the server never exposes a meeting code pre-face-reveal).
-  if (c.both_identity_revealed) {
-    waitingDiv.classList.remove('hidden');
-    return;
-  }
-
-  // If user already revealed — show waiting state
-  if (c.my_identity_reveal === 1) {
-    waitingDiv.classList.remove('hidden');
-    return;
-  }
-
-  // If before Day 7 identity reveal — show countdown with progress
-  if (identityRevealAt && now < identityRevealAt) {
-    const msRemaining = identityRevealAt - now;
-    const totalMs = 7 * 24 * 60 * 60 * 1000;
-    const msElapsed = now - chatStarted;
-    const progressPct = Math.min(100, Math.max(0, (msElapsed / totalMs) * 100));
-    const daysRemaining = Math.floor(msRemaining / (24 * 60 * 60 * 1000));
-    const hoursRemaining = Math.floor((msRemaining % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
-
-    const daysEl = document.getElementById('identity-countdown-days');
-    if (daysEl) daysEl.textContent = `${daysRemaining}d ${hoursRemaining}h`;
-
-    // Update progress ring (circumference = 2 * pi * 42 = 263.89)
-    const ring = document.getElementById('identity-progress-ring');
-    if (ring) {
-      const circumference = 263.89;
-      const offset = circumference * (1 - progressPct / 100);
-      ring.style.strokeDashoffset = offset;
-    }
-
-    // Update timeline bar (maxes at 50% since Day 7 is midpoint of the journey)
-    const tlProgress = document.getElementById('identity-timeline-progress');
-    if (tlProgress) {
-      const tlPct = Math.min(50, (progressPct / 100) * 50);
-      tlProgress.style.width = `${tlPct}%`;
-    }
-
-    // Update the milestone dot
-    const milestone = document.getElementById('identity-timeline-milestone');
-    if (milestone) {
-      if (daysSinceChatStarted >= 1) {
-        const dot = milestone.querySelector('div');
-        if (dot) {
-          dot.className = 'w-6 h-6 rounded-full bg-secondary flex items-center justify-center';
-        }
-      }
-    }
-
-    countdownDiv.classList.remove('hidden');
-    return;
-  }
-
-  // Day 7 has arrived and user hasn't revealed — show prompt
-  if (c.my_identity_reveal === 0) {
-    // Update the day count text dynamically
-    const dayText = promptDiv.querySelector('p.text-on-surface-variant.text-sm');
-    if (dayText) {
-      dayText.textContent = `You've been chatting for ${daysSinceChatStarted} days. Ready to show each other who you are?`;
-    }
-    promptDiv.classList.remove('hidden');
-  }
-}
-
 function updateChatStatus(c) {
   const statusEl = document.getElementById('chat-status');
-  const identityRevealBtn = document.getElementById('btn-identity-reveal');
   const faceRevealBtn = document.getElementById('btn-face-reveal');
   
-  if (identityRevealBtn) identityRevealBtn.classList.add('hidden');
   if (faceRevealBtn) faceRevealBtn.classList.add('hidden');
   
   if (c.status === 'accepted' || c.status === 'revealed') {
@@ -2485,7 +2372,7 @@ window.openModal = function(id) {
 };
 
 function setAllModalsHidden(hidden) {
-  ['modal-identity-reveal', 'modal-face-reveal', 'modal-face-declined', 'modal-google-meet', 'modal-end-chat', 'modal-profile-peek', 'modal-icebreaker', 'modal-report', 'modal-chat-more'].forEach(id => {
+  ['modal-face-reveal', 'modal-face-declined', 'modal-google-meet', 'modal-end-chat', 'modal-profile-peek', 'modal-icebreaker', 'modal-report', 'modal-chat-more'].forEach(id => {
     const m = document.getElementById(id);
     if (m) {
       if (hidden) {
@@ -2508,7 +2395,7 @@ window.closeModal = function() {
     overlay.classList.add('hidden');
     overlay.classList.remove('flex');
   }
-  ['modal-identity-reveal', 'modal-face-reveal', 'modal-face-declined', 'modal-google-meet', 'modal-end-chat', 'modal-profile-peek', 'modal-icebreaker', 'modal-report', 'modal-chat-more'].forEach(id => {
+  ['modal-face-reveal', 'modal-face-declined', 'modal-google-meet', 'modal-end-chat', 'modal-profile-peek', 'modal-icebreaker', 'modal-report', 'modal-chat-more'].forEach(id => {
     const m = document.getElementById(id);
     if (m) {
       m.classList.remove('scale-100');
@@ -2550,25 +2437,6 @@ if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', wireEndChatConfirm);
 } else {
   wireEndChatConfirm();
-}
-
-async function submitIdentityRevealAction() {
-  try {
-    const data = await apiCall('/api/connections/identity-reveal', 'POST', { connection_id: currentConnId });
-    if (data.bothRevealed && data.meeting_code) {
-      closeModal();
-      showMeetingModal(data.meeting_code);
-    } else {
-      // Switch to waiting state without closing the modal
-      const countdownDiv = document.getElementById('identity-state-countdown');
-      const promptDiv = document.getElementById('identity-state-prompt');
-      const waitingDiv = document.getElementById('identity-state-waiting');
-      if (countdownDiv) countdownDiv.classList.add('hidden');
-      if (promptDiv) promptDiv.classList.add('hidden');
-      if (waitingDiv) waitingDiv.classList.remove('hidden');
-    }
-    loadChatInfo();
-  } catch(err) { showToast(err.message, 'error'); }
 }
 
 async function submitFaceRevealAction() {
@@ -2615,10 +2483,13 @@ function showMeetingModal(meetingCode) {
   // The meeting flow only exists after both users complete the Day-10 face
   // reveal — a missing code means the meeting is not available yet.
   if (!meetingCode) return;
-  const cleanCode = String(meetingCode).replace(/[^a-zA-Z0-9-]/g, '').toLowerCase() || 'delulu-room';
-  
-  // Instant direct 1-click working video room (Jitsi Meet — 100% free, no login, camera & mic work)
-  const videoCallUrl = `https://meet.jit.si/Delulu-Meet-${cleanCode}`;
+  const raw = String(meetingCode).trim();
+  // meeting_code is now the FULL room URL (Daily.co when configured, Jitsi
+  // fallback otherwise). Legacy connections stored a bare slug — normalize it
+  // into a Jitsi URL for backward compatibility.
+  const videoCallUrl = /^https?:\/\//i.test(raw)
+    ? raw
+    : `https://meet.jit.si/Delulu-Meet-${raw.replace(/[^a-zA-Z0-9-]/g, '').toLowerCase() || 'delulu-room'}`;
 
   const linkBtn = document.getElementById('meet-link-btn');
   if (linkBtn) {

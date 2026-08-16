@@ -956,12 +956,11 @@ function getConnectionProgress(status, chatStartedAt, identityRevealAvailableAt,
     { label: 'Chatting', done: !!chatStartedAt }
   ];
   
+  // The Day-10 face reveal is the only reveal milestone (Day-7 identity reveal was removed).
   if (faceRevealAvailableAt && now >= new Date(faceRevealAvailableAt)) {
     stages.push({ label: 'Face Reveal', done: false, active: true });
-  } else if (identityRevealAvailableAt && now >= new Date(identityRevealAvailableAt)) {
-    stages.push({ label: 'Identity Reveal', done: false, active: true });
-  } else if (identityRevealAvailableAt) {
-    stages.push({ label: 'Identity Reveal', done: false });
+  } else if (faceRevealAvailableAt) {
+    stages.push({ label: 'Face Reveal', done: false });
   } else {
     stages.push({ label: 'Chatting', done: true });
   }

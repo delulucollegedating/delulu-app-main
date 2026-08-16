@@ -747,13 +747,10 @@ const connectionOps = {
           status: 'pending',
           ended_reason: null,
           chat_started_at: null,
-          identity_reveal_available_at: null,
           face_reveal_available_at: null,
           face_reveal_expires_at: null,
           from_face_reveal: 0,
           to_face_reveal: 0,
-          from_identity_reveal: 0,
-          to_identity_reveal: 0,
           meeting_code: null,
           from_last_read_at: null,
           to_last_read_at: null
@@ -950,26 +947,21 @@ const connectionOps = {
       }
 
       const now = new Date();
-      const identityRevealAvailable = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
       const faceRevealAvailable = new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000).toISOString();
       const faceRevealExpires = new Date(now.getTime() + 11 * 24 * 60 * 60 * 1000).toISOString();
       transaction.update(connDocRef, {
         status: 'accepted',
         chat_started_at: now.toISOString(),
-        identity_reveal_available_at: identityRevealAvailable,
         face_reveal_available_at: faceRevealAvailable,
         face_reveal_expires_at: faceRevealExpires,
         from_face_reveal: 0,
         to_face_reveal: 0,
-        from_identity_reveal: 0,
-        to_identity_reveal: 0,
         face_reveal_declined_by: null,
         meeting_code: null
       });
       result = {
         success: true,
         chat_started_at: now.toISOString(),
-        identity_reveal_available_at: identityRevealAvailable,
         face_reveal_available_at: faceRevealAvailable,
         face_reveal_expires_at: faceRevealExpires
       };
@@ -1173,59 +1165,31 @@ const connectionOps = {
     return { error: 'Connection not active' };
   },
 
-  // Day-7 mutual identity reveal. Both users must explicitly agree.
-  async submitIdentityReveal(connectionId, userId) {
-    const firestore = getDB();
-    const connDocRef = firestore.collection('connections').doc(String(connectionId));
-
-    let result = null;
-
-    try {
-      await updateConnection(connectionId, () => firestore.runTransaction(async (transaction) => {
-        const doc = await transaction.get(connDocRef);
-        if (!doc.exists) {
-          result = { error: 'Connection not found' };
-          return;
-        }
-        const conn = doc.data();
-        if (conn.status !== 'accepted') {
-          result = { error: 'Connection is no longer active' };
-          return;
-        }
-        if (conn.from_user_id !== Number(userId) && conn.to_user_id !== Number(userId)) {
-          result = { error: 'Not authorized' };
-          return;
-        }
-        const now = Date.now();
-        if (!conn.identity_reveal_available_at || now < new Date(conn.identity_reveal_available_at).getTime()) {
-          result = { error: 'Identity reveal is available on Day 7.' };
-          return;
-        }
-
-        const isFrom = conn.from_user_id === Number(userId);
-        const field = isFrom ? 'from_identity_reveal' : 'to_identity_reveal';
-        const otherVal = isFrom ? conn.to_identity_reveal : conn.from_identity_reveal;
-        const bothRevealed = otherVal === 1;
-        // NOTE: identity reveal (Day 7) NEVER creates a meeting code or moves the
-        // connection to 'revealed'. The meeting flow unlocks only after BOTH
-        // users complete the Day-10 face reveal — enforced server-side here so a
-        // stale or tampered client can never trigger it early.
-        transaction.update(connDocRef, { [field]: 1 });
-        result = { success: true, bothRevealed };
-      }));
-    } catch (txErr) {
-      return { error: 'Failed to process identity reveal. Please try again.' };
-    }
-
-    return result || { error: 'Failed to process identity reveal. Please try again.' };
-  },
-
   // Day-10 mutual reveal. Both users must explicitly agree during the reveal window.
   async submitFaceReveal(connectionId, userId) {
     const firestore = getDB();
     const connDocRef = firestore.collection('connections').doc(String(connectionId));
     
     let result = null;
+    
+    // Pre-read (outside the transaction): if the partner has already revealed,
+    // this submit completes the pair and a meeting room is needed. The room is
+    // created BEFORE the transaction because the provider API is a network call
+    // and must never run inside a Firestore transaction.
+    let partnerAlreadyRevealed = false;
+    let existingMeetingCode = null;
+    try {
+      const preDoc = await connDocRef.get();
+      if (preDoc.exists) {
+        const pre = preDoc.data();
+        const preIsFrom = pre.from_user_id === Number(userId);
+        partnerAlreadyRevealed = (preIsFrom ? pre.to_face_reveal : pre.from_face_reveal) === 1;
+        existingMeetingCode = pre.meeting_code || null;
+      }
+    } catch (preErr) {
+      // Ignore — the transaction re-reads and generateMeetingCode() is the fallback.
+    }
+    const meetingUrl = (partnerAlreadyRevealed && !existingMeetingCode) ? await createMeetingRoom() : null;
     
     try {
       await updateConnection(connectionId, () => firestore.runTransaction(async (transaction) => {
@@ -1260,7 +1224,10 @@ const connectionOps = {
         const field = isFrom ? 'from_face_reveal' : 'to_face_reveal';
         const otherVal = isFrom ? conn.to_face_reveal : conn.from_face_reveal;
         const bothRevealed = otherVal === 1;
-        const meetingCode = bothRevealed ? (conn.meeting_code || generateMeetingCode()) : null;
+        // meetingUrl covers the normal flow; generateMeetingCode() covers a
+        // simultaneous double-submit race (both clicked at once, so the pre-read
+        // saw the partner as not-yet-revealed).
+        const meetingCode = bothRevealed ? (conn.meeting_code || meetingUrl || generateMeetingCode()) : null;
         transaction.update(connDocRef, bothRevealed
           ? { [field]: 1, status: 'revealed', meeting_code: meetingCode }
           : { [field]: 1 });
@@ -1268,6 +1235,16 @@ const connectionOps = {
       }));
     } catch (txErr) {
       return { error: 'Failed to process face reveal. Please try again.' };
+    }
+    
+    // A simultaneous double-submit can slip past the pre-read; if that happened,
+    // create the room now and persist it so the pair still gets a working link.
+    if (result && result.success && result.bothRevealed && !result.meeting_code) {
+      const url = await createMeetingRoom();
+      if (url) {
+        await connDocRef.update({ meeting_code: url }).catch(() => {});
+        result.meeting_code = url;
+      }
     }
     
     return result || { error: 'Failed to process face reveal. Please try again.' };
@@ -1451,9 +1428,7 @@ const connectionOps = {
   async sweepExpired() {
     const firestore = getDB();
     const now = new Date().toISOString();
-    const nowMs = Date.now();
     
-    let identityRevealsExpired = 0;
     let faceRevealsExpired = 0;
     /** @type {Array<{id: number, from_user_id: number, to_user_id: number}>} */
     const allExpiredIds = [];
@@ -1480,16 +1455,6 @@ const connectionOps = {
       for (const doc of snapshot.docs) {
         lastDoc = doc; // Track for pagination
         const conn = doc.data();
-        
-        // Track identity reveals that have passed their Day-7 window (informational metric only).
-        // The connection continues to face reveal — no expiry here.
-        if (conn.identity_reveal_available_at && new Date(conn.identity_reveal_available_at).getTime() <= nowMs) {
-          const fromRevealed = conn.from_identity_reveal || 0;
-          const toRevealed = conn.to_identity_reveal || 0;
-          if (fromRevealed === 0 && toRevealed === 0) {
-            identityRevealsExpired++;
-          }
-        }
         
         // Face reveal opens on Day 10 and stays open for 24 hours. Older records
         // without an explicit expiry use the same 24-hour compatibility window.
@@ -1520,7 +1485,7 @@ const connectionOps = {
       if (snapshot.size < PAGE_SIZE) break;
     }
     
-    return { identityRevealsExpired, faceRevealsExpired, expiredConnections: allExpiredIds };
+    return { faceRevealsExpired, expiredConnections: allExpiredIds };
   },
 
   async getConnectionById(connectionId) {
@@ -2360,14 +2325,73 @@ const blockOps = {
   }
 };
 
-// Generate a random video-room code (xxx-xxxx-xxx format) used to build the
-// Jitsi Meet room URL shown after the mutual Day-10 face reveal.
+// Generate a random video-room slug (xxx-xxxx-xxx format) used as the last-resort
+// fallback room name when no meeting provider is configured.
 function generateMeetingCode() {
   const chars = 'abcdefghijklmnopqrstuvwxyz';
   const p1 = Array.from({ length: 3 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
   const p2 = Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
   const p3 = Array.from({ length: 3 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
   return `${p1}-${p2}-${p3}`;
+}
+
+// Create a meeting-room URL for the mutual Day-10 face reveal.
+//
+// Provider priority:
+//   1. Daily.co (REST API, browser-based, no login or app install, reliable
+//      where the public Jitsi instance is blocked) — requires DAILY_API_KEY.
+//   2. MEET_BASE_URL — your own self-hosted meet server (e.g. Jitsi on the
+//      Oracle Always Free VM). The free-forever option: unlimited minutes, no
+//      provider dependency, rooms live on your own domain.
+//   3. The public Jitsi instance as a last resort so the feature never breaks.
+async function createMeetingRoom() {
+  const roomName = `delulu-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const apiKey = process.env.DAILY_API_KEY || '';
+  if (apiKey) {
+    try {
+      const res = await fetch('https://api.daily.co/v1/rooms', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          name: roomName,
+          properties: {
+            exp: Math.floor(Date.now() / 1000) + 24 * 60 * 60, // room auto-expires after 24h
+            enable_prejoin_ui: true,
+            enable_screenshare: true,
+            start_video_off: false,
+            start_audio_off: false
+          }
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.url) return data.url;
+        console.error('[Meet] Daily room created but the response contained no URL.');
+      } else {
+        console.error(`[Meet] Daily room creation failed (HTTP ${res.status}) — falling back to Jitsi.`);
+      }
+    } catch (err) {
+      console.error(`[Meet] Daily room creation error — falling back to Jitsi: ${err.message}`);
+    }
+  }
+  const meetBase = normalizeMeetBaseUrl(process.env.MEET_BASE_URL || '');
+  if (meetBase) {
+    return `${meetBase}/Delulu-Meet-${generateMeetingCode()}`;
+  }
+  return `https://meet.jit.si/Delulu-Meet-${generateMeetingCode()}`;
+}
+
+// Normalize an operator-supplied MEET_BASE_URL ("meet.example.com",
+// "https://meet.example.com/", "https://meet.example.com") into a clean
+// "https://meet.example.com" origin. Returns '' for empty or malformed input.
+function normalizeMeetBaseUrl(raw) {
+  if (!raw) return '';
+  const s = String(raw).trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+  if (!s || !/^[a-zA-Z0-9.-]+(:[0-9]+)?(\/[a-zA-Z0-9._~-]*)*$/.test(s)) return '';
+  return `https://${s}`;
 }
 
 // ===== Push Subscription Operations =====
@@ -2532,5 +2556,7 @@ module.exports = {
   invalidateUserCache,
   reportOps,
   blockOps,
-  pushOps
+  pushOps,
+  createMeetingRoom,
+  normalizeMeetBaseUrl
 };

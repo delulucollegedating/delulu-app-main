@@ -1,7 +1,7 @@
 {
   "name": "Delulu — College Social Discovery",
   "short_name": "Delulu",
-  "description": "Meet new classmates from your college, play icebreakers, and gradually reveal identities before meeting face-to-face.",
+  "description": "Meet new classmates from your college, play icebreakers, and unlock a mutual face reveal before meeting face-to-face.",
   "start_url": "/login.html",
   "scope": "/",
   "display": "standalone",
