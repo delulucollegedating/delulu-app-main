@@ -30,3 +30,12 @@ android/
 *.aar
 .gradle/
 build/
+
+# Capacitor iOS native build files (keep source, ignore build artifacts)
+ios/App/build/
+ios/App/DerivedData/
+ios/App/*.xcworkspace/xcuserdata/
+ios/App/**/*.xcuserstate
+ios/App/App/public/
+ios/App/App/capacitor.config.json
+*.ipa
