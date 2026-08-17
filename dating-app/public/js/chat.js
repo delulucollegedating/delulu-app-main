@@ -568,7 +568,6 @@ async function initializeChat() {
     socket.off('typing');
     socket.off('status_change');
     socket.off('connection-ended');
-    socket.off('game_update');
 
     socket.off('face-revealed');
     socket.off('face-reveal-declined');
@@ -697,18 +696,6 @@ async function initializeChat() {
       }
     });
     
-
-    socket.on('game_update', (data) => {
-      const connId = data.connection_id || data.connectionId;
-      if (Number(connId) === Number(currentConnId)) {
-        dbg('[Socket] game_update received:', data);
-        syncActiveGame({
-          from_user_id: data.from_user_id,
-          to_user_id: data.to_user_id,
-          active_game: data.active_game
-        });
-      }
-    });
 
     socket.on('face-revealed', (data) => {
       if (data.connection_id == currentConnId) {

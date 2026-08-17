@@ -3346,5 +3346,11 @@ module.exports = {
     sanitizeConnection,
     createMeetingRoom,
     normalizeMeetBaseUrl
+  },
+  // Kept private-by-convention; used by the icebreaker endpoint contract tests.
+  // Exposes only the session store so tests can mint authenticated sessions
+  // without ever touching the database.
+  __sessionTestUtils: {
+    sessionStore
   }
 };
