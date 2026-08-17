@@ -30,8 +30,7 @@ function dbgWarn(...args) {
   if (!DEBUG_LOGGING) return;
   console.warn(...args);
 }
-
-const API_BASE = isLocalEnv ? window.location.origin : 'https://delulu-college.onrender.com';
+const API_BASE = isLocalEnv ? window.location.origin : 'https://delulu-app-main-production.up.railway.app';
 function resolveUrl(url) {
   if (!url) return '';
   if (url.startsWith('http') || url.startsWith('blob:') || url.startsWith('data:')) return url;
