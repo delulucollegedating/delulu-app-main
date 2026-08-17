@@ -353,6 +353,28 @@ async function initRealtimeStream() {
     } else if (streamEvent.type === 'messages') {
       dbg('[SSE] Received message update event. Refreshing messages...');
       loadMessages(false, true).catch(() => {});
+    } else if (streamEvent.type === 'revealed') {
+      // Partner completed the Day-10 face reveal — unlock the meeting in
+      // real-time. The server only emits this once BOTH users revealed and
+      // always includes the meeting code.
+      dbg('[SSE] Both users revealed. Unlocking meeting room...');
+      const faceBtn = document.getElementById('btn-face-reveal');
+      if (faceBtn) faceBtn.classList.add('hidden');
+      if (streamEvent.meeting_code) showMeetingModal(streamEvent.meeting_code);
+      const statusEl = document.getElementById('chat-status');
+      if (statusEl && streamEvent.meeting_code) {
+        statusEl.innerHTML = `<span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold"><span class="material-symbols-outlined text-[14px]">videocam</span> Meeting ready! <a href="#" onclick="showMeetingModal('${streamEvent.meeting_code}'); return false;" class="underline font-bold">Join</a></span>`;
+      }
+      // Resync from the server so button/status state settles correctly.
+      scheduleChatInfoRefresh();
+    } else if (streamEvent.type === 'face-declined') {
+      // Partner said "Not ready for this" — reflect it in real-time.
+      dbg('[SSE] Partner declined the face reveal.');
+      const faceBtn = document.getElementById('btn-face-reveal');
+      if (faceBtn) faceBtn.classList.add('hidden');
+      const statusEl = document.getElementById('chat-status');
+      if (statusEl) statusEl.textContent = 'Face reveal was declined.';
+      openModal('modal-face-declined');
     } else if (streamEvent.type === 'ended') {
       sessionStorage.setItem('connection_ended_message', 'This chat has ended.');
       window.location.href = 'discover.html';
@@ -2902,7 +2924,19 @@ function syncActiveGame(c) {
   }
   
   const answers = game.answers || {};
-  const question = game.question || {};
+  // Normalize question and options: support both new shape (question=string, options={a,b})
+  // and legacy shape (question={q,a,b}) for game docs already stored in Firestore.
+  let questionText, questionOptions;
+  if (game.question && typeof game.question === 'object') {
+    // Legacy: stored as {q, a, b}
+    questionText = game.question.q || 'Pick one';
+    questionOptions = { a: game.question.a || 'A', b: game.question.b || 'B' };
+  } else {
+    questionText = typeof game.question === 'string' ? game.question : 'Pick one';
+    questionOptions = game.options || { a: 'A', b: 'B' };
+  }
+  const question = { q: questionText, ...questionOptions }; // backward-compat alias
+
   const myAnswer = answers[String(currentUser.id)] || null;
   const otherId = otherUserId || (Number(c.from_user_id) === Number(currentUser.id) ? Number(c.to_user_id) : Number(c.from_user_id));
   const otherAnswer = answers[String(otherId)] || null;

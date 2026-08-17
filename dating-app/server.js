@@ -2456,16 +2456,30 @@ app.post('/api/connections/end-after-decline', requireAuth, actionLimiter, async
 
 // Start icebreaker game
 app.post('/api/connections/:id/start-game', requireAuth, gameLimiter, async (req, res) => {
-  const { game_type, question } = req.body;
-  if (!game_type || typeof question !== 'string' || !question.trim()) return res.status(400).json({ error: 'Missing game_type or question' });
-  if (question.length > 200) return res.status(400).json({ error: 'Question is too long (max 200 characters)' });
+  const { game_type, question, options } = req.body;
+  // Accept either a plain string question or an object with { q, a, b } shape sent by older clients
+  let questionStr, questionOptions;
+  if (question && typeof question === 'object' && typeof question.q === 'string') {
+    // Legacy: client sent the whole { q, a, b } object as question
+    questionStr = question.q.trim();
+    questionOptions = { a: String(question.a || 'A'), b: String(question.b || 'B') };
+  } else if (typeof question === 'string') {
+    questionStr = question.trim();
+    questionOptions = options && typeof options === 'object'
+      ? { a: String(options.a || 'A'), b: String(options.b || 'B') }
+      : null;
+  } else {
+    return res.status(400).json({ error: 'Missing game_type or question' });
+  }
+  if (!game_type || !questionStr) return res.status(400).json({ error: 'Missing game_type or question' });
+  if (questionStr.length > 200) return res.status(400).json({ error: 'Question is too long (max 200 characters)' });
   try {
     const conn = await connectionOps.getConnection(req.params.id, req.session.userId);
     if (!conn || conn._dataIntegrityError) return res.status(404).json({ error: 'Connection not found' });
     if (!requireActiveConnection(conn, res)) return;
     
     // Save to Firestore so clients receive it via real-time connection doc snapshot listener
-    const payload = await connectionOps.startGame(req.params.id, game_type, question);
+    const payload = await connectionOps.startGame(req.params.id, game_type, questionStr, questionOptions);
     
     connectionEmitter.emit(`update:${req.params.id}`, {
       type: 'game',

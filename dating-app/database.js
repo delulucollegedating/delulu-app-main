@@ -1342,7 +1342,7 @@ const connectionOps = {
     return results;
   },
 
-  async startGame(connectionId, gameType, question) {
+  async startGame(connectionId, gameType, question, options = null) {
     const firestore = getDB();
     const connDocRef = firestore.collection('connections').doc(String(connectionId));
     let finalPayload = null;
@@ -1367,6 +1367,7 @@ const connectionOps = {
       finalPayload = {
         game_type: gameType,
         question,
+        ...(options ? { options } : {}),
         answers: {},
         created_at: new Date().toISOString()
       };
@@ -1374,6 +1375,7 @@ const connectionOps = {
     }));
     return finalPayload;
   },
+
 
   async submitGameAnswer(connectionId, userId, answer) {
     const firestore = getDB();
