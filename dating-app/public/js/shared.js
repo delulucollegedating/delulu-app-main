@@ -2,7 +2,9 @@ const isCapacitorNative = typeof window !== 'undefined' && (
   (window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform()) ||
   (window.Capacitor && window.Capacitor.isPluginAvailable) ||
   window.location.protocol === 'capacitor:' || 
-  window.location.href.startsWith('capacitor://')
+  window.location.protocol === 'ionic:' || 
+  window.location.href.startsWith('capacitor://') ||
+  window.location.href.startsWith('ionic://')
 );
 
 const isLocalEnv = !isCapacitorNative && typeof window !== 'undefined' && (
@@ -107,19 +109,20 @@ let currentUser = null;
 const socket = null;
 
 // Global client error logger to diagnose browser-specific issues
-window.onerror = function (message, source, lineno, colno, error) {
+window.onerror = function (msg, src, line, col, err) {
   fetch(resolveUrl('/api/log-error'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify({ message, source, lineno, colno, stack: error ? error.stack : '', path: window.location.href })
+    credentials: isCapacitorNative ? 'omit' : 'include',
+    body: JSON.stringify({ message: msg, source: src, lineno: line, colno: col, stack: err ? err.stack : '', path: window.location.href })
   }).catch(() => {});
 };
-window.addEventListener('unhandledrejection', function (event) {
+
+window.addEventListener('unhandledrejection', (event) => {
   fetch(resolveUrl('/api/log-error'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
+    credentials: isCapacitorNative ? 'omit' : 'include',
     body: JSON.stringify({ message: event.reason ? event.reason.message : 'Unhandled Rejection', stack: event.reason ? event.reason.stack : '', path: window.location.href })
   }).catch(() => {});
 });
@@ -360,7 +363,7 @@ async function apiCall(url, method = 'GET', body = null) {
   const options = { 
     method, 
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'include'
+    credentials: isCapacitorNative ? 'omit' : 'include'
   };
   
   const token = await getStoredAuthToken();

@@ -1524,7 +1524,7 @@ async function loadChatInfo() {
     fetch(resolveUrl('/api/log-error'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
+      credentials: isCapacitorNative ? 'omit' : 'include',
       body: JSON.stringify({ message: err.message, stack: err.stack, path: window.location.href, context: 'loadChatInfo catch' })
     }).catch(() => {});
     
@@ -1958,7 +1958,7 @@ async function loadMessages(isInitial = false, forceFull = false) {
       await fetch(resolveUrl('/api/log-error'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+        credentials: isCapacitorNative ? 'omit' : 'include',
         body: JSON.stringify({ message: err.message, stack: err.stack, path: window.location.href, context: 'loadMessages catch' })
       }).catch(() => {});
       cont.innerHTML = `<p class="text-error">${escapeHtml(err.message)}</p>`;

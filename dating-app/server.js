@@ -223,6 +223,7 @@ if (process.env.NODE_ENV === 'production' && !process.env.VITEST) {
 function isNativeAppOrigin(origin) {
   if (!origin) return false;
   return origin.startsWith('capacitor://') ||
+    origin.startsWith('ionic://') ||
     origin.startsWith('file://') ||
     origin === 'null';
 }

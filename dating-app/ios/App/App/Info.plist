@@ -47,11 +47,10 @@
 	<!-- <string>Delulu may use Face ID to unlock your account quickly.</string> -->
 
 	<!-- ── App Transport Security ────────────────────────────────── -->
-	<!-- Allow our own server domain over HTTPS; block cleartext everywhere else -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
-		<false/>
+		<true/>
 	</dict>
 
 	<!-- ── UI / Scene ────────────────────────────────────────────── -->
