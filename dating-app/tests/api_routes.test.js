@@ -114,9 +114,9 @@ describe('Delulu API Routes & Security Tests', () => {
     it('should allow CORS for .onrender.com origins', async () => {
       const res = await request(app)
         .options('/api/auth/send-verification-email')
-        .set('Origin', 'https://delulu-join-now.onrender.com');
+        .set('Origin', 'https://delulu-app-main-production.up.railway.app');
 
-      expect(res.headers['access-control-allow-origin']).toBe('https://delulu-join-now.onrender.com');
+      expect(res.headers['access-control-allow-origin']).toBe('https://delulu-app-main-production.up.railway.app');
     });
 
     it('should create OTPs concurrently without Firestore transaction lock errors', async () => {
