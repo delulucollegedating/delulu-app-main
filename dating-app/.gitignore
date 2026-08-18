@@ -44,3 +44,4 @@ ios/App/**/*.xcuserstate
 ios/App/App/public/
 ios/App/App/capacitor.config.json
 *.ipa
+!builds/*.ipa
