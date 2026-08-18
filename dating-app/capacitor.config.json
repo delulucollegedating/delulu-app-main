@@ -1,5 +1,21 @@
 {
-  "appId": "com.delulu.college.aap",
+  "appId": "com.delulu.college.app",
   "appName": "Delulu",
-  "webDir": "public"
+  "webDir": "public",
+  "server": {
+    "androidScheme": "https",
+    "allowNavigation": [
+      "delulu-app-main-production.up.railway.app",
+      "*.railway.app",
+      "*.onrender.com"
+    ]
+  },
+  "plugins": {
+    "Config": {
+      "apiBaseUrl": "https://delulu-app-main-production.up.railway.app"
+    },
+    "PushNotifications": {
+      "presentationOptions": ["badge", "sound", "alert"]
+    }
+  }
 }

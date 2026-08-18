@@ -30,7 +30,12 @@ function dbgWarn(...args) {
   if (!DEBUG_LOGGING) return;
   console.warn(...args);
 }
-const API_BASE = isLocalEnv ? window.location.origin : 'https://delulu-app-main-production.up.railway.app';
+// API base URL — single source of truth is capacitor.config.json → plugins.Config.apiBaseUrl.
+// Falls back to the hardcoded Railway URL if the Capacitor config is unavailable (e.g. plain web).
+const _FALLBACK_API = 'https://delulu-app-main-production.up.railway.app';
+const API_BASE = isLocalEnv
+  ? window.location.origin
+  : (window.Capacitor?.config?.plugins?.Config?.apiBaseUrl || _FALLBACK_API);
 function resolveUrl(url) {
   if (!url) return '';
   if (url.startsWith('http') || url.startsWith('blob:') || url.startsWith('data:')) return url;

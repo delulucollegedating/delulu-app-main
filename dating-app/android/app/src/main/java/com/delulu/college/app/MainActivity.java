@@ -1,4 +1,4 @@
-package com.delulu.app;
+package com.delulu.college.app;
 
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
