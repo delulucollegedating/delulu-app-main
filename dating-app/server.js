@@ -175,7 +175,7 @@ const FIREBASE_CLIENT_CONFIG = process.env.FIREBASE_API_KEY ? {
   storageBucket: process.env.FIREBASE_STORAGE_BUCKET || `${process.env.FIREBASE_PROJECT_ID}.appspot.com`
 } : null;
 
-// Hard-fail if SESSION_SECRET is not set — a dating app must never run with a guessable session secret
+// Hard-fail if SESSION_SECRET is not set — this app must never run with a guessable session secret
 if (!process.env.SESSION_SECRET) {
   throw new Error('FATAL: SESSION_SECRET environment variable is not set. Generate one with: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"');
 }
@@ -3330,7 +3330,7 @@ setInterval(async () => {
 if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
   server.listen(PORT, '0.0.0.0', () => {
     const scheme = process.env.NODE_ENV === 'production' ? 'https' : 'http';
-    console.log(`Delulu Dating App running at ${scheme}://localhost:${PORT}`);
+    console.log(`Delulu App running at ${scheme}://localhost:${PORT}`);
     console.log(`Open your browser to ${scheme}://localhost:${PORT}`);
     console.log('');
     if (!vapidPublicKey) {
