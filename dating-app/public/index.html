@@ -1,12 +1,200 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+  <!-- Instant dark-mode bootstrap — runs before any paint to prevent flash -->
   <script>(function(){if(localStorage.getItem('delulu_theme')==='dark'){document.documentElement.classList.add('dark');}else{document.documentElement.classList.remove('dark');}})();</script>
-  <meta http-equiv="refresh" content="0; url=login.html" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+  <title>Delulu</title>
+  <meta name="theme-color" content="#a53b29"/>
+  <link rel="manifest" href="/manifest.json"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+    html,body{width:100%;height:100%;overflow:hidden;background:#0d0608;}
+    #splash{
+      position:fixed;inset:0;
+      display:flex;flex-direction:column;
+      align-items:center;justify-content:center;gap:20px;
+      background:linear-gradient(145deg,#1a0a0d 0%,#2e0f15 40%,#1a0a0d 100%);
+      opacity:1;transition:opacity 0.45s ease;
+    }
+    #splash.fade-out{opacity:0;}
+    .logo-wrap{
+      position:relative;width:120px;height:120px;
+      display:flex;align-items:center;justify-content:center;
+    }
+    .logo-wrap::before{
+      content:'';position:absolute;inset:-14px;border-radius:50%;
+      background:radial-gradient(circle,rgba(200,60,60,0.35) 0%,transparent 70%);
+      animation:halo 2s ease-in-out infinite;
+    }
+    @keyframes halo{0%,100%{transform:scale(1);opacity:0.7;}50%{transform:scale(1.15);opacity:1;}}
+    .logo-img{
+      width:110px;height:110px;border-radius:26px;object-fit:cover;
+      box-shadow:0 0 40px rgba(180,40,40,0.55),0 8px 32px rgba(0,0,0,0.6);
+      animation:logoPop 0.55s cubic-bezier(0.34,1.56,0.64,1) both;
+    }
+    @keyframes logoPop{0%{transform:scale(0.6);opacity:0;}100%{transform:scale(1);opacity:1;}}
+    .app-name{
+      font-family:-apple-system,'SF Pro Display','Segoe UI',Roboto,sans-serif;
+      font-size:38px;font-weight:800;letter-spacing:-1.5px;
+      color:#fff;text-shadow:0 2px 16px rgba(200,60,60,0.4);
+      animation:nameFade 0.6s 0.25s ease both;
+    }
+    .tagline{
+      font-family:-apple-system,'SF Pro Text','Segoe UI',Roboto,sans-serif;
+      font-size:14px;font-weight:500;letter-spacing:0.3px;
+      color:rgba(255,255,255,0.45);
+      animation:nameFade 0.6s 0.45s ease both;
+    }
+    @keyframes nameFade{0%{opacity:0;transform:translateY(10px);}100%{opacity:1;transform:translateY(0);}}
+    .dots{
+      position:absolute;bottom:56px;
+      display:flex;gap:8px;
+      animation:nameFade 0.5s 0.8s ease both;
+    }
+    .dot{
+      width:6px;height:6px;border-radius:50%;
+      background:rgba(255,255,255,0.25);
+      animation:dotPulse 1.2s ease-in-out infinite;
+    }
+    .dot:nth-child(2){animation-delay:0.2s;}
+    .dot:nth-child(3){animation-delay:0.4s;}
+    @keyframes dotPulse{0%,80%,100%{background:rgba(255,255,255,0.2);}40%{background:rgba(210,80,80,0.85);}}
+  </style>
 </head>
 <body>
+  <div id="splash">
+    <div class="logo-wrap">
+      <img class="logo-img" src="/logo.png" alt="Delulu" onerror="this.src='/favicon.png'"/>
+    </div>
+    <div class="app-name">delulu</div>
+    <div class="tagline">college dating, but make it fun</div>
+    <div class="dots">
+      <div class="dot"></div>
+      <div class="dot"></div>
+      <div class="dot"></div>
+    </div>
+  </div>
+
   <script>
-    window.location.replace("login.html");
+    const MIN_SPLASH_MS = 1600;
+    const startedAt = Date.now();
+
+    function navigateTo(url) {
+      const elapsed = Date.now() - startedAt;
+      const remaining = Math.max(0, MIN_SPLASH_MS - elapsed);
+      setTimeout(() => {
+        const splash = document.getElementById('splash');
+        if (splash) {
+          splash.classList.add('fade-out');
+          setTimeout(() => { window.location.replace(url); }, 420);
+        } else {
+          window.location.replace(url);
+        }
+      }, remaining);
+    }
+
+    const SESSION_VERIFIED_KEY = 'session_verified_at';
+    const SESSION_VERIFY_TTL_MS = 5 * 60 * 1000;
+
+    function isSessionFresh() {
+      try {
+        const t = Number(localStorage.getItem(SESSION_VERIFIED_KEY));
+        return t && (Date.now() - t) < SESSION_VERIFY_TTL_MS;
+      } catch(e) { return false; }
+    }
+
+    async function getStoredAuthToken() {
+      try {
+        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Preferences) {
+          const { value } = await window.Capacitor.Plugins.Preferences.get({ key: 'auth_token' });
+          if (value) return value;
+        }
+      } catch(e) {}
+      return null;
+    }
+
+    async function checkSession() {
+      const cachedUser = localStorage.getItem('cached_user');
+
+      // Fast path: cached + recently verified — skip network, go straight to app
+      if (cachedUser && isSessionFresh()) {
+        navigateTo('discover.html');
+        return;
+      }
+
+      if (cachedUser) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 4000);
+        try {
+          const headers = { 'Content-Type': 'application/json' };
+          const token = await getStoredAuthToken();
+          if (token) headers['Authorization'] = 'Bearer ' + token;
+
+          const isNative = window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform();
+          const apiBase = (!isNative) ? '' :
+            ((window.Capacitor && window.Capacitor.config &&
+              window.Capacitor.config.plugins &&
+              window.Capacitor.config.plugins.Config &&
+              window.Capacitor.config.plugins.Config.apiBaseUrl) ||
+             'https://delulu-app-main-production.up.railway.app');
+
+          const res = await fetch(apiBase + '/api/session', {
+            method: 'GET',
+            headers,
+            credentials: isNative ? 'omit' : 'include',
+            signal: controller.signal
+          });
+          clearTimeout(timeout);
+
+          if (res.ok) {
+            const data = await res.json();
+            if (data.authenticated && data.user) {
+              localStorage.setItem('cached_user', JSON.stringify(data.user));
+              localStorage.setItem(SESSION_VERIFIED_KEY, String(Date.now()));
+              if (data.token) {
+                try {
+                  if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Preferences) {
+                    await window.Capacitor.Plugins.Preferences.set({ key: 'auth_token', value: data.token });
+                  }
+                } catch(e) {}
+              }
+              navigateTo('discover.html');
+              return;
+            } else if (data.authenticated === false) {
+              localStorage.removeItem('cached_user');
+              localStorage.removeItem(SESSION_VERIFIED_KEY);
+              localStorage.removeItem('e2ee_private_key');
+              navigateTo('login.html');
+              return;
+            }
+          }
+        } catch(e) {
+          clearTimeout(timeout);
+          // Network error / timeout / offline — trust cache, go to app
+          navigateTo('discover.html');
+          return;
+        }
+        // Unexpected server response but have cached user — go to app
+        navigateTo('discover.html');
+        return;
+      }
+
+      // No cached user — must log in
+      navigateTo('login.html');
+    }
+
+    // On Capacitor, wait for DOM ready so plugins are available
+    function run() {
+      checkSession().catch(() => navigateTo('login.html'));
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', run);
+    } else {
+      run();
+    }
   </script>
 </body>
 </html>
