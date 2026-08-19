@@ -912,24 +912,35 @@ app.get(['/delulu.apk', '/api/download-apk'], apkLimiter, (req, res) => {
 app.use('/uploads', requireAuth);
 
 // Static asset names are not fingerprinted, so a one-year immutable cache would
-// keep users on stale client code after a deploy. Keep a short browser cache.
+// keep users on stale client code after a deploy. Strategy:
+//   - HTML:    never cached (always re-fetch so code updates land instantly)
+//   - JS/CSS:  ETag-based revalidation (304 Not Modified = near-zero bandwidth after first load)
+//   - Avatars: 7-day immutable (avatar files never change — longest safe TTL)
+//   - Other:   1-day cache with revalidation (icons, fonts, etc.)
 app.use(express.static(path.join(__dirname, 'public'), {
   // index.html is the Capacitor WebView entry (redirects to login.html) — it must
   // NOT be served as the default document at '/'. The '/' route below serves the
   // real landing page (login.html) so the root URL is indexable, not a redirect stub.
   index: false,
-  maxAge: '0',
+  etag: true,            // Strong ETags enabled — powers conditional GET (304) revalidation
+  lastModified: true,    // Last-Modified fallback for clients that don't support ETags
   setHeaders: (res, filePath) => {
     if (filePath.endsWith('.html')) {
       // HTML is never cached — code updates must be picked up instantly across deploys.
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    } else if (filePath.match(/\/avatars\//)) {
+      // Avatar images are permanent — the filename encodes the avatar identity and
+      // the file content never changes. Safe to cache for 7 days on mobile.
+      res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
     } else if (filePath.endsWith('.js') || filePath.endsWith('.css')) {
-      // JS/CSS: keep correctness (pick up new deploys instantly) but let browsers
-      // revalidate cheaply with ETag/Last-Modified (304s) instead of re-downloading
-      // 127KB of chat.js on every visit. express.static attaches strong ETags.
+      // JS/CSS: ETags let browsers revalidate cheaply (304s) without re-downloading
+      // the full file. 'must-revalidate' ensures stale entries are never served.
       res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
-    } else {
+    } else if (filePath.match(/\.(png|jpg|jpeg|gif|svg|webp|ico|woff|woff2|ttf)$/i)) {
+      // Static images and fonts: 1-day cache. These rarely change but are not versioned.
       res.setHeader('Cache-Control', 'public, max-age=86400, must-revalidate');
+    } else {
+      res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
     }
   }
 }));

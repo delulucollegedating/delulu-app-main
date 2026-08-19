@@ -196,6 +196,27 @@ function hasForbiddenText(text) {
 // token in localStorage. For Capacitor APK: session cookies don't persist from
 // the file:///capacitor:// origin, so the revocable HMAC token is read from
 // native Capacitor storage (@capacitor/preferences) and sent as Authorization.
+//
+// Session Verification Cache: after a successful /api/session confirmation, we
+// record the timestamp in localStorage. For 5 minutes after that, we skip the
+// background network check entirely — the page renders instantly from the cached
+// user with no round-trip. This eliminates the race condition where rapid
+// page-to-page navigation fires multiple overlapping /api/session requests on
+// Railway cold-start and the retry logic incorrectly triggers sign-out.
+const SESSION_VERIFIED_KEY = 'session_verified_at';
+const SESSION_VERIFY_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function isSessionRecentlyVerified() {
+  try {
+    const t = Number(window.localStorage.getItem(SESSION_VERIFIED_KEY));
+    return t && (Date.now() - t) < SESSION_VERIFY_TTL_MS;
+  } catch (e) { return false; }
+}
+
+function markSessionVerified() {
+  try { window.localStorage.setItem(SESSION_VERIFIED_KEY, String(Date.now())); } catch (e) {}
+}
+
 async function requireAuth() {
   const cachedUserStr = window.localStorage.getItem('cached_user');
   
@@ -203,73 +224,106 @@ async function requireAuth() {
     try {
       currentUser = JSON.parse(cachedUserStr);
       updateHeaderAvatar();
-      
-      // Perform session verification in background (non-blocking — page renders immediately with cached data)
-      // Any token minted by /api/session is stored via setStoredAuthToken() — native on Android, never on web.
-      // Extended timeout (8s) prevents false-positive logout on slow connections / cold-start servers
+
+      // If we verified the session recently, skip the network round-trip entirely.
+      // This prevents rapid page navigations from firing concurrent /api/session
+      // calls that race each other and can trigger false-positive sign-outs on
+      // cold-start Railway servers.
+      if (isSessionRecentlyVerified()) {
+        return; // Session is still fresh — render immediately, no network needed
+      }
+
+      // Perform session verification in background (non-blocking — page renders immediately with cached data).
+      // Extended timeout (15s) prevents false-positive logout on slow connections / cold-start servers.
       const safeTimeout = (ms) => new Promise(resolve => setTimeout(() => resolve(null), ms));
-      Promise.race([apiCall('/api/session'), safeTimeout(8000)]).then(async result => {
-        if (!result) return; // timeout or network error, keep cached data
+
+      Promise.race([apiCall('/api/session'), safeTimeout(15000)]).then(async result => {
+        if (!result) return; // Timeout or network error — keep cached data, do NOT sign out
+
         if (result.authenticated && result.user) {
           currentUser = result.user;
           window.localStorage.setItem('cached_user', JSON.stringify(result.user));
-          if (result.token) {
-            await setStoredAuthToken(result.token);
-          }
+          if (result.token) await setStoredAuthToken(result.token);
+          markSessionVerified();
           updateHeaderAvatar();
-          // Init push notifications after auth confirmed
           setTimeout(initPushNotifications, 3000);
+
         } else if (result.authenticated === false) {
-          // Retry once with timeout before redirecting — server may have been cold-starting
-          Promise.race([apiCall('/api/session'), safeTimeout(6000)]).then(async retryResult => {
-            if (retryResult && retryResult.authenticated && retryResult.user) {
-              currentUser = retryResult.user;
-              window.localStorage.setItem('cached_user', JSON.stringify(retryResult.user));
-              if (retryResult.token) await setStoredAuthToken(retryResult.token);
+          // Server says not authenticated. Before signing the user out, check:
+          // 1. If the device is offline, never sign out — the server answer is unreliable.
+          // 2. Retry once more with a generous timeout — Railway may still be warming up.
+          if (!navigator.onLine) return; // Offline: keep cached user, do NOT redirect
+
+          // First retry (10s)
+          Promise.race([apiCall('/api/session'), safeTimeout(10000)]).then(async r1 => {
+            if (!r1) return; // Still timed out — keep user logged in
+            if (r1.authenticated && r1.user) {
+              currentUser = r1.user;
+              window.localStorage.setItem('cached_user', JSON.stringify(r1.user));
+              if (r1.token) await setStoredAuthToken(r1.token);
+              markSessionVerified();
               updateHeaderAvatar();
-            } else {
-              window.localStorage.removeItem('cached_user');
-              await removeStoredAuthToken();
-              window.localStorage.removeItem('e2ee_private_key');
-              window.location.replace('login.html');
+              return;
+            }
+            if (!r1.authenticated) {
+              if (!navigator.onLine) return; // Went offline during retry — keep user
+              // Second retry after a short delay (8s) — last chance before redirecting
+              await new Promise(res => setTimeout(res, 2000));
+              Promise.race([apiCall('/api/session'), safeTimeout(8000)]).then(async r2 => {
+                if (!r2 || !navigator.onLine) return; // Still failing or offline — do NOT sign out
+                if (r2.authenticated && r2.user) {
+                  currentUser = r2.user;
+                  window.localStorage.setItem('cached_user', JSON.stringify(r2.user));
+                  if (r2.token) await setStoredAuthToken(r2.token);
+                  markSessionVerified();
+                  updateHeaderAvatar();
+                } else if (r2.authenticated === false) {
+                  // Three consecutive server responses saying "not authenticated" with
+                  // device online — the token is genuinely invalid. Sign out.
+                  window.localStorage.removeItem('cached_user');
+                  window.localStorage.removeItem(SESSION_VERIFIED_KEY);
+                  await removeStoredAuthToken();
+                  window.localStorage.removeItem('e2ee_private_key');
+                  window.location.replace('login.html');
+                }
+              }).catch(() => {});
             }
           }).catch(() => {});
         }
-      }).catch(() => {}); // suppress any unhandled rejections — keep cached user if network fails
+      }).catch(() => {}); // Network error — keep cached user, do NOT sign out
       
-      return; // Resolve instantly!
+      return; // Resolve instantly — page renders from cache!
     } catch (e) {
       window.localStorage.removeItem('cached_user');
+      window.localStorage.removeItem(SESSION_VERIFIED_KEY);
       await removeStoredAuthToken();
     }
   }
 
-  // Fallback: blocking check if no cache exists - with timeout to avoid hanging
+  // Fallback: no cached user — must verify synchronously before showing the page
   try {
-    const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 5000));
+    const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 8000));
     const data = await Promise.race([apiCall('/api/session'), timeoutPromise]);
     
     if (data && data.authenticated && data.user) {
       currentUser = data.user;
       window.localStorage.setItem('cached_user', JSON.stringify(data.user));
-      if (data.token) {
-        await setStoredAuthToken(data.token);
-      }
+      if (data.token) await setStoredAuthToken(data.token);
+      markSessionVerified();
       updateHeaderAvatar();
-      // Init push notifications after auth confirmed
       setTimeout(initPushNotifications, 3000);
     } else if (data && data.authenticated === false) {
       window.localStorage.removeItem('cached_user');
+      window.localStorage.removeItem(SESSION_VERIFIED_KEY);
       await removeStoredAuthToken();
       window.location.href = 'login.html';
     } else {
-      // Timeout occurred - wait for cached data or redirect
+      // Timeout — no cached data, but we don't sign out (server may be cold-starting)
       if (!window.localStorage.getItem('cached_user')) {
         window.location.href = 'login.html';
       }
     }
   } catch (err) {
-    // Only redirect if we don't have cached user data
     if (!window.localStorage.getItem('cached_user')) {
       window.location.href = 'login.html';
     } else {
@@ -1033,12 +1087,16 @@ document.addEventListener('DOMContentLoaded', () => {
   initDarkMode();
   initNativeBackButton();
   
-  // Defer heart background to after page is fully interactive
-  if (document.querySelector('#heart-bg') || !document.querySelector('[data-no-hearts]')) {
-    if ('requestIdleCallback' in window) {
-      requestIdleCallback(() => initHeartBackground(), { timeout: 2000 });
-    } else {
-      setTimeout(initHeartBackground, 500);
+  // Defer heart background to after page is fully interactive.
+  // Skip entirely on Capacitor native (Android/iOS) — the decorative canvas
+  // animation is expensive on mobile CPUs and noticeably slows page rendering.
+  if (!isCapacitorNative) {
+    if (document.querySelector('#heart-bg') || !document.querySelector('[data-no-hearts]')) {
+      if ('requestIdleCallback' in window) {
+        requestIdleCallback(() => initHeartBackground(), { timeout: 2000 });
+      } else {
+        setTimeout(initHeartBackground, 500);
+      }
     }
   }
 
