@@ -47,9 +47,9 @@ function resolveUrl(url) {
 // Web: the session is carried entirely by the server's httpOnly Secure SameSite=Lax
 // cookie — no auth token is ever written to window.localStorage on web.
 // Android (Capacitor): the revocable HMAC token lives in native secure storage
-// (@capacitor/preferences) instead of localStorage, so it is not readable by JS
-// XSS as a plain localStorage entry.
 const AUTH_TOKEN_KEY = 'auth_token';
+let _inMemoryAuthToken = null;
+let _authTokenFetchPromise = null;
 
 function getCapacitorPreferences() {
   if (!isCapacitorNative || typeof window === 'undefined' || !window.Capacitor) return null;
@@ -57,17 +57,25 @@ function getCapacitorPreferences() {
 }
 
 async function getStoredAuthToken() {
+  if (_inMemoryAuthToken) return _inMemoryAuthToken;
   const prefs = getCapacitorPreferences();
   if (prefs) {
-    try {
-      const { value } = await prefs.get({ key: AUTH_TOKEN_KEY });
-      return value || null;
-    } catch (e) { return null; }
+    if (_authTokenFetchPromise) return _authTokenFetchPromise;
+    _authTokenFetchPromise = (async () => {
+      try {
+        const { value } = await prefs.get({ key: AUTH_TOKEN_KEY });
+        _inMemoryAuthToken = value || null;
+        return _inMemoryAuthToken;
+      } catch (e) { return null; }
+      finally { _authTokenFetchPromise = null; }
+    })();
+    return _authTokenFetchPromise;
   }
   return null; // web: cookie-only auth, token deliberately never stored
 }
 
 async function setStoredAuthToken(token) {
+  _inMemoryAuthToken = token || null;
   if (!token) {
     await removeStoredAuthToken();
     return;
@@ -78,10 +86,10 @@ async function setStoredAuthToken(token) {
       await prefs.set({ key: AUTH_TOKEN_KEY, value: token });
     } catch (e) {}
   }
-  // web: do nothing — never persist the token anywhere readable by JS
 }
 
 async function removeStoredAuthToken() {
+  _inMemoryAuthToken = null;
   const prefs = getCapacitorPreferences();
   if (prefs) {
     try {
@@ -461,17 +469,20 @@ async function apiCall(url, method = 'GET', body = null) {
 
   if (!res.ok) {
     if (res.status === 401) {
-      window.localStorage.removeItem('cached_user');
-      await removeStoredAuthToken();
-      window.localStorage.removeItem('e2ee_private_key');
-      const pathname = window.location.pathname;
-      if (!pathname.endsWith('login.html') && !pathname.endsWith('login')) {
-        window.location.href = 'login.html';
-        return new Promise(() => {}); // Return pending promise to halt further execution while redirecting
+      // Only purge credentials and redirect if the explicit session check failed
+      // and we are online. Background polls/requests should not abruptly log the user out.
+      if (url.includes('/api/session') && navigator.onLine) {
+        window.localStorage.removeItem('cached_user');
+        window.localStorage.removeItem('session_verified_at');
+        await removeStoredAuthToken();
+        window.localStorage.removeItem('e2ee_private_key');
+        const pathname = window.location.pathname;
+        if (!pathname.endsWith('login.html') && !pathname.endsWith('login')) {
+          window.location.href = 'login.html';
+          return new Promise(() => {});
+        }
       }
     }
-    // Attach the HTTP status so callers (e.g. the offline outbox) can tell
-    // permanent rejections (400) apart from transient server/network failures.
     const err = new Error(data?.error || `Server error (${res.status})`);
     err.status = res.status;
     throw err;

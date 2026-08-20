@@ -4,7 +4,10 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.View;
 import android.view.WindowManager;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
@@ -22,6 +25,19 @@ public class MainActivity extends BridgeActivity {
             // Safe fallback if window flags fail on certain vendor ROMs
         }
 
+        // Optimize WebView rendering speed and hardware acceleration
+        try {
+            WebView webView = getBridge().getWebView();
+            if (webView != null) {
+                WebSettings settings = webView.getSettings();
+                settings.setDomStorageEnabled(true);
+                settings.setDatabaseEnabled(true);
+                settings.setCacheMode(WebSettings.LOAD_DEFAULT);
+                webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+                webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+            }
+        } catch (Exception e) {}
+
         // Create high-importance notification channel for Delulu messages (Android 8+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             try {
@@ -33,6 +49,8 @@ public class MainActivity extends BridgeActivity {
                 channel.setDescription("Notifications for incoming chat messages and connections");
                 channel.enableVibration(true);
                 channel.setShowBadge(true);
+                channel.enableLights(true);
+                channel.setLockscreenVisibility(android.app.Notification.VISIBILITY_PUBLIC);
                 NotificationManager manager = getSystemService(NotificationManager.class);
                 if (manager != null) {
                     manager.createNotificationChannel(channel);

@@ -35,9 +35,26 @@
   }
 }
 
+/* ── Mobile Snappy Performance & Touch Optimizations ── */
+html, body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  touch-action: manipulation;
+  -webkit-overflow-scrolling: touch;
+}
+
+*, *::before, *::after {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button, a, input, select, textarea, [role="button"] {
+  touch-action: manipulation;
+}
+
 /* Mobile: body padding for pages with global header */
 body {
-  animation: delulu-page-in 180ms ease-out both;
+  animation: delulu-page-in 140ms ease-out both;
   padding-top: calc(4.5rem + env(safe-area-inset-top, 0px)) !important;
 }
 
