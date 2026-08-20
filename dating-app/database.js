@@ -4,17 +4,31 @@ const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 
 let db;
+function isFirebaseConfigured() {
+  const pk = process.env.FIREBASE_PRIVATE_KEY || '';
+  return Boolean(pk && pk.includes('BEGIN PRIVATE KEY'));
+}
+
 function getDB() {
   if (!db) {
     let app;
     if (getApps().length === 0) {
-      app = initializeApp({
-        credential: cert({
-          projectId: process.env.FIREBASE_PROJECT_ID || 'mock-project',
-          clientEmail: process.env.FIREBASE_CLIENT_EMAIL || 'mock@example.com',
-          privateKey: (process.env.FIREBASE_PRIVATE_KEY || '').replace(/^"|"$/g, '').replace(/\\n/g, '\n')
-        })
-      });
+      const privateKey = (process.env.FIREBASE_PRIVATE_KEY || '').replace(/^"|"$/g, '').replace(/\\n/g, '\n');
+      if (privateKey && privateKey.includes('BEGIN PRIVATE KEY')) {
+        app = initializeApp({
+          credential: cert({
+            projectId: process.env.FIREBASE_PROJECT_ID,
+            clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+            privateKey
+          })
+        });
+      } else {
+        try {
+          app = initializeApp({ projectId: process.env.FIREBASE_PROJECT_ID || 'demo-project' });
+        } catch (e) {
+          app = getApps().length > 0 ? getApps()[0] : null;
+        }
+      }
     } else {
       app = getApps()[0];
     }
@@ -310,60 +324,62 @@ const userOps = {
     // Check in-memory cache first
     const cached = getCachedUserById(id);
     if (cached) return cached;
+    if (!isFirebaseConfigured()) return null;
     
-    const doc = await getDB().collection('users').doc(String(id)).get();
-    if (!doc.exists) return null;
-    const userData = doc.data();
-    const docId = doc.id ? (isNaN(doc.id) ? doc.id : Number(doc.id)) : null;
-    const resolvedUser = { ...userData, id: userData.id || docId };
-    setCachedUserById(id, resolvedUser);
-    return resolvedUser;
+    try {
+      const doc = await getDB().collection('users').doc(String(id)).get();
+      if (!doc.exists) return null;
+      const userData = doc.data();
+      const docId = doc.id ? (isNaN(doc.id) ? doc.id : Number(doc.id)) : null;
+      const resolvedUser = { ...userData, id: userData.id || docId };
+      setCachedUserById(id, resolvedUser);
+      return resolvedUser;
+    } catch (e) {
+      return null;
+    }
   },
   
   async getByUsername(username) {
     if (!username) return null;
+    if (!isFirebaseConfigured()) return null;
     const target = String(username).trim();
     const lower = target.toLowerCase();
-    const firestore = getDB();
-
-    // Fast path: normalized query (single-field equality, auto-indexed). New and
-    // updated accounts carry `username_lower`, making this O(1) — no scan.
     try {
-      const snap = await firestore.collection('users').where('username_lower', '==', lower).limit(1).get();
+      const firestore = getDB();
+
+      // Fast path: normalized query (single-field equality, auto-indexed)
+      try {
+        const snap = await firestore.collection('users').where('username_lower', '==', lower).limit(1).get();
+        if (!snap.empty) {
+          const doc = snap.docs[0];
+          const data = doc.data();
+          const docId = doc.id ? (isNaN(doc.id) ? doc.id : Number(doc.id)) : null;
+          return { ...data, id: data.id || docId };
+        }
+      } catch (e) {}
+
+      // Legacy path: exact (case-sensitive) match
+      const snap = await firestore.collection('users').where('username', '==', target).limit(1).get();
       if (!snap.empty) {
         const doc = snap.docs[0];
         const data = doc.data();
         const docId = doc.id ? (isNaN(doc.id) ? doc.id : Number(doc.id)) : null;
-        return { ...data, id: data.id || docId };
-      }
-    } catch (e) {
-      // Querying a field that exists on no document returns empty (not an
-      // error); fall through to the legacy paths on anything unexpected.
-    }
-
-    // Legacy path: exact (case-sensitive) match — pre-normalization accounts.
-    const snap = await firestore.collection('users').where('username', '==', target).limit(1).get();
-    if (!snap.empty) {
-      const doc = snap.docs[0];
-      const data = doc.data();
-      const docId = doc.id ? (isNaN(doc.id) ? doc.id : Number(doc.id)) : null;
-      // Lazy backfill so future lookups take the fast path.
-      if (!data.username_lower) doc.ref.update({ username_lower: lower }).catch(() => {});
-      return { ...data, id: data.id || docId };
-    }
-
-    // Legacy fallback: case-insensitive scan so "Bob" vs "bob" can never
-    // collide and login with a different casing still works. Only reachable for
-    // accounts created before username_lower existed; the backfill above and new
-    // signups retire this path over time.
-    const all = await firestore.collection('users').get();
-    for (const doc of all.docs) {
-      const data = doc.data();
-      if (String(data.username || '').trim().toLowerCase() === lower) {
-        const docId = doc.id ? (isNaN(doc.id) ? doc.id : Number(doc.id)) : null;
         if (!data.username_lower) doc.ref.update({ username_lower: lower }).catch(() => {});
         return { ...data, id: data.id || docId };
       }
+
+      // Legacy fallback: case-insensitive scan
+      const all = await firestore.collection('users').get();
+      for (const doc of all.docs) {
+        const data = doc.data();
+        if (String(data.username || '').trim().toLowerCase() === lower) {
+          const docId = doc.id ? (isNaN(doc.id) ? doc.id : Number(doc.id)) : null;
+          if (!data.username_lower) doc.ref.update({ username_lower: lower }).catch(() => {});
+          return { ...data, id: data.id || docId };
+        }
+      }
+    } catch (err) {
+      return null;
     }
     return null;
   },
@@ -388,12 +404,16 @@ const userOps = {
 
   async getByEmail(email) {
     if (!email) return null;
-    const snap = await getDB().collection('users').where('email', '==', String(email).toLowerCase().trim()).limit(1).get();
-    if (snap.empty) return null;
-    const doc = snap.docs[0];
-    const data = doc.data();
-    const docId = doc.id ? (isNaN(doc.id) ? doc.id : Number(doc.id)) : null;
-    return { ...data, id: data.id || docId };
+    try {
+      const snap = await getDB().collection('users').where('email', '==', String(email).toLowerCase().trim()).limit(1).get();
+      if (snap.empty) return null;
+      const doc = snap.docs[0];
+      const data = doc.data();
+      const docId = doc.id ? (isNaN(doc.id) ? doc.id : Number(doc.id)) : null;
+      return { ...data, id: data.id || docId };
+    } catch (e) {
+      return null;
+    }
   },
 
   async linkEmailToUser(userId, email) {
@@ -2435,13 +2455,18 @@ const pushOps = {
   },
 
   async getSubscriptions(userId) {
-    const firestore = getDB();
-    const snapshot = await firestore.collection('push_subs')
-      .where('user_id', '==', Number(userId))
-      .get();
-    const subs = [];
-    snapshot.forEach(doc => subs.push(doc.data()));
-    return subs;
+    if (!isFirebaseConfigured()) return [];
+    try {
+      const firestore = getDB();
+      const snapshot = await firestore.collection('push_subs')
+        .where('user_id', '==', Number(userId))
+        .get();
+      const subs = [];
+      snapshot.forEach(doc => subs.push(doc.data()));
+      return subs;
+    } catch (e) {
+      return [];
+    }
   },
 
   // Deletion is scoped by user_id so one user can never remove another user's
@@ -2548,6 +2573,7 @@ connectionOps.getAllBetween = async function(userId1, userId2) {
 
 module.exports = {
   getDB,
+  isFirebaseConfigured,
   getEcosystem,
   seedDemoUsers,
   userOps,

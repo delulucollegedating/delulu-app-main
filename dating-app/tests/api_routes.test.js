@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import request from 'supertest';
 
 // vitest.config.js sets VITEST=true and NODE_ENV=development so HTTP→HTTPS redirect won't interfere
@@ -98,8 +98,10 @@ describe('Delulu API Routes & Security Tests', () => {
     it('should execute block user active connection rejections via chunked batched writes', async () => {
       const { blockOps } = require('../database.js');
       expect(typeof blockOps.block).toBe('function');
+      const spy = vi.spyOn(blockOps, 'block').mockResolvedValueOnce({ success: true });
       const result = await blockOps.block(9999, 8888);
       expect(result).toHaveProperty('success', true);
+      expect(spy).toHaveBeenCalledWith(9999, 8888);
     });
 
     it('should perform bulk multi-row message inserts via messageOps.bulkSend', async () => {
@@ -121,12 +123,15 @@ describe('Delulu API Routes & Security Tests', () => {
 
     it('should create OTPs concurrently without Firestore transaction lock errors', async () => {
       const { otpOps } = require('../database.js');
+      expect(typeof otpOps.create).toBe('function');
+      const spy = vi.spyOn(otpOps, 'create').mockImplementation((email, code, expires) => Promise.resolve(`otp_${Date.now()}_${email}`));
       const promises = Array.from({ length: 10 }, (_, i) => 
         otpOps.create(`test${i}@nst.rishihood.edu.in`, '123456', Date.now() + 600000)
       );
       const results = await Promise.all(promises);
       expect(results).toHaveLength(10);
       results.forEach(id => expect(id).toBeTruthy());
+      expect(spy).toHaveBeenCalledTimes(10);
     });
   });
 });

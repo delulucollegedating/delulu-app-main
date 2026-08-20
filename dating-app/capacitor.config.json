@@ -10,6 +10,16 @@
       "*.onrender.com"
     ]
   },
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  },
+  "ios": {
+    "contentInset": "always",
+    "allowsLinkPreview": false,
+    "scrollEnabled": true
+  },
   "plugins": {
     "Config": {
       "apiBaseUrl": "https://delulu-app-main-production.up.railway.app"

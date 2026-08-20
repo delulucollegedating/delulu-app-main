@@ -71,8 +71,12 @@ describe('Login rate limiting (brute-force protection)', () => {
     const request = (await import('supertest')).default;
     const creds = { usernameOrEmail: 'no_such_user_abc123', password: 'wrong-password' };
     const statuses = [];
+    const testIp = `198.51.100.${Math.floor(Math.random() * 200) + 1}`;
     for (let i = 0; i < 6; i++) {
-      const res = await request(app).post('/api/users/login').send(creds);
+      const res = await request(app)
+        .post('/api/users/login')
+        .set('X-Forwarded-For', testIp)
+        .send(creds);
       statuses.push(res.status);
     }
     // First 5 = failed auth (401), 6th = rate-limited (429)

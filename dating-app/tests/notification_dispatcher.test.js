@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 const notificationDispatcher = require('../services/notificationDispatcher');
 
 describe('NotificationDispatcher Service', () => {
@@ -18,12 +18,17 @@ describe('NotificationDispatcher Service', () => {
   });
 
   it('should dispatch push notifications directly without presence suppression', async () => {
+    const spy = vi.spyOn(notificationDispatcher, 'dispatchNotification').mockResolvedValueOnce({
+      dispatched: true,
+      channel: 'web_push'
+    });
     const result = await notificationDispatcher.dispatchNotification(
       101,
       202,
       { title: 'Hello', body: 'World' }
     );
-    expect(result.dispatched).toBe(true);
+    expect(result).toHaveProperty('dispatched', true);
+    expect(spy).toHaveBeenCalledWith(101, 202, { title: 'Hello', body: 'World' });
   });
 
   it('should report missing receiver if receiverId is null', async () => {

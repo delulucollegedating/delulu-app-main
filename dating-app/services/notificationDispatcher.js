@@ -3,7 +3,7 @@ const { getFirestore } = require('firebase-admin/firestore');
 const { getMessaging } = require('firebase-admin/messaging');
 const CircuitBreaker = require('../utils/circuitBreaker');
 const webPush = require('web-push');
-const { pushOps } = require('../database');
+const { pushOps, isFirebaseConfigured } = require('../database');
 
 // Configure Web Push VAPID details so this module can send directly to
 // device subscriptions stored in the users/{userId}/devices subcollection.
@@ -97,6 +97,7 @@ function getDB() {
 }
 
 function getMessagingInstance() {
+  if (typeof isFirebaseConfigured === 'function' && !isFirebaseConfigured()) return null;
   const apps = getApps();
   if (apps.length === 0) return null;
   return getMessaging(apps[0]);
@@ -196,7 +197,7 @@ async function unregisterDevice(userId, deviceId) {
  * Fetch all active devices for a given user
  */
 async function getActiveDevices(userId) {
-  if (!userId) return [];
+  if (!userId || (typeof isFirebaseConfigured === 'function' && !isFirebaseConfigured())) return [];
   try {
     const firestore = getDB();
     const snap = await firestore
