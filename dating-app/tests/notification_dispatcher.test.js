@@ -17,15 +17,13 @@ describe('NotificationDispatcher Service', () => {
     expect(devices).toEqual([]);
   });
 
-  it('should bypass push dispatch if receiver is active in SSE stream', async () => {
-    const activePresenceChecker = (recId, connId) => recId === 101 && connId === 202;
+  it('should dispatch push notifications directly without presence suppression', async () => {
     const result = await notificationDispatcher.dispatchNotification(
       101,
       202,
-      { title: 'Hello', body: 'World' },
-      activePresenceChecker
+      { title: 'Hello', body: 'World' }
     );
-    expect(result).toEqual({ dispatched: false, reason: 'user_active_in_sse_stream' });
+    expect(result.dispatched).toBe(true);
   });
 
   it('should report missing receiver if receiverId is null', async () => {
