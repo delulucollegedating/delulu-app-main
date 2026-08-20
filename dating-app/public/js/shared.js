@@ -224,17 +224,15 @@ async function requireAuth() {
     try {
       currentUser = JSON.parse(cachedUserStr);
       updateHeaderAvatar();
+      initPushNotifications();
+      initGlobalUserStream();
 
       // If we verified the session recently, skip the network round-trip entirely.
-      // This prevents rapid page navigations from firing concurrent /api/session
-      // calls that race each other and can trigger false-positive sign-outs on
-      // cold-start Railway servers.
       if (isSessionRecentlyVerified()) {
         return; // Session is still fresh — render immediately, no network needed
       }
 
       // Perform session verification in background (non-blocking — page renders immediately with cached data).
-      // Extended timeout (15s) prevents false-positive logout on slow connections / cold-start servers.
       const safeTimeout = (ms) => new Promise(resolve => setTimeout(() => resolve(null), ms));
 
       Promise.race([apiCall('/api/session'), safeTimeout(15000)]).then(async result => {
@@ -246,40 +244,39 @@ async function requireAuth() {
           if (result.token) await setStoredAuthToken(result.token);
           markSessionVerified();
           updateHeaderAvatar();
-          setTimeout(initPushNotifications, 3000);
+          initPushNotifications();
+          initGlobalUserStream();
 
         } else if (result.authenticated === false) {
-          // Server says not authenticated. Before signing the user out, check:
-          // 1. If the device is offline, never sign out — the server answer is unreliable.
-          // 2. Retry once more with a generous timeout — Railway may still be warming up.
           if (!navigator.onLine) return; // Offline: keep cached user, do NOT redirect
 
           // First retry (10s)
           Promise.race([apiCall('/api/session'), safeTimeout(10000)]).then(async r1 => {
-            if (!r1) return; // Still timed out — keep user logged in
+            if (!r1) return;
             if (r1.authenticated && r1.user) {
               currentUser = r1.user;
               window.localStorage.setItem('cached_user', JSON.stringify(r1.user));
               if (r1.token) await setStoredAuthToken(r1.token);
               markSessionVerified();
               updateHeaderAvatar();
+              initPushNotifications();
+              initGlobalUserStream();
               return;
             }
             if (!r1.authenticated) {
-              if (!navigator.onLine) return; // Went offline during retry — keep user
-              // Second retry after a short delay (8s) — last chance before redirecting
+              if (!navigator.onLine) return;
               await new Promise(res => setTimeout(res, 2000));
               Promise.race([apiCall('/api/session'), safeTimeout(8000)]).then(async r2 => {
-                if (!r2 || !navigator.onLine) return; // Still failing or offline — do NOT sign out
+                if (!r2 || !navigator.onLine) return;
                 if (r2.authenticated && r2.user) {
                   currentUser = r2.user;
                   window.localStorage.setItem('cached_user', JSON.stringify(r2.user));
                   if (r2.token) await setStoredAuthToken(r2.token);
                   markSessionVerified();
                   updateHeaderAvatar();
+                  initPushNotifications();
+                  initGlobalUserStream();
                 } else if (r2.authenticated === false) {
-                  // Three consecutive server responses saying "not authenticated" with
-                  // device online — the token is genuinely invalid. Sign out.
                   window.localStorage.removeItem('cached_user');
                   window.localStorage.removeItem(SESSION_VERIFIED_KEY);
                   await removeStoredAuthToken();
@@ -290,9 +287,9 @@ async function requireAuth() {
             }
           }).catch(() => {});
         }
-      }).catch(() => {}); // Network error — keep cached user, do NOT sign out
+      }).catch(() => {});
       
-      return; // Resolve instantly — page renders from cache!
+      return;
     } catch (e) {
       window.localStorage.removeItem('cached_user');
       window.localStorage.removeItem(SESSION_VERIFIED_KEY);
@@ -311,14 +308,14 @@ async function requireAuth() {
       if (data.token) await setStoredAuthToken(data.token);
       markSessionVerified();
       updateHeaderAvatar();
-      setTimeout(initPushNotifications, 3000);
+      initPushNotifications();
+      initGlobalUserStream();
     } else if (data && data.authenticated === false) {
       window.localStorage.removeItem('cached_user');
       window.localStorage.removeItem(SESSION_VERIFIED_KEY);
       await removeStoredAuthToken();
       window.location.href = 'login.html';
     } else {
-      // Timeout — no cached data, but we don't sign out (server may be cold-starting)
       if (!window.localStorage.getItem('cached_user')) {
         window.location.href = 'login.html';
       }
@@ -837,13 +834,32 @@ function registerCapacitorPushListeners() {
       handlePushNotificationAction(action.notification?.data || {});
     }).catch(() => {});
 
-    // Foreground delivery — FCM does not auto-display while app is open
+    // Foreground delivery — FCM delivers payload, we show high-priority banner / local notification
     PushNotifications.addListener('pushReceived', (notification) => {
       const data = (notification && notification.data) || {};
-      const title = data.title || data.senderName || (data.type === 'chat_message' ? 'New message' : 'New notification');
-      const body = data.body || '';
+      const title = data.title || notification.title || data.senderName || 'New notification';
+      const body = data.body || notification.body || '';
       const url = data.url || (data.connectionId ? `chat.html?id=${data.connectionId}` : 'messages.html');
-      window.showNativeNotification({ title, body, url, id: data.messageId || data.connectionId });
+      
+      // If user is not currently in this chat room, alert them
+      const activeChatId = new URLSearchParams(window.location.search).get('id');
+      const isCurrentChat = activeChatId && data.connectionId && String(activeChatId) === String(data.connectionId);
+      
+      if (!isCurrentChat) {
+        if (typeof window.hapticLight === 'function') window.hapticLight();
+        if (typeof window.showRichToast === 'function') {
+          window.showRichToast({
+            senderName: title,
+            preview: body,
+            connectionId: data.connectionId
+          });
+        }
+        window.showNativeNotification({ title, body, url, id: data.messageId || data.connectionId });
+      }
+    }).catch(() => {});
+
+    PushNotifications.addListener('registrationError', (error) => {
+      console.warn('[Capacitor] Push registration error:', error);
     }).catch(() => {});
   } catch (e) {
     console.warn('[Capacitor] Push listener registration failed:', e.message);
@@ -875,28 +891,50 @@ async function initPushNotifications() {
   if (window.Capacitor && window.Capacitor.isPluginAvailable && window.Capacitor.isPluginAvailable('PushNotifications')) {
     try {
       const PushNotifications = window.Capacitor.Plugins.PushNotifications;
-      if (PushNotifications && typeof PushNotifications.requestPermissions === 'function') {
-        let perm = await PushNotifications.requestPermissions().catch(() => ({ receive: 'denied' }));
+      const LocalNotifications = (window.Capacitor.isPluginAvailable('LocalNotifications'))
+        ? window.Capacitor.Plugins.LocalNotifications
+        : null;
+
+      // Ensure notification channel exists with MAX priority (sound + vibration)
+      if (LocalNotifications && typeof LocalNotifications.createChannel === 'function') {
+        await LocalNotifications.createChannel({
+          id: 'delulu_messages',
+          name: 'Delulu Messages',
+          description: 'Instant chat message and connection notifications',
+          importance: 5,
+          vibration: true,
+          sound: 'default',
+          visibility: 1
+        }).catch(() => {});
+      }
+
+      // Pre-bind registration listeners BEFORE calling register()
+      PushNotifications.addListener('registration', async (token) => {
+        if (token && token.value) {
+          await apiCall('/api/devices/register', 'POST', {
+            deviceId,
+            platform: 'android_fcm',
+            token: token.value,
+            app_version: '1.0.0'
+          }).catch(() => {});
+          await apiCall('/api/push/fcm-token', 'POST', { token: token.value }).catch(() => {});
+          dbg('[Push] FCM registered token successfully');
+        }
+      }).catch(() => {});
+
+      // Ensure tap listeners are active
+      registerCapacitorPushListeners();
+      registerLocalNotificationTap();
+
+      // Request runtime notification permissions (Android 13+ / iOS)
+      if (typeof PushNotifications.requestPermissions === 'function') {
+        let perm = await PushNotifications.requestPermissions().catch(() => ({ receive: 'prompt' }));
+        if (LocalNotifications && typeof LocalNotifications.requestPermissions === 'function') {
+          await LocalNotifications.requestPermissions().catch(() => {});
+        }
         if (perm && (perm.receive === 'granted' || perm.display === 'granted')) {
           await PushNotifications.register().catch(() => {});
         }
-
-        // Ensure tap/pushReceived listeners are registered (idempotent)
-        registerCapacitorPushListeners();
-        registerLocalNotificationTap();
-
-        PushNotifications.addListener('registration', async (token) => {
-          if (token && token.value) {
-            await apiCall('/api/devices/register', 'POST', {
-              deviceId,
-              platform: 'android_fcm',
-              token: token.value,
-              app_version: '1.0.0'
-            }).catch(() => {});
-            // Also register via legacy FCM-token endpoint for backward compatibility
-            await apiCall('/api/push/fcm-token', 'POST', { token: token.value }).catch(() => {});
-          }
-        }).catch(() => {});
       }
     } catch (e) {
       console.warn('[Capacitor] Push notifications setup safely bypassed:', e.message);
@@ -957,35 +995,45 @@ async function initPushNotifications() {
 
 // ===== Global Native Notification Trigger Helper =====
 async function showNativeNotification({ title, body, url, id }) {
-  // Never show a blank notification
   const safeTitle = title && title.trim() ? title : 'New notification';
   const safeBody = body && body.trim() ? body : 'You have a new notification';
   const safeUrl = url && url !== '/' ? url : 'messages.html';
 
+  // Capacitor LocalNotifications requires a valid 32-bit positive integer ID
+  let notifId;
+  if (typeof id === 'number' && Number.isInteger(id)) {
+    notifId = Math.abs(id % 2147483647);
+  } else if (typeof id === 'string' && /^\d+$/.test(id)) {
+    notifId = Math.abs(parseInt(id, 10) % 2147483647);
+  } else {
+    notifId = Math.floor(Math.random() * 2000000000) + 1;
+  }
+
   // If running inside Capacitor Native App
-  if (window.Capacitor && window.Capacitor.isPluginAvailable('LocalNotifications')) {
+  if (window.Capacitor && window.Capacitor.isPluginAvailable && window.Capacitor.isPluginAvailable('LocalNotifications')) {
     try {
       const LocalNotifications = window.Capacitor.Plugins.LocalNotifications;
-      // Ensure the Android notification channel exists (silently ignored if present)
       if (typeof LocalNotifications.createChannel === 'function') {
-        LocalNotifications.createChannel({
+        await LocalNotifications.createChannel({
           id: 'delulu_messages',
           name: 'Delulu Messages',
-          description: 'New message and connection notifications',
+          description: 'Instant chat message and connection notifications',
           importance: 5,
           vibration: true,
-          sound: 'default'
+          sound: 'default',
+          visibility: 1
         }).catch(() => {});
       }
-      const notifId = id || Math.floor(Math.random() * 1000000);
       await LocalNotifications.schedule({
         notifications: [
           {
             title: safeTitle,
             body: safeBody,
             id: notifId,
-            schedule: { at: new Date(Date.now() + 100) },
-            extra: { url: safeUrl }
+            schedule: { at: new Date(Date.now() + 50) },
+            extra: { url: safeUrl },
+            channelId: 'delulu_messages',
+            smallIcon: 'ic_launcher'
           }
         ]
       });
@@ -1008,6 +1056,76 @@ async function showNativeNotification({ title, body, url, id }) {
 }
 
 window.showNativeNotification = showNativeNotification;
+
+// ===== Global Background User Event Stream =====
+// Powers real-time message toasts and notification alerts across ALL pages
+let _globalUserStream = null;
+let _globalStreamBackoff = 2000;
+
+async function initGlobalUserStream() {
+  // messages.html and chat.html have their own dedicated real-time handlers
+  const pathname = window.location.pathname;
+  if (pathname.includes('messages.html') || pathname.includes('chat.html')) return;
+  if (_globalUserStream || !currentUser) return;
+
+  try {
+    const streamUrl = await buildSSEUrl('/api/user/stream');
+    _globalUserStream = new EventSource(streamUrl);
+
+    _globalUserStream.onmessage = (event) => {
+      if (!event.data || event.data.startsWith(':')) return;
+      let data;
+      try { data = JSON.parse(event.data); } catch { return; }
+      _globalStreamBackoff = 2000;
+
+      if (data.type === 'message') {
+        if (typeof window.hapticLight === 'function') window.hapticLight();
+        if (typeof window.showRichToast === 'function') {
+          window.showRichToast({
+            senderName: data.senderName || 'New message',
+            preview: data.lastMessage || 'Sent you a message',
+            connectionId: data.connectionId
+          });
+        }
+        if (document.hidden) {
+          window.showNativeNotification({
+            title: data.senderName || 'New message',
+            body: data.lastMessage || 'You have a new message',
+            url: `chat.html?id=${data.connectionId}`,
+            id: data.connectionId
+          });
+        }
+      } else if (data.type === 'connection_request') {
+        if (typeof window.hapticMedium === 'function') window.hapticMedium();
+        if (typeof window.showToast === 'function') {
+          window.showToast(`${data.senderName || 'Someone'} sent you a connection request!`, 'info');
+        }
+        if (document.hidden) {
+          window.showNativeNotification({
+            title: 'New Connection Request',
+            body: `${data.senderName || 'Someone'} wants to connect with you!`,
+            url: 'requests.html',
+            id: data.senderId
+          });
+        }
+      } else if (data.type === 'match_celebration') {
+        if (typeof window.showMatchCelebration === 'function') {
+          window.showMatchCelebration(data.username, data.connectionId);
+        }
+      }
+    };
+
+    _globalUserStream.onerror = () => {
+      if (_globalUserStream) {
+        _globalUserStream.close();
+        _globalUserStream = null;
+      }
+      setTimeout(initGlobalUserStream, Math.min(_globalStreamBackoff *= 2, 30000));
+    };
+  } catch (e) {
+    _globalUserStream = null;
+  }
+}
 
 // ===== Connection Timeline Helper =====
 function getConnectionProgress(status, chatStartedAt, identityRevealAvailableAt, faceRevealAvailableAt) {

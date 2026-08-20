@@ -2064,7 +2064,13 @@ app.post('/api/connections/request', requireAuth, discoverLimiter, async (req, r
   invalidateDiscoverFeed(req.session.userId);
   invalidateDiscoverFeed(to_user_id);
   
-  // Notify the target user about the connection request
+  // Notify the target user about the connection request via real-time stream + push
+  userEmitter.emit(`user:${to_user_id}`, {
+    type: 'connection_request',
+    senderId: req.session.userId,
+    senderName: user.username,
+    avatar: user.avatar
+  });
   sendPushNotification(to_user_id, 'New Connection Request', `${user.username} wants to connect with you!`, '/requests.html', 'connection_request', null);
   
   res.json(result);
@@ -2733,8 +2739,7 @@ app.post('/api/messages/send', requireAuth, messageLimiter, async (req, res) => 
       type: 'chat_message',
       createdAt: msg.created_at,
       url: `/chat.html?id=${connection_id}`
-    },
-    (recId, connId) => activeRoomUsers.get(String(connId))?.has(Number(recId))
+    }
   ).catch(err => console.warn('Push notification dispatch error:', err.message));
 
   // Message order and previews come directly from Supabase. Do not write
@@ -2893,12 +2898,27 @@ async function sendPushNotification(userId, title, body, url = '/messages.html',
                 notification: {
                   title: safeTitle,
                   body: safeBody,
-                  icon: 'ic_stat_delulu',
-                  color: '#a53b29',
+                  icon: 'ic_launcher',
+                  color: '#85431E',
                   sound: 'default',
+                  defaultSound: true,
+                  defaultVibrateTimings: true,
                   priority: 'high',
                   channelId: 'delulu_messages',
                   visibility: 'public'
+                }
+              },
+              apns: {
+                payload: {
+                  aps: {
+                    alert: {
+                      title: safeTitle,
+                      body: safeBody
+                    },
+                    sound: 'default',
+                    badge: 1,
+                    'content-available': 1
+                  }
                 }
               }
             };

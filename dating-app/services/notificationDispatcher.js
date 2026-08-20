@@ -223,12 +223,7 @@ async function getActiveDevices(userId) {
 async function dispatchNotification(receiverId, connectionId, payload = {}, ssePresenceChecker = null) {
   if (!receiverId) return { dispatched: false, reason: 'missing_receiver' };
 
-  // 1. Presence Check: If receiver is actively connected via SSE to this chat room, skip push
-  if (typeof ssePresenceChecker === 'function' && ssePresenceChecker(receiverId, connectionId)) {
-    return { dispatched: false, reason: 'user_active_in_sse_stream' };
-  }
-
-  // 2. Fetch registered devices for the receiver
+  // 1. Fetch registered devices for the receiver
   const devices = await getActiveDevices(receiverId);
   if (devices.length === 0) {
     // Fallback: If no subcollection devices exist yet, attempt fallback to legacy
@@ -258,7 +253,7 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
 
   const dispatchResults = { fcm: 0, web: 0, errors: [] };
 
-  // 3. Dispatch to Android FCM devices
+  // 2. Dispatch to Android FCM devices (instant high-priority delivery)
   if (fcmDevices.length > 0) {
     const messaging = getMessagingInstance();
     if (messaging) {
@@ -290,10 +285,27 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
             title: notifTitle,
             body: notifBody,
             channelId: 'delulu_messages',
-            icon: 'ic_stat_delulu',
-            color: '#a53b29',
+            icon: 'ic_launcher',
+            color: '#85431E',
             sound: 'default',
+            defaultSound: true,
+            defaultVibrateTimings: true,
+            priority: 'high',
+            visibility: 'public',
             tag: connectionId ? `conn_${connectionId}` : `notif_${Date.now()}`
+          }
+        },
+        apns: {
+          payload: {
+            aps: {
+              alert: {
+                title: notifTitle,
+                body: notifBody
+              },
+              sound: 'default',
+              badge: 1,
+              'content-available': 1
+            }
           }
         }
       };
