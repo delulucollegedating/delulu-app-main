@@ -312,15 +312,8 @@ async function initRealtimeStream() {
           appendMessage({ ...streamEvent.msg }, shouldFollow).then(() => {
             if (shouldFollow) markMessagesAsRead();
           }).catch(() => {});
-          // Fire native notification if the app/tab is in the background
-          if (document.hidden && typeof window.showNativeNotification === 'function') {
-            window.showNativeNotification({
-              title: 'New message',
-              body: streamEvent.msg.content || 'You have a new message',
-              url: `chat.html?id=${currentConnId}`,
-              id: streamEvent.msg.id
-            });
-          }
+          // Native/Android notifications are triggered exclusively by FCM
+          // (see shared.js pushReceived listener). SSE only updates the UI.
         }
       } else if (!streamEvent.msg) {
         // Fallback: old-style SSE with no embedded message — do a delta fetch
