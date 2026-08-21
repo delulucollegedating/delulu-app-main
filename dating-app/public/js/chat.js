@@ -144,7 +144,7 @@ async function pollDelta() {
         if (typeof messageCache !== 'undefined') {
           await messageCache.cacheMessages(currentConnId, data.messages);
         }
-        if (isViewingLatestMessages()) setTimeout(() => markMessagesAsRead(), 300);
+        if (isViewingLatestMessages()) setTimeout(() => markMessagesAsRead({ immediate: otherNewMsgs.length > 0 }), 300);
         return true;
       }
     }
@@ -342,15 +342,6 @@ async function initRealtimeStream() {
           appendMessage({ ...streamEvent.msg }, shouldFollow).then(() => {
             if (shouldFollow) markMessagesAsRead({ immediate: true });
           }).catch(() => {});
-          // Fire native notification if the app/tab is in the background
-          if (document.hidden && typeof window.showNativeNotification === 'function') {
-            window.showNativeNotification({
-              title: 'New message',
-              body: streamEvent.msg.content || 'You have a new message',
-              url: `chat.html?id=${currentConnId}`,
-              id: streamEvent.msg.id
-            });
-          }
         }
       } else if (!streamEvent.msg) {
         // Fallback: old-style SSE with no embedded message — do a delta fetch
@@ -1242,20 +1233,21 @@ window.addEventListener('beforeunload', cleanupChatResources);
 
 let _readInFlight = false;
 let _pendingReadMark = false;
+let _pendingImmediateReadMark = false;
 let _readReceiptDelayTimer = null;
 let _lastReadReceiptSentAt = 0;
 const READ_RECEIPT_MIN_INTERVAL_MS = 10 * 1000;
 
-function markMessagesAsRead() {
+function markMessagesAsRead({ immediate = false } = {}) {
   // Do not acknowledge an entire thread just because it loaded in the
   // background; advance read state only at the live end of the conversation.
   if (!currentConnId || document.hidden || !hasUnreadMessagesInView || !isViewingLatestMessages()) return;
 
   // A fast conversation can deliver several messages per second. Persist one
-  // acknowledgement at most every 10 seconds; the UI still updates instantly
-  // through SSE, so this has no visible delay for either participant.
+  // acknowledgement at most every 10 seconds for ordinary UI-triggered calls.
+  // A newly received visible message is allowed to acknowledge immediately.
   const elapsed = Date.now() - _lastReadReceiptSentAt;
-  if (elapsed < READ_RECEIPT_MIN_INTERVAL_MS) {
+  if (!immediate && elapsed < READ_RECEIPT_MIN_INTERVAL_MS) {
     if (!_readReceiptDelayTimer) {
       _readReceiptDelayTimer = setTimeout(() => {
         _readReceiptDelayTimer = null;
@@ -1266,6 +1258,7 @@ function markMessagesAsRead() {
   }
   if (_readInFlight) {
     _pendingReadMark = true;
+    _pendingImmediateReadMark = _pendingImmediateReadMark || immediate;
     return;
   }
   _readInFlight = true;
@@ -1283,7 +1276,9 @@ function markMessagesAsRead() {
       _readInFlight = false;
       if (_pendingReadMark) {
         _pendingReadMark = false;
-        setTimeout(markMessagesAsRead, 50); // halved from 100ms for snappier read receipts
+        const retryImmediately = _pendingImmediateReadMark;
+        _pendingImmediateReadMark = false;
+        setTimeout(() => markMessagesAsRead({ immediate: retryImmediately }), 50);
       }
     });
 }
