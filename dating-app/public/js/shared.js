@@ -919,19 +919,34 @@ async function initPushNotifications() {
         }).catch(() => {});
       }
 
-      // Pre-bind registration listeners BEFORE calling register()
-      PushNotifications.addListener('registration', async (token) => {
-        if (token && token.value) {
-          await apiCall('/api/devices/register', 'POST', {
-            deviceId,
-            platform: 'android_fcm',
-            token: token.value,
-            app_version: '1.0.0'
-          }).catch(() => {});
-          await apiCall('/api/push/fcm-token', 'POST', { token: token.value }).catch(() => {});
-          dbg('[Push] FCM registered token successfully');
+      // Pre-bind registration listeners BEFORE calling register().
+      // Guard against requireAuth() invoking initPushNotifications() more than
+      // once per page load (e.g. cached-user render + background session
+      // verification), which would otherwise attach multiple 'registration'
+      // listeners and fire duplicate device-registration API calls.
+      // The flag is only set AFTER the listener is confirmed attached, so a
+      // failed attempt leaves it unset and a later call can retry safely.
+      if (!window.__pushNotificationsInitialized) {
+        try {
+          await PushNotifications.addListener('registration', async (token) => {
+            if (token && token.value) {
+              await apiCall('/api/devices/register', 'POST', {
+                deviceId,
+                platform: 'android_fcm',
+                token: token.value,
+                app_version: '1.0.0'
+              }).catch(() => {});
+              await apiCall('/api/push/fcm-token', 'POST', { token: token.value }).catch(() => {});
+              dbg('[Push] FCM registered token successfully');
+            }
+          });
+          window.__pushNotificationsInitialized = true;
+        } catch (e) {
+          // Leave the flag unset so a subsequent initPushNotifications() call
+          // can retry attaching the listener instead of getting stuck.
+          console.warn('[Capacitor] Failed to attach registration listener, will retry next call:', e.message);
         }
-      }).catch(() => {});
+      }
 
       // Ensure tap listeners are active
       registerCapacitorPushListeners();
@@ -1098,27 +1113,15 @@ async function initGlobalUserStream() {
             connectionId: data.connectionId
           });
         }
-        if (document.hidden) {
-          window.showNativeNotification({
-            title: data.senderName || 'New message',
-            body: data.lastMessage || 'You have a new message',
-            url: `chat.html?id=${data.connectionId}`,
-            id: data.connectionId
-          });
-        }
+        // Native/Android notifications are triggered exclusively by FCM
+        // (see pushReceived listener above). SSE only drives in-app UI (toasts).
       } else if (data.type === 'connection_request') {
         if (typeof window.hapticMedium === 'function') window.hapticMedium();
         if (typeof window.showToast === 'function') {
           window.showToast(`${data.senderName || 'Someone'} sent you a connection request!`, 'info');
         }
-        if (document.hidden) {
-          window.showNativeNotification({
-            title: 'New Connection Request',
-            body: `${data.senderName || 'Someone'} wants to connect with you!`,
-            url: 'requests.html',
-            id: data.senderId
-          });
-        }
+        // Native/Android notifications are triggered exclusively by FCM
+        // (see pushReceived listener above). SSE only drives in-app UI (toasts).
       } else if (data.type === 'match_celebration') {
         if (typeof window.showMatchCelebration === 'function') {
           window.showMatchCelebration(data.username, data.connectionId);
