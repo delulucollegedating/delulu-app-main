@@ -2180,7 +2180,20 @@ app.get('/api/connections/:id', requireAuth, async (req, res) => {
 });
 
 // ===== In-Memory Presence & Typing Tracking (0% DB cost) =====
-const activeRoomUsers = new Map(); // connectionId -> Set<userId>
+// roomKey -> Map<userId, openConnectionCount>. A ref-count per user (rather
+// than a plain Set) means a user with multiple open tabs/devices for the
+// same chat doesn't get marked offline just because one of those tabs
+// closed while another is still connected.
+const activeRoomUsers = new Map();
+
+// roomKey:userId -> Timeout. When a user's last connection for a room
+// closes we don't mark them offline immediately — SSE streams (especially
+// on Android WebView) drop and reconnect constantly on backgrounding/network
+// blips. We hold a short grace period during which a reconnect silently
+// cancels the pending "offline" broadcast, so genuine reconnects never
+// produce a visible flicker for the other party.
+const pendingPresenceRemoval = new Map();
+const PRESENCE_OFFLINE_GRACE_MS = 8000;
 
 // ── SSE connection caps ─────────────────────────────────────────────────────
 // Each open SSE stream holds a socket, an EventEmitter listener and a heartbeat
@@ -2214,36 +2227,93 @@ function releaseSSEConnection(key) {
   else _sseCounts.set(key, count - 1);
 }
 
-function addRoomPresence(connectionId, userId) {
-  const roomKey = String(connectionId);
-  const set = activeRoomUsers.get(roomKey) || new Set();
-  set.add(Number(userId));
-  activeRoomUsers.set(roomKey, set);
+function getOnlineUserIds(roomKey) {
+  const userMap = activeRoomUsers.get(roomKey);
+  if (!userMap) return [];
+  // Note: a user whose last connection just closed is kept as a key with
+  // count 0 during their grace period (see removeRoomPresence) and is
+  // still reported here as "online" — that's intentional, it's what makes
+  // brief disconnects invisible to the other party instead of flickering.
+  return Array.from(userMap.keys());
+}
 
-  // Broadcast presence event to connection stream
+function broadcastPresence(connectionId, userId, status) {
+  // The payload always carries the FULL current roster (onlineUserIds), not
+  // just a delta for `userId`. That's what lets a single event fully inform
+  // a newly-connected client: it doesn't need any earlier events to know
+  // who else is currently online in the room.
   connectionEmitter.emit(`update:${connectionId}`, {
     type: 'presence',
     userId: Number(userId),
-    status: 'online',
-    onlineUserIds: Array.from(set)
+    status,
+    onlineUserIds: getOnlineUserIds(String(connectionId))
   });
+}
+
+function addRoomPresence(connectionId, userId) {
+  const roomKey = String(connectionId);
+  const uid = Number(userId);
+  const removalKey = `${roomKey}:${uid}`;
+
+  // Reconnected before the grace period expired — cancel the pending
+  // "offline" broadcast so the other party never sees a false flicker.
+  const pendingTimer = pendingPresenceRemoval.get(removalKey);
+  if (pendingTimer) {
+    clearTimeout(pendingTimer);
+    pendingPresenceRemoval.delete(removalKey);
+  }
+
+  let userMap = activeRoomUsers.get(roomKey);
+  if (!userMap) {
+    userMap = new Map();
+    activeRoomUsers.set(roomKey, userMap);
+  }
+  userMap.set(uid, (userMap.get(uid) || 0) + 1);
+
+  // Broadcast on every (re)connect. Because the /stream handler now
+  // registers its listener BEFORE calling this function, the connecting
+  // client's own listener is guaranteed to catch this event — and since
+  // the payload is a full roster snapshot, this single event is enough for
+  // it to learn the current online/offline state of everyone else too.
+  broadcastPresence(connectionId, uid, 'online');
 }
 
 function removeRoomPresence(connectionId, userId) {
   const roomKey = String(connectionId);
-  const set = activeRoomUsers.get(roomKey);
-  if (!set) return;
-  set.delete(Number(userId));
-  if (set.size === 0) {
-    activeRoomUsers.delete(roomKey);
+  const uid = Number(userId);
+  const userMap = activeRoomUsers.get(roomKey);
+  if (!userMap || !userMap.has(uid)) return;
+
+  const remaining = (userMap.get(uid) || 1) - 1;
+  userMap.set(uid, remaining);
+  if (remaining > 0) {
+    // Another connection (tab/device) for this same user in this room is
+    // still open — presence doesn't change, nothing to broadcast.
+    return;
   }
 
-  connectionEmitter.emit(`update:${connectionId}`, {
-    type: 'presence',
-    userId: Number(userId),
-    status: 'offline',
-    onlineUserIds: Array.from(set || [])
-  });
+  // Last open connection for this user in this room just closed. Don't flip
+  // them offline yet: give them PRESENCE_OFFLINE_GRACE_MS to reconnect
+  // (covers Android WebView SSE drops, brief network blips, tab
+  // backgrounding). Only broadcast "offline" if they haven't come back by
+  // the time the timer fires.
+  const removalKey = `${roomKey}:${uid}`;
+  const timer = setTimeout(() => {
+    pendingPresenceRemoval.delete(removalKey);
+    const currentUserMap = activeRoomUsers.get(roomKey);
+    if (!currentUserMap || !currentUserMap.has(uid)) return; // already handled
+    if ((currentUserMap.get(uid) || 0) > 0) {
+      // A reconnect landed a fresh connection without going through
+      // addRoomPresence's cancel path (defensive) — still online, skip.
+      return;
+    }
+    currentUserMap.delete(uid);
+    if (currentUserMap.size === 0) {
+      activeRoomUsers.delete(roomKey);
+    }
+    broadcastPresence(connectionId, uid, 'offline');
+  }, PRESENCE_OFFLINE_GRACE_MS);
+  pendingPresenceRemoval.set(removalKey, timer);
 }
 
 // SSE Endpoint for real-time game/status/typing/presence updates
@@ -2286,9 +2356,6 @@ app.get('/api/connections/:id/stream', requireSSEAuth, async (req, res) => {
   // Send initial connection verification comment
   res.write(': ok\n\n');
 
-  // Register in-memory room presence (0 DB cost)
-  addRoomPresence(connectionId, userId);
-
   // Define listener callback
   const onUpdate = (event) => {
     const payload = event && Object.keys(event).length > 1
@@ -2297,9 +2364,21 @@ app.get('/api/connections/:id/stream', requireSSEAuth, async (req, res) => {
     res.write(`data: ${payload}\n\n`);
   };
 
-  // Subscribe to updates for this connection
+  // Subscribe to updates for this connection BEFORE touching room presence.
+  // addRoomPresence() below broadcasts a presence event as a side effect;
+  // previously it ran before this listener was registered, so a client
+  // could miss the very event that tells it who is currently online in the
+  // room. Registering the listener first guarantees this client's own
+  // connection event (which carries the full current roster) is received.
   const eventName = `update:${connectionId}`;
   connectionEmitter.on(eventName, onUpdate);
+
+  // Register in-memory room presence (0 DB cost). This broadcasts a
+  // presence event containing the full online roster to every listener on
+  // this room, including the one just registered above — so this client
+  // learns immediately, from this single event, both that it is online and
+  // who else is already online (fixes the asymmetric presence bug).
+  addRoomPresence(connectionId, userId);
 
   // Set heartbeat ping every 25 seconds to keep connection alive on Render/proxies
   const heartbeatInterval = setInterval(() => {
@@ -3392,5 +3471,15 @@ module.exports = {
   // without ever touching the database.
   __sessionTestUtils: {
     sessionStore
+  },
+  // Kept private-by-convention; used by the presence contract tests.
+  __presenceTestUtils: {
+    activeRoomUsers,
+    pendingPresenceRemoval,
+    addRoomPresence,
+    removeRoomPresence,
+    getOnlineUserIds,
+    connectionEmitter,
+    PRESENCE_OFFLINE_GRACE_MS
   }
 };
