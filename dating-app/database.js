@@ -695,6 +695,69 @@ async function getLastMessageForConnection(connectionId) {
   return lastMsg;
 }
 
+async function getLastMessagesForConnections(connectionIds) {
+  const latestByConnection = new Map();
+  const missingIds = [];
+  const seenIds = new Set();
+
+  for (const connectionId of connectionIds) {
+    const key = String(connectionId);
+    if (seenIds.has(key)) continue;
+    seenIds.add(key);
+    const cached = getCachedLastMessage(connectionId);
+    if (cached !== undefined) {
+      latestByConnection.set(key, cached);
+    } else {
+      missingIds.push(Number(connectionId));
+    }
+  }
+
+  if (missingIds.length === 0) return latestByConnection;
+
+  let lastMsgs;
+  try {
+    const rpcResult = await getSupabase().rpc('latest_messages_for_connections', {
+      conn_ids: missingIds
+    });
+    if (rpcResult.error) throw rpcResult.error;
+    lastMsgs = rpcResult.data || [];
+  } catch (rpcError) {
+    try {
+      const fallbackResult = await getSupabase()
+        .from('messages')
+        .select('*')
+        .in('connection_id', missingIds)
+        .order('created_at', { ascending: false });
+      if (fallbackResult.error) throw fallbackResult.error;
+      lastMsgs = fallbackResult.data || [];
+    } catch (err) {
+      for (const connectionId of missingIds) {
+        latestByConnection.set(String(connectionId), null);
+      }
+      return latestByConnection;
+    }
+  }
+
+  const returnedIds = new Set();
+  for (const message of lastMsgs) {
+    const key = String(message.connection_id);
+    if (returnedIds.has(key)) continue;
+    returnedIds.add(key);
+    latestByConnection.set(key, message);
+    setCachedLastMessage(message.connection_id, message);
+  }
+
+  for (const connectionId of missingIds) {
+    const key = String(connectionId);
+    if (!latestByConnection.has(key)) {
+      latestByConnection.set(key, null);
+      setCachedLastMessage(connectionId, null);
+    }
+  }
+
+  return latestByConnection;
+}
+
 async function mapWithConcurrency(items, limit, mapper) {
   const results = new Array(items.length);
   let cursor = 0;
@@ -1058,12 +1121,14 @@ const connectionOps = {
       } catch (err) {}
     }
 
+    const latestMessages = await getLastMessagesForConnections(
+      connections.map(conn => conn.id)
+    );
+
     const active = (await mapWithConcurrency(connections, 6, async (conn) => {
       const otherId = conn.from_user_id === Number(userId) ? conn.to_user_id : conn.from_user_id;
-      const [otherUser, lastMsg] = await Promise.all([
-        userById.get(String(otherId)) || null,
-        getLastMessageForConnection(conn.id).catch(() => null)
-      ]);
+      const otherUser = userById.get(String(otherId)) || null;
+      const lastMsg = latestMessages.get(String(conn.id)) || null;
       if (!otherUser) return null;
 
       const isFrom = conn.from_user_id === Number(userId);
