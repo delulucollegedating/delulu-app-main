@@ -70,15 +70,8 @@ async function initUserStream() {
           window.setTitleUnread(_totalUnread);
         }
 
-        // Native notification if app is backgrounded
-        if (document.hidden && typeof window.showNativeNotification === 'function') {
-          window.showNativeNotification({
-            title: data.senderName || 'New message',
-            body: data.lastMessage || 'You have a new message',
-            url: `chat.html?id=${data.connectionId}`,
-            id: data.connectionId
-          });
-        }
+        // Native/Android notifications are triggered exclusively by FCM
+        // (see shared.js pushReceived listener). SSE only updates the UI.
       }
     }
   };
