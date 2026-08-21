@@ -865,6 +865,8 @@ function registerCapacitorPushListeners() {
             connectionId: data.connectionId
           });
         }
+      }
+      if (typeof window.showNativeNotification === 'function') {
         window.showNativeNotification({ title, body, url, id: data.messageId || data.connectionId });
       }
     }).catch(() => {});
