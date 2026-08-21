@@ -1028,10 +1028,40 @@ const connectionOps = {
       connections.map(conn => conn.id)
     );
 
+    const userById = new Map();
+    const missingUserIds = [];
+    const missingUserIdSet = new Set();
+    for (const conn of connections) {
+      const otherId = conn.from_user_id === Number(userId) ? conn.to_user_id : conn.from_user_id;
+      const cachedUser = getCachedUserById(otherId);
+      if (cachedUser) {
+        userById.set(String(otherId), cachedUser);
+      } else if (!missingUserIdSet.has(String(otherId))) {
+        missingUserIdSet.add(String(otherId));
+        missingUserIds.push(otherId);
+      }
+    }
+
+    if (missingUserIds.length > 0 && isFirebaseConfigured()) {
+      try {
+        const userRefs = missingUserIds.map(id => firestore.collection('users').doc(String(id)));
+        const userDocs = await firestore.getAll(...userRefs);
+        userDocs.forEach((doc, index) => {
+          if (!doc.exists) return;
+          const userData = doc.data();
+          const docId = doc.id ? (isNaN(doc.id) ? doc.id : Number(doc.id)) : null;
+          const resolvedUser = { ...userData, id: userData.id || docId };
+          const userIdKey = String(missingUserIds[index]);
+          userById.set(userIdKey, resolvedUser);
+          setCachedUserById(missingUserIds[index], resolvedUser);
+        });
+      } catch (err) {}
+    }
+
     const active = (await mapWithConcurrency(connections, 6, async (conn) => {
       const otherId = conn.from_user_id === Number(userId) ? conn.to_user_id : conn.from_user_id;
       const [otherUser, lastMsg] = await Promise.all([
-        userOps.getById(otherId),
+        userById.get(String(otherId)) || null,
         getLastMessageForConnection(conn.id).catch(() => null)
       ]);
       if (!otherUser) return null;
