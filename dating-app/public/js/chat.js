@@ -69,6 +69,16 @@ let streamReady = false;
 let isReconnecting = false;
 let statusPollingTimeout = null;
 
+// Tracks whether SSE has successfully connected at least once for the
+// current chat session. initializeChat() already performs the one-and-only
+// initial loadChatInfo()/loadMessages(true) fetch, so the *first* onopen
+// only needs a lightweight delta sync to close the small gap between that
+// fetch and the stream coming up — not a second full loadChatInfo()+loadMessages()
+// pass. Real reconnects (this flips back to true beforehand, false on error)
+// still get the full repair sync since connection state can go stale while
+// disconnected.
+let _sseHasConnectedBefore = false;
+
 // Guard to prevent redundant loadChatInfo() calls from SSE reconnection and
 // visibilitychange from both firing at once.
 let _chatInfoLoading = false;
@@ -195,6 +205,11 @@ function scheduleNextPoll() {
   
   pollingTimeout = setTimeout(async () => {
     if (_pollInFlight) return;
+    // Re-check right before firing: streamReady can flip true between when this
+    // callback was scheduled and when it actually runs (SSE connects mid-wait),
+    // and `socket` is always null in this codebase so the earlier guard at the
+    // top of scheduleNextPoll() never catches that case.
+    if (streamReady) return;
     const hasNewMessages = await runDeltaSyncNow();
     // Aggressive polling: reset to 3s on any activity, max 8s on prolonged silence
     pollInterval = hasNewMessages
@@ -270,13 +285,28 @@ async function initRealtimeStream() {
       window.__sseReconnectTimer = null;
     }
 
-    // Resync connection state & fetch message delta when connecting/reconnecting
-    dbg('[SSE] Stream connected. Syncing connection info & message state.');
-    scheduleChatInfoRefresh();
-    if (currentConnId && typeof loadMessages === 'function') {
-      // The stream already contains message payloads. A delta refresh repairs
-      // missed events without replacing the reader's current viewport.
-      loadMessages(false).catch(() => {});
+    if (!_sseHasConnectedBefore) {
+      // First successful connection for this chat session. initializeChat()
+      // already kicked off the one initial loadChatInfo()/loadMessages(true)
+      // fetch — redoing a full loadChatInfo() + loadMessages() here would just
+      // duplicate that request. All we need is a single delta fetch to catch
+      // any message sent in the brief window between that initial fetch and
+      // this connection opening.
+      _sseHasConnectedBefore = true;
+      dbg('[SSE] Stream connected. Running initial delta repair.');
+      if (currentConnId && typeof loadMessages === 'function') {
+        loadMessages(false).catch(() => {});
+      }
+    } else {
+      // Reconnect after a drop: connection state and messages may both be
+      // stale, so do the full repair sync.
+      dbg('[SSE] Stream reconnected. Syncing connection info & message state.');
+      scheduleChatInfoRefresh();
+      if (currentConnId && typeof loadMessages === 'function') {
+        // The stream already contains message payloads. A delta refresh repairs
+        // missed events without replacing the reader's current viewport.
+        loadMessages(false).catch(() => {});
+      }
     }
     isReconnecting = false;
   };
@@ -312,8 +342,15 @@ async function initRealtimeStream() {
           appendMessage({ ...streamEvent.msg }, shouldFollow).then(() => {
             if (shouldFollow) markMessagesAsRead();
           }).catch(() => {});
-          // Native/Android notifications are triggered exclusively by FCM
-          // (see shared.js pushReceived listener). SSE only updates the UI.
+          // Fire native notification if the app/tab is in the background
+          if (document.hidden && typeof window.showNativeNotification === 'function') {
+            window.showNativeNotification({
+              title: 'New message',
+              body: streamEvent.msg.content || 'You have a new message',
+              url: `chat.html?id=${currentConnId}`,
+              id: streamEvent.msg.id
+            });
+          }
         }
       } else if (!streamEvent.msg) {
         // Fallback: old-style SSE with no embedded message — do a delta fetch
@@ -534,6 +571,9 @@ async function initializeChat() {
   currentConnId = connId;
   lastMessageTimestamp = null;
   hasLoadedInitialMessages = false;
+  // Reset so the first SSE connection for this chat session only performs a
+  // lightweight delta sync instead of redoing the full initial load below.
+  _sseHasConnectedBefore = false;
   // Reset pagination state for the new chat thread
   hasMoreMessages = false;
   oldestMessageTimestamp = null;
