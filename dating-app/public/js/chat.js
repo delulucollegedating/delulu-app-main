@@ -340,7 +340,7 @@ async function initRealtimeStream() {
         if (!alreadyExists) {
           const shouldFollow = recordIncomingMessage();
           appendMessage({ ...streamEvent.msg }, shouldFollow).then(() => {
-            if (shouldFollow) markMessagesAsRead();
+            if (shouldFollow) markMessagesAsRead({ immediate: true });
           }).catch(() => {});
           // Fire native notification if the app/tab is in the background
           if (document.hidden && typeof window.showNativeNotification === 'function') {
@@ -610,8 +610,9 @@ async function initializeChat() {
       if (Number(msg.connection_id) === Number(currentConnId)) {
         if (Number(msg.sender_id) !== Number(currentUser.id)) {
           const shouldFollow = recordIncomingMessage();
-          appendMessage(msg, shouldFollow);
-          if (shouldFollow) markMessagesAsRead();
+          appendMessage(msg, shouldFollow).then(() => {
+            if (shouldFollow) markMessagesAsRead({ immediate: true });
+          }).catch(() => {});
           
           // Cache incoming message
           if (typeof messageCache !== 'undefined') {
@@ -1938,6 +1939,7 @@ async function loadMessages(isInitial = false, forceFull = false) {
       hasMoreMessages = data.has_more || false;
     }
     
+    let hasNewVisibleIncoming = false;
     if (data.messages && data.messages.length > 0) {
       const existingIds = new Set();
       cont.querySelectorAll('[data-msg-id]').forEach(el => {
@@ -1953,6 +1955,7 @@ async function loadMessages(isInitial = false, forceFull = false) {
       const newMsgs = data.messages.filter(m => !existingIds.has(String(m.id)));
       if (newMsgs.length > 0) {
         const incoming = newMsgs.filter(m => Number(m.sender_id) !== Number(currentUser.id));
+        hasNewVisibleIncoming = shouldFollowLatest && incoming.length > 0;
         if (!shouldFollowLatest) incoming.forEach(recordIncomingMessage);
         for (const m of newMsgs) {
           if (isUnreadFromOther(m)) {
@@ -1979,7 +1982,9 @@ async function loadMessages(isInitial = false, forceFull = false) {
     }
     
     // Mark as read after loading
-    if (shouldFollowLatest) setTimeout(() => markMessagesAsRead(), 300);
+    if (shouldFollowLatest) {
+      setTimeout(() => markMessagesAsRead({ immediate: hasNewVisibleIncoming }), 300);
+    }
 
     // Initialise the top sentinel observer after the first successful load
     if (isInitial) {
