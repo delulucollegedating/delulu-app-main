@@ -396,6 +396,7 @@ async function initRealtimeStream() {
     
     streamReady = false;
     stopPresenceHeartbeat();
+    handlePresenceChange(false);
     isReconnecting = true;
 
     // Close the failed EventSource explicitly. The browser's native
@@ -437,6 +438,7 @@ let _sseReconnectAttempts = 0;
 
 function stopRealtimeStream() {
   stopPresenceHeartbeat();
+  handlePresenceChange(false);
   if (eventSource) {
     eventSource.close();
     eventSource = null;
