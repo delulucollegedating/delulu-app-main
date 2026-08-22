@@ -192,8 +192,11 @@ self.addEventListener('push', (event) => {
       connection_accepted: 'Connection accepted'
     };
     const title = data.title || DEFAULT_TITLES[type] || 'New notification';
+    const isEncrypted = data.isEncrypted === true || data.isEncrypted === 'true' || Number(data.is_encrypted) === 1;
     const options = {
-      body: data.body || (type === 'chat_message' ? 'You have a new message' : 'You have a new notification'),
+      body: isEncrypted
+        ? 'Encrypted message'
+        : (data.body || (type === 'chat_message' ? 'You have a new message' : 'You have a new notification')),
       icon: data.icon || '/favicon.ico',
       badge: '/favicon.ico',
       data: { url: data.url || '/', type, connectionId: data.connectionId || '' },
