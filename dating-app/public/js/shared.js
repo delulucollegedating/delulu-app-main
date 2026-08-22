@@ -849,7 +849,8 @@ function registerCapacitorPushListeners() {
     PushNotifications.addListener('pushReceived', (notification) => {
       const data = (notification && notification.data) || {};
       const title = data.title || notification.title || data.senderName || 'New notification';
-      const body = data.body || notification.body || '';
+      const encrypted = data.isEncrypted === true || data.isEncrypted === 'true' || Number(data.is_encrypted) === 1;
+      const body = encrypted ? 'Encrypted message' : (data.body || notification.body || '');
       const url = data.url || (data.connectionId ? `chat.html?id=${data.connectionId}` : 'messages.html');
       
       // If user is not currently in this chat room, alert them
@@ -922,18 +923,21 @@ async function initPushNotifications() {
       }
 
       // Pre-bind registration listeners BEFORE calling register()
-      PushNotifications.addListener('registration', async (token) => {
-        if (token && token.value) {
-          await apiCall('/api/devices/register', 'POST', {
-            deviceId,
-            platform: 'android_fcm',
-            token: token.value,
-            app_version: '1.0.0'
-          }).catch(() => {});
-          await apiCall('/api/push/fcm-token', 'POST', { token: token.value }).catch(() => {});
-          dbg('[Push] FCM registered token successfully');
-        }
-      }).catch(() => {});
+      if (!window.__capacitorRegistrationListenerSet) {
+        window.__capacitorRegistrationListenerSet = true;
+        PushNotifications.addListener('registration', async (token) => {
+          if (token && token.value) {
+            await apiCall('/api/devices/register', 'POST', {
+              deviceId,
+              platform: 'android_fcm',
+              token: token.value,
+              app_version: '1.0.0'
+            }).catch(() => {});
+            await apiCall('/api/push/fcm-token', 'POST', { token: token.value }).catch(() => {});
+            dbg('[Push] FCM registered token successfully');
+          }
+        }).catch(() => {});
+      }
 
       // Ensure tap listeners are active
       registerCapacitorPushListeners();
@@ -1104,14 +1108,6 @@ async function initGlobalUserStream() {
         if (typeof window.hapticMedium === 'function') window.hapticMedium();
         if (typeof window.showToast === 'function') {
           window.showToast(`${data.senderName || 'Someone'} sent you a connection request!`, 'info');
-        }
-        if (document.hidden) {
-          window.showNativeNotification({
-            title: 'New Connection Request',
-            body: `${data.senderName || 'Someone'} wants to connect with you!`,
-            url: 'requests.html',
-            id: data.senderId
-          });
         }
       } else if (data.type === 'match_celebration') {
         if (typeof window.showMatchCelebration === 'function') {
