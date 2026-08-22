@@ -2246,6 +2246,11 @@ function addRoomPresence(connectionId, userId, connectionKey = null) {
   });
 }
 
+function getRoomPresenceSnapshot(connectionId) {
+  const users = activeRoomUsers.get(String(connectionId));
+  return users ? Array.from(users.keys()) : [];
+}
+
 function refreshRoomPresence(connectionId, userId) {
   const users = activeRoomUsers.get(String(connectionId));
   const lease = users && users.get(Number(userId));
@@ -2316,9 +2321,6 @@ app.get('/api/connections/:id/stream', requireSSEAuth, async (req, res) => {
   // Send initial connection verification comment
   res.write(': ok\n\n');
 
-  // Register in-memory room presence (0 DB cost)
-  addRoomPresence(connectionId, userId, presenceConnectionKey);
-
   // Define listener callback
   const onUpdate = (event) => {
     const payload = event && Object.keys(event).length > 1
@@ -2330,6 +2332,15 @@ app.get('/api/connections/:id/stream', requireSSEAuth, async (req, res) => {
   // Subscribe to updates for this connection
   const eventName = `update:${connectionId}`;
   connectionEmitter.on(eventName, onUpdate);
+
+  // Subscribe before registering presence so the initial online event cannot
+  // race past this connection. Then send a complete roster snapshot so the
+  // client never depends on a future presence event to render the state.
+  addRoomPresence(connectionId, userId, presenceConnectionKey);
+  res.write(`data: ${JSON.stringify({
+    type: 'presence',
+    onlineUserIds: getRoomPresenceSnapshot(connectionId)
+  })}\n\n`);
 
   // Set heartbeat ping every 25 seconds to keep connection alive on Render/proxies
   const heartbeatInterval = setInterval(() => {
