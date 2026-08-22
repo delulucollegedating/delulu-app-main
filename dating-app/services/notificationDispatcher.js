@@ -28,6 +28,12 @@ function configureWebPush(publicKey, privateKey) {
   }
 }
 
+function getSafeNotificationBody(payload = {}) {
+  const encrypted = payload.isEncrypted === true || Number(payload.is_encrypted) === 1;
+  if (encrypted) return 'Encrypted message';
+  return String(payload.body || 'Someone sent you a message');
+}
+
 // Auto-configure from env at load so this module still works standalone
 // (e.g. in tests) even if server.js never calls configureWebPush().
 if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
@@ -40,7 +46,7 @@ if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
  */
 function buildWebPushPayload(payload, connectionId) {
   const notifTitle = String(payload.title || 'New Notification');
-  const notifBody = String(payload.body || '');
+  const notifBody = getSafeNotificationBody(payload);
   const targetUrl = payload.url || (connectionId ? `/chat.html?id=${connectionId}` : '/messages.html');
   return JSON.stringify({
     title: notifTitle,
@@ -50,6 +56,7 @@ function buildWebPushPayload(payload, connectionId) {
     connectionId: String(connectionId || ''),
     senderId: String(payload.senderId || ''),
     senderName: String(payload.senderName || payload.title || 'User'),
+    isEncrypted: payload.isEncrypted === true || Number(payload.is_encrypted) === 1,
     icon: '/favicon.ico'
   });
 }
@@ -275,10 +282,7 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
     if (messaging) {
       const tokens = Array.from(fcmTokenSources.keys());
       const notifTitle = String(payload.title || 'New Message');
-      const encrypted = payload.isEncrypted === true || Number(payload.is_encrypted) === 1;
-      const notifBody = encrypted
-        ? 'Encrypted message'
-        : String(payload.body || 'Someone sent you a message');
+      const notifBody = getSafeNotificationBody(payload);
       const targetUrl = payload.url || (connectionId ? `/chat.html?id=${connectionId}` : '/messages.html');
 
       const multicastMessage = {
@@ -294,6 +298,7 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
           senderName: String(payload.senderName || payload.title || 'User'),
           messageId: String(payload.messageId || ''),
           createdAt: String(payload.createdAt || new Date().toISOString()),
+          isEncrypted: String(payload.isEncrypted === true || Number(payload.is_encrypted) === 1),
           title: notifTitle,
           body: notifBody,
           url: targetUrl
