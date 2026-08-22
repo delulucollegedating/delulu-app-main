@@ -226,6 +226,23 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
 
   // 1. Fetch registered devices for the receiver
   const devices = await getActiveDevices(receiverId);
+  const fcmDevices = devices.filter(d => d.platform === 'android_fcm' && d.fcm_token);
+  const legacyTokens = await pushOps.getFCMTokens(receiverId).catch(() => []);
+  const fcmTokenSources = new Map();
+
+  const addFcmToken = (token, deviceId = null, legacy = false) => {
+    if (typeof token !== 'string') return;
+    const normalizedToken = token.trim();
+    if (!normalizedToken || normalizedToken.length > 512) return;
+    const source = fcmTokenSources.get(normalizedToken) || { deviceIds: [], legacy: false };
+    if (deviceId && !source.deviceIds.includes(deviceId)) source.deviceIds.push(deviceId);
+    source.legacy = source.legacy || legacy;
+    fcmTokenSources.set(normalizedToken, source);
+  };
+
+  fcmDevices.forEach(device => addFcmToken(device.fcm_token, device.deviceId));
+  (Array.isArray(legacyTokens) ? legacyTokens : []).forEach(token => addFcmToken(token, null, true));
+
   if (devices.length === 0) {
     // Fallback: If no subcollection devices exist yet, attempt fallback to legacy
     // push_subs subscriptions for Web Push (kept for users registered before the
@@ -243,24 +260,25 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
       }, (err) => {
         console.warn('Web push fallback circuit breaker caught error:', err.message);
       });
-      return { dispatched: true, channel: 'web_push_fallback' };
     } catch (fbErr) {
-      return { dispatched: false, reason: 'no_devices_and_fallback_failed' };
+      console.warn(`Web push fallback failed for user ${receiverId}:`, fbErr.message);
     }
   }
 
-  const fcmDevices = devices.filter(d => d.platform === 'android_fcm' && d.fcm_token);
   const webDevices = devices.filter(d => d.platform === 'web_push');
 
   const dispatchResults = { fcm: 0, web: 0, errors: [] };
 
   // 2. Dispatch to Android FCM devices (instant high-priority delivery)
-  if (fcmDevices.length > 0) {
+  if (fcmTokenSources.size > 0) {
     const messaging = getMessagingInstance();
     if (messaging) {
-      const tokens = fcmDevices.map(d => d.fcm_token);
+      const tokens = Array.from(fcmTokenSources.keys());
       const notifTitle = String(payload.title || 'New Message');
-      const notifBody = String(payload.body || 'Someone sent you a message');
+      const encrypted = payload.isEncrypted === true || Number(payload.is_encrypted) === 1;
+      const notifBody = encrypted
+        ? 'Encrypted message'
+        : String(payload.body || 'Someone sent you a message');
       const targetUrl = payload.url || (connectionId ? `/chat.html?id=${connectionId}` : '/messages.html');
 
       const multicastMessage = {
@@ -286,7 +304,7 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
             title: notifTitle,
             body: notifBody,
             channelId: 'delulu_messages',
-            icon: 'ic_launcher',
+            icon: 'ic_stat_delulu',
             color: '#85431E',
             sound: 'default',
             defaultSound: true,
@@ -325,9 +343,13 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
                   errCode === 'messaging/registration-token-not-registered' ||
                   errCode === 'messaging/invalid-registration-token'
                 ) {
-                  const badDevice = fcmDevices[idx];
-                  if (badDevice && badDevice.deviceId) {
-                    unregisterDevice(receiverId, badDevice.deviceId);
+                  const source = fcmTokenSources.get(tokens[idx]);
+                  if (!source) return;
+                  source.deviceIds.forEach(deviceId => {
+                    unregisterDevice(receiverId, deviceId).catch(() => {});
+                  });
+                  if (source.legacy) {
+                    pushOps.removeFCMToken(receiverId, tokens[idx]).catch(() => {});
                   }
                 }
               }
@@ -342,6 +364,8 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
         dispatchResults.errors.push(fcmErr.message);
       }
     }
+  } else if (payload.type === 'chat_message') {
+    console.warn(`No valid FCM tokens available for message notification to user ${receiverId}`);
   }
 
   // 4. Dispatch to Web Push devices
