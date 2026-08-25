@@ -119,9 +119,11 @@ self.addEventListener('fetch', (event) => {
   // API calls + streams + uploads → always network-only, never cached
   if (BYPASS_PATTERNS.some((p) => p.test(url))) return;
 
-  // Static assets → cache-first strategy
+  // Static assets → stale-while-revalidate: serve the cached copy instantly and
+  // refresh it in the background. Pure cache-first pinned users to stale JS/CSS
+  // forever if CACHE_VERSION wasn't bumped on deploy; SWR heals on next visit.
   if (STATIC_PATTERNS.some((p) => p.test(url))) {
-    event.respondWith(cacheFirst(request));
+    event.respondWith(staleWhileRevalidate(request));
     return;
   }
 
@@ -135,6 +137,33 @@ self.addEventListener('fetch', (event) => {
   // Everything else → network-first
   event.respondWith(networkFirst(request));
 });
+
+/**
+ * Stale-While-Revalidate Strategy:
+ * Respond from cache immediately (if present) while refreshing the cache in
+ * the background. Best for: JS, CSS, avatars — fast repeat loads AND eventual
+ * freshness after deploys.
+ */
+async function staleWhileRevalidate(request) {
+  const cached = await caches.match(request);
+
+  // Kick off the background refresh regardless of whether we have a cached copy.
+  const networkUpdate = fetch(request).then((response) => {
+    if (response.ok) {
+      caches.open(CACHE_VERSION).then((cache) => {
+        cache.put(request, response.clone()).catch(() => {});
+      });
+    }
+    return response;
+  }).catch(() => null);
+
+  if (cached) return cached;
+
+  const fresh = await networkUpdate;
+  if (fresh) return fresh;
+  // Offline and not cached — minimal fallback
+  return new Response('', { status: 503, statusText: 'Offline' });
+}
 
 /**
  * Cache-First Strategy:

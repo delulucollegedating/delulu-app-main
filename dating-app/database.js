@@ -368,8 +368,14 @@ const userOps = {
         return { ...data, id: data.id || docId };
       }
 
-      // Legacy fallback: case-insensitive scan
-      const all = await firestore.collection('users').get();
+      // Legacy fallback: case-insensitive scan, BOUNDED to 500 docs.
+      // This used to be an UNBOUNDED full-collection scan that ran on every
+      // login attempt / signup availability check for a non-existent username,
+      // burning Firestore read quota and adding seconds of latency as the user
+      // base grows. All current write paths set username_lower, so the indexed
+      // fast paths above resolve nearly every lookup; this bounded pass only
+      // exists to rescue pre-migration documents.
+      const all = await firestore.collection('users').limit(500).get();
       for (const doc of all.docs) {
         const data = doc.data();
         if (String(data.username || '').trim().toLowerCase() === lower) {
@@ -2218,7 +2224,10 @@ const otpOps = {
   },
 
   async generate(email) {
-    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    // Cryptographically secure 6-digit code. Math.random() is a seeded PRNG
+    // (xorshift128+) whose state can be reconstructed from observed outputs,
+    // which would let an attacker predict future login/reset codes.
+    const otp = String(crypto.randomInt(100000, 1000000));
     await this.create(email, otp, Date.now() + OTP_TTL_MS);
     return otp;
   },
@@ -2622,28 +2631,39 @@ connectionOps.sweepExpiredRequests = async function() {
   const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   let totalExpired = 0;
   
+  let lastDoc = null;
+
+  // Iterate deterministically by document ID (auto-indexed, no composite index
+  // needed). The old loop re-fetched the SAME first 500 pending docs every pass
+  // with no cursor and no created_at ordering — stale requests sitting beyond
+  // doc-position 500 were never swept.
   while (true) {
-    const snapshot = await firestore.collection('connections')
+    let query = firestore.collection('connections')
       .where('status', '==', 'pending')
-      .limit(500)
-      .get();
-    
+      .orderBy('__name__')
+      .limit(500);
+    if (lastDoc) {
+      query = query.startAfter(lastDoc);
+    }
+    const snapshot = await query.get();
     if (snapshot.empty) break;
+    lastDoc = snapshot.docs[snapshot.docs.length - 1];
 
     const expiredDocs = [];
     snapshot.forEach(doc => {
       if (doc.data().created_at < cutoff) expiredDocs.push(doc);
     });
 
-    if (expiredDocs.length === 0) break;
+    if (expiredDocs.length > 0) {
+      const batch = firestore.batch();
+      expiredDocs.forEach(doc => {
+        batch.update(doc.ref, { status: 'expired', ended_reason: CONNECTION_END_REASONS.REQUEST_TIMEOUT });
+      });
 
-    const batch = firestore.batch();
-    expiredDocs.forEach(doc => {
-      batch.update(doc.ref, { status: 'expired', ended_reason: CONNECTION_END_REASONS.REQUEST_TIMEOUT });
-    });
+      await updateConnections(expiredDocs.map(doc => doc.data().id), () => batch.commit());
+      totalExpired += expiredDocs.length;
+    }
 
-    await updateConnections(expiredDocs.map(doc => doc.data().id), () => batch.commit());
-    totalExpired += expiredDocs.length;
     if (snapshot.size < 500) break;
   }
   

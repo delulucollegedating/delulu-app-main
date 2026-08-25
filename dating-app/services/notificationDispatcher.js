@@ -262,29 +262,23 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
   fcmDevices.forEach(device => addFcmToken(device.fcm_token, device.deviceId));
   (Array.isArray(legacyTokens) ? legacyTokens : []).forEach(token => addFcmToken(token, null, true));
 
-  if (devices.length === 0) {
-    // Fallback: If no subcollection devices exist yet, attempt fallback to legacy
-    // push_subs subscriptions for Web Push (kept for users registered before the
-    // devices subcollection existed).
-    try {
-      await pushBreaker.execute(async () => {
-        const legacySubs = await pushOps.getSubscriptions(receiverId).catch(() => []);
-        for (const sub of legacySubs) {
-          await sendWebPush(
-            { endpoint: sub.endpoint, keys: sub.keys },
-            payload,
-            connectionId
-          ).catch(() => {});
-        }
-      }, (err) => {
-        console.warn('Web push fallback circuit breaker caught error:', err.message);
-      });
-    } catch (fbErr) {
-      console.warn(`Web push fallback failed for user ${receiverId}:`, fbErr.message);
-    }
-  }
-
   const webDevices = devices.filter(d => d.platform === 'web_push');
+
+  // Legacy push_subs subscriptions (registered before the devices subcollection
+  // existed) must still receive pushes even when the user ALSO has device docs.
+  // Previously this fallback only ran when devices.length === 0, so a user with
+  // one Android phone and an old browser subscription silently lost browser
+  // notifications. Dedupe by endpoint so nobody receives duplicates.
+  const activeWebEndpoints = new Set(
+    webDevices.map(d => d.web_push_subscription && d.web_push_subscription.endpoint).filter(Boolean)
+  );
+  let legacyWebSubs = [];
+  try {
+    const allLegacySubs = await pushOps.getSubscriptions(receiverId).catch(() => []);
+    legacyWebSubs = (Array.isArray(allLegacySubs) ? allLegacySubs : []).filter(sub =>
+      sub && sub.endpoint && !activeWebEndpoints.has(sub.endpoint)
+    );
+  } catch (legacyErr) {}
 
   const dispatchResults = { fcm: 0, web: 0, errors: [] };
 
@@ -387,28 +381,33 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
     console.warn(`No valid FCM tokens available for message notification to user ${receiverId}`);
   }
 
-  // 4. Dispatch to Web Push devices
-  if (webDevices.length > 0) {
-    for (const dev of webDevices) {
-      const subscription = dev.web_push_subscription;
-      if (!subscription || !subscription.endpoint) continue;
-      // Note: the breaker's fallback swallows the error, so dead-subscription
-      // cleanup must happen INSIDE the execute callback (not in an outer catch).
-      await pushBreaker.execute(async () => {
-        try {
-          await sendWebPush(subscription, payload, connectionId);
-          dispatchResults.web++;
-        } catch (err) {
-          // Expired/revoked subscription (410/404) — drop the device so we stop retrying it
-          if (err && err._gone && dev.deviceId) {
-            unregisterDevice(receiverId, dev.deviceId).catch(() => {});
-          }
-          throw err;
+  // 4. Dispatch to Web Push devices + deduped legacy subscriptions
+  const webTargets = [
+    ...webDevices.map(dev => ({ subscription: dev.web_push_subscription, deviceId: dev.deviceId })),
+    ...legacyWebSubs.map(sub => ({ subscription: { endpoint: sub.endpoint, keys: sub.keys }, deviceId: null }))
+  ];
+  for (const target of webTargets) {
+    const subscription = target.subscription;
+    if (!subscription || !subscription.endpoint) continue;
+    // Note: the breaker's fallback swallows the error, so dead-subscription
+    // cleanup must happen INSIDE the execute callback (not in an outer catch).
+    await pushBreaker.execute(async () => {
+      try {
+        await sendWebPush(subscription, payload, connectionId);
+        dispatchResults.web++;
+      } catch (err) {
+        // Expired/revoked subscription (410/404) — drop the device so we stop retrying it
+        if (err && err._gone && target.deviceId) {
+          unregisterDevice(receiverId, target.deviceId).catch(() => {});
+        } else if (err && err._gone && !target.deviceId) {
+          // Legacy subscription with no device doc — remove the stale push_subs row.
+          pushOps.removeSubscription(subscription.endpoint, receiverId).catch(() => {});
         }
-      }, (err) => {
-        console.warn('Web push circuit breaker caught error:', err.message);
-      });
-    }
+        throw err;
+      }
+    }, (err) => {
+      console.warn('Web push circuit breaker caught error:', err.message);
+    });
   }
 
   return { dispatched: true, results: dispatchResults };

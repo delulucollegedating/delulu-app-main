@@ -144,7 +144,10 @@ function escapeHtml(str) {
   if (!str) return '';
   const div = document.createElement('div');
   div.textContent = str;
-  return div.innerHTML;
+  // textContent->innerHTML escapes &, < and > but NOT quotes. Any result
+  // interpolated into a double/single-quoted attribute would allow attribute
+  // injection (e.g. onmouseover=...). Escape them explicitly.
+  return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // ===== Password strength (mirrors the server policy in server.js) =====

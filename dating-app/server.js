@@ -39,10 +39,17 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 process.on('uncaughtException', (err) => {
   pino.fatal({ err }, 'Uncaught Exception');
+  // A process that survives an uncaught exception is in an undefined state
+  // (corrupted request handling, lost sockets). Exit so the platform restarts
+  // us into a known-good state instead of limping along.
+  process.exit(1);
 });
 
 const { EventEmitter } = require('events');
 const connectionEmitter = new EventEmitter();
+// Each open tab/device per chat adds a listener to this emitter; the Node
+// default of 10 trips MaxListenersExceededWarning in normal multi-tab use.
+connectionEmitter.setMaxListeners(200);
 const userEmitter = new EventEmitter(); // Per-user SSE stream (messages list page)
 userEmitter.setMaxListeners(200); // Allow many concurrent user SSE connections
 
@@ -230,12 +237,16 @@ function isNativeAppOrigin(origin) {
 
 function isWebAppOrigin(origin) {
   if (!origin) return false;
-  // Production: explicit APP_URL + Railway / Render hosting domains.
+  // Production: explicit allowlist only. Reflecting ANY *.railway.app /
+  // *.onrender.com subdomain meant an attacker could host evil.railway.app and
+  // receive reflected credentialed-CORS headers. Same-origin requests (the
+  // deployed web app) never hit CORS, so this tightening cannot break the site.
   if (process.env.NODE_ENV === 'production') {
     if (process.env.APP_URL && origin === process.env.APP_URL) return true;
-    if (/^https:\/\/.+\.up\.railway\.app$/.test(origin)) return true;
-    if (/^https:\/\/.+\.railway\.app$/.test(origin)) return true;
-    if (/^https:\/\/.+\.onrender\.com$/.test(origin)) return true;
+    if (origin === 'https://delulu-app-main-production.up.railway.app') return true;
+    const extraOrigins = (process.env.EXTRA_ALLOWED_ORIGINS || '')
+      .split(',').map(s => s.trim()).filter(Boolean);
+    if (extraOrigins.includes(origin)) return true;
     if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
     return false;
   }
@@ -378,7 +389,7 @@ function rateLimitIdentity(req) {
 // sharing (single public IP for hundreds of students) does not lock users out.
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: (req) => Number(req.session?.userId) > 0 ? 300 : 300,
+  max: 300,
   keyGenerator: rateLimitIdentity,
   message: { error: 'Too many requests. Please slow down.' },
   standardHeaders: true,
@@ -890,7 +901,9 @@ app.use((req, res, next) => {
 // repeated downloads.
 const apkLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
-  max: 20,
+  // Campus Wi-Fi NATs hundreds of students behind ONE public IP — a tight cap
+  // 429'd legitimate launch-day downloads. Env-tunable for bigger events.
+  max: resolveSseCap(process.env.MAX_APK_DOWNLOADS_PER_10MIN, 60),
   keyGenerator: (req) => ipKeyGenerator(req.ip || req.socket?.remoteAddress || 'unknown'),
   message: { error: 'Too many APK downloads. Please try again later.' },
   standardHeaders: true,
@@ -959,7 +972,17 @@ function requireAuth(req, res, next) {
 // Only strips valid HTML tags (starting with letter, /, or ! — excludes "<3" and similar)
 function sanitizeText(str) {
   if (typeof str !== 'string') return str;
-  return str.replace(/<[a-zA-Z\/!?][^>]*>/g, '');
+  // Strip repeatedly until stable: one pass turns "<scr<script>ipt>" into
+  // "<script>" because removing the inner tag re-forms an outer tag.
+  let out = str;
+  let prev;
+  let passes = 0;
+  do {
+    prev = out;
+    out = out.replace(/<[a-zA-Z\/!?][^>]*>/g, '');
+    passes++;
+  } while (out !== prev && passes < 5);
+  return out;
 }
 
 // ===== Password policy =====
@@ -1090,7 +1113,7 @@ app.get('/api/session', async (req, res) => {
     res.json({ authenticated: false });
   } catch (err) {
     console.error('GET /api/session error:', err);
-    res.status(500).json({ error: 'Failed to verify session', details: err.message });
+    res.status(500).json({ error: 'Failed to verify session' });
   }
 });
 
@@ -1208,7 +1231,7 @@ app.post('/api/auth/send-verification-email', otpSendLimiter, otpSendIpLimiter, 
     res.json({ success: true, message: 'Verification email sent' });
   } catch (err) {
     console.error('Brevo Email Error:', err);
-    res.status(500).json({ error: err.message || 'Failed to send verification email. Please try again.' });
+    res.status(500).json({ error: 'Failed to send verification email. Please try again.' });
   }
 });
 
@@ -1226,16 +1249,20 @@ app.post('/api/auth/verify-otp', otpVerifyLimiter, otpVerifyIpLimiter, async (re
   }
 
   // Save in session
-  req.session.pendingEmail = cleanEmail;
   let token = null;
 
   // Check if user already exists
   const user = await userOps.getByEmail(cleanEmail);
   if (user) {
+    // Rotate the session ID when granting access — session-fixation defense.
+    await new Promise((resolve) => req.session.regenerate(resolve));
+    req.session.pendingEmail = cleanEmail;
     req.session.userId = user.id;
     req.session.user = sanitizeUser(user);
     setCachedUser(user.id, req.session.user);
     token = generateAuthToken(user.id, user.token_version || 0);
+  } else {
+    req.session.pendingEmail = cleanEmail;
   }
   await new Promise((resolve) => req.session.save(resolve));
 
@@ -1273,16 +1300,20 @@ app.post('/api/auth/verify-token', async (req, res) => {
     }
 
     // Save in session
-    req.session.pendingEmail = cleanEmail;
     let authToken = null;
 
     // Check if user already exists
     const user = await userOps.getByEmail(cleanEmail);
     if (user) {
+      // Rotate the session ID when granting access — session-fixation defense.
+      await new Promise((resolve) => req.session.regenerate(resolve));
+      req.session.pendingEmail = cleanEmail;
       req.session.userId = user.id;
       req.session.user = sanitizeUser(user);
       setCachedUser(user.id, req.session.user);
       authToken = generateAuthToken(user.id, user.token_version || 0);
+    } else {
+      req.session.pendingEmail = cleanEmail;
     }
     await new Promise((resolve) => req.session.save(resolve));
 
@@ -1360,7 +1391,7 @@ app.post('/api/auth/send-password-reset', otpSendLimiter, otpSendIpLimiter, asyn
     res.json({ success: true, message: 'Password reset email sent' });
   } catch (err) {
     console.error('Brevo password reset error:', err);
-    res.status(500).json({ error: err.message || 'Failed to send password reset email. Please try again.' });
+    res.status(500).json({ error: 'Failed to send password reset email. Please try again.' });
   }
 });
 
@@ -1474,7 +1505,7 @@ app.post('/api/users/login', authLimiter, async (req, res) => {
     res.json({ success: true, user: safeUser, token, password_upgrade_required: passwordUpgradeRequired || undefined });
   } catch (err) {
     console.error('Login error:', err);
-    res.status(500).json({ error: 'Internal server error', details: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1547,6 +1578,8 @@ app.post('/api/auth/complete-profile', async (req, res) => {
       throw createErr;
     }
     
+    // Rotate the session ID when granting access — session-fixation defense.
+    await new Promise((resolve) => req.session.regenerate(resolve));
     req.session.userId = Number(userId);
     delete req.session.pendingEmail;
 
@@ -2042,7 +2075,7 @@ app.get('/api/discover', requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('GET /api/discover error:', err);
-    res.status(500).json({ error: 'Failed to load discover feed', details: err.message });
+    res.status(500).json({ error: 'Failed to load discover feed' });
   }
 });
 
@@ -2374,7 +2407,10 @@ app.post('/api/connections/:id/typing', requireAuth, typingLimiter, async (req, 
   const connectionId = req.params.id;
   const userId = Number(req.session.userId);
   const { isTyping } = req.body;
-  const conn = await connectionOps.getConnection(connectionId, userId);
+  // Cached auth check — typing fires on every keystroke burst (up to 60/min per
+  // user); a raw getConnection() here would mean a Firestore read per call even
+  // though the comment above claims "100% in-memory, 0 DB calls".
+  const conn = await getCachedConnection(connectionId, userId);
   if (!conn || conn._dataIntegrityError) return res.status(404).json({ error: 'Connection not found' });
   if (!requireActiveConnection(conn, res)) return;
 
@@ -2519,6 +2555,7 @@ app.post('/api/connections/end', requireAuth, actionLimiter, async (req, res) =>
 app.post('/api/connections/end-after-decline', requireAuth, actionLimiter, async (req, res) => {
   const { connection_id } = req.body;
   if (!connection_id) return res.status(400).json({ error: 'Missing connection id' });
+  evictConnectionAuth(connection_id); // Invalidate auth cache — status changing
   const result = await connectionOps.endAfterDecline(connection_id, req.session.userId);
   if (result.error) return res.status(400).json(result);
 
@@ -2900,6 +2937,7 @@ async function sendPushNotification(userId, title, body, url = '/messages.html',
     // 1. Web Push Notification (PWA / Web Browsers)
     if (vapidPublicKey && vapidPrivateKey) {
       try {
+        const webPushPromises = [];
         const subs = await pushOps.getSubscriptions(numUserId);
         for (const sub of subs) {
           const pushSub = {
@@ -2907,11 +2945,12 @@ async function sendPushNotification(userId, title, body, url = '/messages.html',
             keys: sub.keys
           };
           const payload = JSON.stringify({ title: safeTitle, body: safeBody, url: safeUrl, type: safeType, connectionId: safeConnId, icon: '/favicon.ico' });
-          webPush.sendNotification(pushSub, payload).catch(err => {
+          webPushPromises.push(webPush.sendNotification(pushSub, payload).then(() => true, err => {
             if (err.statusCode === 410 || err.statusCode === 404) {
               pushOps.removeSubscription(sub.endpoint, numUserId);
             }
-          });
+            throw err;
+          }));
         }
         // Devices subcollection web subscriptions (modern registration path)
         const devices = await notificationDispatcher.getActiveDevices(numUserId).catch(() => []);
@@ -2919,12 +2958,18 @@ async function sendPushNotification(userId, title, body, url = '/messages.html',
           const sub = dev.web_push_subscription;
           if (dev.platform !== 'web_push' || !sub || !sub.endpoint) continue;
           const payload = JSON.stringify({ title: safeTitle, body: safeBody, url: safeUrl, type: safeType, connectionId: safeConnId, icon: '/favicon.ico' });
-          webPush.sendNotification({ endpoint: sub.endpoint, keys: sub.keys }, payload).catch(err => {
+          webPushPromises.push(webPush.sendNotification({ endpoint: sub.endpoint, keys: sub.keys }, payload).then(() => true, err => {
             if (err.statusCode === 410 || err.statusCode === 404) {
               notificationDispatcher.unregisterDevice(numUserId, dev.deviceId).catch(() => {});
             }
-          });
+            throw err;
+          }));
         }
+        // Await INSIDE breaker.execute so failures count toward tripping the
+        // circuit. Previously every send was fire-and-forget, so this breaker
+        // never observed any failure and could not protect anything.
+        // allSettled: individual 410/404 failures were already handled above.
+        await Promise.allSettled(webPushPromises);
       } catch (err) {
         console.error('WebPush notification error:', err.message);
       }
@@ -2942,6 +2987,7 @@ async function sendPushNotification(userId, title, body, url = '/messages.html',
         const allTokens = [...new Set([...(legacyTokens || []), ...deviceTokens])];
         if (allTokens.length > 0) {
           const messaging = getMessaging(apps[0]);
+          const fcmPromises = [];
           for (const token of allTokens) {
             const message = {
               token,
@@ -2982,12 +3028,14 @@ async function sendPushNotification(userId, title, body, url = '/messages.html',
                 }
               }
             };
-            messaging.send(message).catch(fcmErr => {
+            fcmPromises.push(messaging.send(message).then(() => true, fcmErr => {
               if (fcmErr.code === 'messaging/registration-token-not-registered' || fcmErr.code === 'messaging/invalid-registration-token') {
                 pushOps.removeFCMToken(numUserId, token);
               }
-            });
+              throw fcmErr;
+            }));
           }
+          await Promise.allSettled(fcmPromises);
         }
       }
     } catch (fcmErr) {}
@@ -3385,6 +3433,9 @@ setInterval(async () => {
     if (sweepResult.expiredConnections && sweepResult.expiredConnections.length > 0) {
       const endedMsg = 'The chat window has closed because neither user completed the face reveal in time.';
       for (const entry of sweepResult.expiredConnections) {
+        // Expired connections must drop out of the message-send auth cache
+        // immediately, or messages can still be sent for up to 30s post-expiry.
+        evictConnectionAuth(entry.id);
         connectionEmitter.emit(`update:${entry.id}`, {
           type: 'ended',
           reason: 'expired',
@@ -3423,6 +3474,16 @@ if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
     console.log('  Male:   stellar_jay, coffee_leo, pixel_wanderer, green_mind, ocean_soul, zen_master');
   });
 }
+
+// Graceful shutdown: on SIGTERM (platform deploys), stop accepting new
+// connections and let in-flight requests/SSE streams finish briefly instead of
+// dropping every open stream mid-write.
+process.on('SIGTERM', () => {
+  pino.info('SIGTERM received — shutting down gracefully');
+  server.close(() => process.exit(0));
+  // Hard-exit if connections refuse to drain (EventSource streams can linger).
+  setTimeout(() => process.exit(0), 10000).unref();
+});
 
 module.exports = {
   app,

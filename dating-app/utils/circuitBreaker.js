@@ -44,17 +44,31 @@ class CircuitBreaker {
 
     this.activeCount++;
     const controller = new AbortController();
-    const timer = setTimeout(() => {
-      controller.abort();
-    }, this.timeoutMs);
+
+    // Hard timeout: Promise.race rejects even when the wrapped work ignores the
+    // AbortController signal (e.g. supabase-js queries). Without this, one hung
+    // DB call held its concurrency slot forever until maxConcurrent exhausted.
+    let timeoutId = null;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => {
+        controller.abort();
+        const err = new Error(`Aborted: CircuitBreaker[${this.name}] timed out after ${this.timeoutMs}ms`);
+        err.name = 'TimeoutError';
+        reject(err);
+      }, this.timeoutMs);
+    });
 
     try {
-      const result = await fn(controller.signal);
-      clearTimeout(timer);
+      const work = Promise.resolve(fn(controller.signal));
+      // If the timeout wins the race and the slow work later rejects, that late
+      // rejection must never surface as an unhandledRejection.
+      work.catch(() => {});
+      const result = await Promise.race([work, timeoutPromise]);
+      clearTimeout(timeoutId);
       this.onSuccess();
       return result;
     } catch (err) {
-      clearTimeout(timer);
+      clearTimeout(timeoutId);
       this.onFailure(err);
       if (fallbackFn) {
         return fallbackFn(err);

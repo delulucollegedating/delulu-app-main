@@ -340,15 +340,7 @@ async function initRealtimeStream() {
       pollInterval = 3000;
     } else if (streamEvent.type === 'read') {
       // Instantly update seen ticks without any extra fetch
-      if (streamEvent.readAt) {
-        otherLastReadAt = streamEvent.readAt;
-        document.querySelectorAll('[data-msg-id]').forEach(el => {
-          const statusIcon = el.querySelector('.msg-status-icon');
-          if (statusIcon) {
-            statusIcon.innerHTML = '<span class="text-[11px] text-blue-500 material-symbols-outlined text-[14px] align-middle" style="font-variation-settings: \'FILL\' 1">done_all</span>';
-          }
-        });
-      }
+      markMessagesReadUpTo(streamEvent.readAt);
     } else if (streamEvent.type === 'typing') {
       if (Number(streamEvent.userId) !== Number(currentUser.id)) {
         handleOtherUserTyping(streamEvent.isTyping);
@@ -535,6 +527,23 @@ function isUnreadFromOther(msg) {
   if (!myLastReadAt) return true;
   if (!msg.created_at) return false;
   return new Date(msg.created_at) > new Date(myLastReadAt);
+}
+
+// Instantly update seen ticks — but ONLY for messages that existed before the
+// partner's read time. The old code blue-ticked EVERY visible bubble, which
+// wrongly marked messages sent AFTER the read as "seen".
+function markMessagesReadUpTo(readAt) {
+  if (!readAt) return;
+  otherLastReadAt = readAt;
+  const readTime = new Date(readAt).getTime();
+  document.querySelectorAll('[data-msg-id]').forEach(el => {
+    const createdMs = new Date(el.dataset.createdAt || 0).getTime();
+    if (createdMs && createdMs > readTime) return; // sent after the read — not yet seen
+    const statusIcon = el.querySelector('.msg-status-icon');
+    if (statusIcon) {
+      statusIcon.innerHTML = '<span class="text-[11px] text-blue-500 material-symbols-outlined text-[14px] align-middle" style="font-variation-settings: \'FILL\' 1">done_all</span>';
+    }
+  });
 }
 
 async function initializeChat() {
@@ -753,13 +762,7 @@ async function initializeChat() {
     if (typeof initBroadcastChannel !== 'undefined') {
       initBroadcastChannel(currentConnId, (data) => {
         if (data.type === 'messages-read' && data.connectionId == currentConnId) {
-          otherLastReadAt = data.at || new Date().toISOString();
-          document.querySelectorAll('[data-msg-id]').forEach(el => {
-            const statusIcon = el.querySelector('.msg-status-icon');
-            if (statusIcon) {
-              statusIcon.innerHTML = '<span class="text-[11px] text-blue-500 material-symbols-outlined text-[14px] align-middle" style="font-variation-settings: \'FILL\' 1">done_all</span>';
-            }
-          });
+          markMessagesReadUpTo(data.at || new Date().toISOString());
         }
       });
     }
@@ -906,9 +909,18 @@ async function initializeChat() {
     resizeChatInput();
   }
 
+  let _draftSaveTimer = null;
+  const saveDraftNow = () => {
+    if (_draftSaveTimer) { clearTimeout(_draftSaveTimer); _draftSaveTimer = null; }
+    try { localStorage.setItem(draftKey, chatInput.value); } catch (e) {}
+  };
+
   chatInput.oninput = () => {
     resizeChatInput();
-    localStorage.setItem(draftKey, chatInput.value);
+    // Debounced write — a synchronous localStorage.setItem on EVERY keystroke
+    // janks the main thread on low-end Android keyboards.
+    if (_draftSaveTimer) clearTimeout(_draftSaveTimer);
+    _draftSaveTimer = setTimeout(saveDraftNow, 400);
     notifyTypingState(true);
     if (typingThrottleTimer) clearTimeout(typingThrottleTimer);
     typingThrottleTimer = setTimeout(() => {
@@ -927,6 +939,7 @@ async function initializeChat() {
   });
 
   chatInput.onblur = () => {
+    saveDraftNow(); // flush a pending debounced save before focus is lost
     notifyTypingState(false);
   };
 
@@ -2263,6 +2276,9 @@ async function appendMessage(m, scrollToBottom = true) {
   div.className = `flex group items-end gap-2 ${isMe ? 'justify-end pl-10' : 'justify-start pr-10'} w-full fade-in ${_rowSpacing}`;
   if (m.id)    div.setAttribute('data-msg-id', m.id);
   if (m.tempId) div.id = m.tempId;
+  // Read-receipt ticks compare each bubble's timestamp against the partner's
+  // read time — keep it on the element for markMessagesReadUpTo().
+  div.dataset.createdAt = m.created_at || '';
   if (m.client_uuid) div.dataset.clientUuid = m.client_uuid;
   if (m.is_sending) div.classList.add('opacity-60');
   div.dataset.senderId = String(m.sender_id);
