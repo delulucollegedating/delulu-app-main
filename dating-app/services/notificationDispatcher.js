@@ -231,6 +231,18 @@ async function getActiveDevices(userId) {
 async function dispatchNotification(receiverId, connectionId, payload = {}, ssePresenceChecker = null) {
   if (!receiverId) return { dispatched: false, reason: 'missing_receiver' };
 
+  // Instagram/WhatsApp-style suppression: if the recipient is currently
+  // connected to THIS exact conversation (via the SSE room presence tracked
+  // in server.js's activeRoomUsers), they're already looking at the message
+  // in realtime, so an FCM push would be a redundant system notification.
+  // ssePresenceChecker(receiverId, connectionId) returns true only when the
+  // recipient is present in this specific conversation's room — being online
+  // elsewhere in the app (messages list, another chat, etc.) does NOT suppress.
+  const suppressFcm = typeof ssePresenceChecker === 'function'
+    && payload.type === 'chat_message'
+    && connectionId
+    && !!ssePresenceChecker(receiverId, connectionId);
+
   // 1. Fetch registered devices for the receiver
   const devices = await getActiveDevices(receiverId);
   const fcmDevices = devices.filter(d => d.platform === 'android_fcm' && d.fcm_token);
@@ -277,7 +289,9 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
   const dispatchResults = { fcm: 0, web: 0, errors: [] };
 
   // 2. Dispatch to Android FCM devices (instant high-priority delivery)
-  if (fcmTokenSources.size > 0) {
+  if (suppressFcm) {
+    dispatchResults.suppressed = 'recipient_in_conversation';
+  } else if (fcmTokenSources.size > 0) {
     const messaging = getMessagingInstance();
     if (messaging) {
       const tokens = Array.from(fcmTokenSources.keys());
