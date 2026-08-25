@@ -866,9 +866,15 @@ function registerCapacitorPushListeners() {
             connectionId: data.connectionId
           });
         }
-      }
-      if (typeof window.showNativeNotification === 'function') {
-        window.showNativeNotification({ title, body, url, id: data.messageId || data.connectionId });
+        // Only create an Android system notification when the recipient is NOT
+        // actively viewing this exact conversation. Previously this call sat
+        // outside the isCurrentChat guard, so a foreground FCM push for the
+        // open chat still fired a native notification (Instagram/WhatsApp-style
+        // behavior requires it to stay silent — the message already renders
+        // live through the realtime chat stream).
+        if (typeof window.showNativeNotification === 'function') {
+          window.showNativeNotification({ title, body, url, id: data.messageId || data.connectionId });
+        }
       }
     }).catch(() => {});
 
