@@ -93,6 +93,26 @@ button:not(:disabled):active, .btn-press:active {
   transform: scale(0.96) !important;
 }
 
+/* ── Global tap ripple (spawned by shared.js on every interactive press) ── */
+.delulu-tap-ripple {
+  position: fixed;
+  z-index: 9999;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px; /* center on the tap point */
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgba(0, 0, 0, 0.16) 0%, rgba(0, 0, 0, 0.10) 55%, transparent 72%);
+  pointer-events: none;
+  animation: delulu-tap-ripple 400ms var(--ease-out-emil) forwards;
+}
+body.dark .delulu-tap-ripple {
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.20) 0%, rgba(255, 255, 255, 0.12) 55%, transparent 72%);
+}
+@keyframes delulu-tap-ripple {
+  from { opacity: 1;   transform: scale(1); }
+  to   { opacity: 0;   transform: scale(5.5); }
+}
+
 /* Discover Filter Pills Craft */
 .discover-filter-btn {
   transition: all 180ms var(--ease-out-emil) !important;

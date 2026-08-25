@@ -718,6 +718,51 @@ function hapticHeavy() {
   try { navigator.vibrate([30, 50, 20]); } catch(e) {}
 }
 
+// ===== Global Tap Feedback: ripple on EVERY interactive element =====
+// One delegated listener gives every button/link/chip across all pages (and the
+// APK) a visible press response without each handler remembering to opt in.
+// No vibration — purely visual.
+(function initGlobalTapFeedback() {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  if (window.__deluluTapFeedbackInit) return;
+  window.__deluluTapFeedbackInit = true;
+
+  const TAP_SELECTOR = [
+    'button:not(:disabled)',
+    '[role="button"]:not([aria-disabled="true"])',
+    'a[href]',
+    '.btn-press',
+    'summary'
+  ].join(', ');
+
+  const SKIP_SELECTOR = 'input, textarea, select, [contenteditable="true"]';
+
+  function spawnRipple(x, y) {
+    const dot = document.createElement('span');
+    dot.className = 'delulu-tap-ripple';
+    dot.style.left = x + 'px';
+    dot.style.top = y + 'px';
+    document.body.appendChild(dot);
+    // Remove after the animation completes — listener-based so an
+    // abandoned tab never leaks nodes.
+    dot.addEventListener('animationend', () => dot.remove());
+    setTimeout(() => { if (dot.isConnected) dot.remove(); }, 600);
+  }
+
+  document.addEventListener('pointerdown', (e) => {
+    // Ignore multi-touch ghosts and non-primary pointers (pen hover etc.)
+    if (!e.isPrimary) return;
+    const hit = e.target && e.target.closest ? e.target.closest(TAP_SELECTOR) : null;
+    if (!hit) return;
+    // Typing into a field that happens to sit inside a label/button shouldn't ripple
+    if (e.target.closest(SKIP_SELECTOR)) return;
+
+    let reduceMotion = false;
+    try { reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (err) {}
+    if (!reduceMotion && e.clientX != null) spawnRipple(e.clientX, e.clientY);
+  }, { capture: true, passive: true });
+})();
+
 // ===== Global Show Toast (non-blocking notification) =====
 // Replaces alert() for all non-critical messages. Supports error/success/warning types.
 // Auto-dismisses after 2.5s (error) or 2s (success/info).
