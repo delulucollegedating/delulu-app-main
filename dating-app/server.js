@@ -2779,7 +2779,12 @@ app.post('/api/messages/send', requireAuth, messageLimiter, async (req, res) => 
     senderName: senderUsername
   });
 
-  // Dispatch push notification to the receiver across platform channels (FCM for Android app, Web Push for browser)
+  // Dispatch push notification to the receiver across platform channels (FCM for Android app, Web Push for browser).
+  // Pass the existing SSE room-presence lookup as ssePresenceChecker so FCM is
+  // skipped ONLY when the recipient is actively connected to this exact
+  // conversation (activeRoomUsers) — the server-side authority for "is this
+  // recipient currently viewing THIS conversation?", per the Instagram/WhatsApp
+  // notification behavior spec. This does not affect Web Push or any other flow.
   notificationDispatcher.dispatchNotification(
     otherUserId,
     connection_id,
@@ -2793,7 +2798,8 @@ app.post('/api/messages/send', requireAuth, messageLimiter, async (req, res) => 
       isEncrypted: Number(is_encrypted) === 1,
       createdAt: msg.created_at,
       url: `/chat.html?id=${connection_id}`
-    }
+    },
+    (userId, connId) => getRoomPresenceSnapshot(connId).includes(Number(userId))
   ).catch(err => console.warn('Push notification dispatch error:', err.message));
 
   // Message order and previews come directly from Supabase. Do not write
