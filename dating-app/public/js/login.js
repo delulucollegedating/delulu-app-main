@@ -1,13 +1,21 @@
 
 document.addEventListener('DOMContentLoaded', async () => {
-  // Check session; if logged in, redirect to /discover
-  try {
-    const data = await apiCall('/api/session');
-    if (data.authenticated) {
-      window.location.replace('discover.html');
-      return;
-    }
-  } catch (err) {}
+  // Session check runs in the BACKGROUND — awaiting it here used to block every
+  // button binding below, leaving the page completely dead while a cold-started
+  // server or slow network answered (10–60s). Now the form is interactive
+  // immediately and we redirect to discover only once the check confirms.
+  (async () => {
+    try {
+      const data = await Promise.race([
+        apiCall('/api/session'),
+        new Promise((resolve) => setTimeout(() => resolve(null), 8000))
+      ]);
+      if (data && data.authenticated) {
+        markSessionVerified();
+        window.location.replace('discover.html');
+      }
+    } catch (err) { /* not logged in / network error — stay on the login page */ }
+  })();
 
   // State
   let currentEmail = '';
@@ -274,7 +282,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     avatars.forEach(av => {
       const wrapper = document.createElement('div');
       wrapper.className = 'aspect-square rounded-lg overflow-hidden border border-outline-variant/30 hover:border-primary/50 cursor-pointer transition-all flex items-center justify-center p-1 bg-surface-container';
-      wrapper.innerHTML = `<img src="/avatars/${av}.png" class="w-full h-full object-cover">`;
+      wrapper.innerHTML = `<img src="/avatars/${av}.png" loading="lazy" decoding="async" class="w-full h-full object-cover">`;
       wrapper.onclick = () => {
         avatarGrid.querySelectorAll('.aspect-square').forEach(el => el.classList.remove('border-primary', 'border-2', 'ring-2', 'ring-primary/20'));
         wrapper.classList.add('border-primary', 'border-2', 'ring-2', 'ring-primary/20');
@@ -501,12 +509,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (res.user) {
           window.localStorage.setItem('cached_user', JSON.stringify(res.user));
         }
-        // IMPORTANT: The E2EE private key was encrypted with the OLD password.
-        // After a password reset it can no longer be decrypted, so remove the
-        // stale key — the user will see a one-time warning the next time they
-        // open a chat, and can re-enable encryption by logging out and back in
-        // on a device where they remember their previous password.
-        window.localStorage.removeItem('e2ee_private_key');
+        // NOTE: no local key cleanup needed here. If a local key existed, the
+        // helper re-encrypted THAT SAME keypair for the server, so the raw
+        // local JWK remains valid. If none existed, a fresh matching keypair
+        // was minted and persisted above only after server confirmation.
 
         window.location.replace('discover.html');
       } catch (err) {

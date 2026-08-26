@@ -53,6 +53,14 @@ connectionEmitter.setMaxListeners(200);
 const userEmitter = new EventEmitter(); // Per-user SSE stream (messages list page)
 userEmitter.setMaxListeners(200); // Allow many concurrent user SSE connections
 
+// Cross-instance fan-out: every emit below goes through these buses so a
+// message/typing/presence event published by one instance reaches SSE streams
+// connected to every other instance too (Redis Pub/Sub when REDIS_URL is set;
+// local-only otherwise). See services/eventBus.js.
+const { createSseBus, initEventBus, INSTANCE_ID } = require('./services/eventBus');
+const connectionBus = createSseBus('connection', connectionEmitter);
+const userBus = createSseBus('user', userEmitter);
+
 const notificationDispatcher = require('./services/notificationDispatcher');
 
 const session = require('express-session');
@@ -66,6 +74,8 @@ const { createFailoverRateLimitStore, FailoverSessionStore } = require('./servic
 // REDIS_URL is set; rate limits/sessions fall back to local stores while Redis
 // is unavailable (see services/failoverStores.js).
 redisClient.initRedis();
+// Must come after initRedis(): the Pub/Sub bridge needs the client handle.
+initEventBus([connectionBus, userBus]);
 const http = require('http');
 const path = require('path');
 const crypto = require('crypto');
@@ -2032,20 +2042,34 @@ app.get('/api/discover', requireAuth, async (req, res) => {
               if (match) {
                 const num = parseInt(match[2], 10);
                 if (num < 10 && !match[2].startsWith('0')) {
-                  return `/avatars/${genderStr}/${match[1]}_0${num}/idle.png`;
+                  // Folder comes from the AVATAR's own prefix, not the account
+                  // gender — accounts with gender 'other' have no avatar folder,
+                  // and an avatar prefix can differ from the stored gender.
+                  return `/avatars/${match[1]}/${match[1]}_0${num}/idle.png`;
                 }
+                return `/avatars/${match[1]}/${avatarStr}/idle.png`;
               }
-              return `/avatars/${genderStr}/${avatarStr}/idle.png`;
+              // Non male_/female_ avatar strings have no folder; gender 'other'
+              // has no avatar folder either — null lets the client render the
+              // initial-letter fallback instead of a guaranteed 404.
+              if (genderStr === 'male' || genderStr === 'female') {
+                return `/avatars/${genderStr}/${avatarStr}/idle.png`;
+              }
+              return null;
             })() : null,
             wave: avatarStr ? (() => {
               const match = avatarStr.match(/^(male|female)_(\d+)$/);
               if (match) {
                 const num = parseInt(match[2], 10);
                 if (num < 10 && !match[2].startsWith('0')) {
-                  return `/avatars/${genderStr}/${match[1]}_0${num}/wave.png`;
+                  return `/avatars/${match[1]}/${match[1]}_0${num}/wave.png`;
                 }
+                return `/avatars/${match[1]}/${avatarStr}/wave.png`;
               }
-              return `/avatars/${genderStr}/${avatarStr}/wave.png`;
+              if (genderStr === 'male' || genderStr === 'female') {
+                return `/avatars/${genderStr}/${avatarStr}/wave.png`;
+              }
+              return null;
             })() : null
           },
           gender: genderStr
@@ -2098,7 +2122,7 @@ app.post('/api/connections/request', requireAuth, discoverLimiter, async (req, r
   invalidateDiscoverFeed(to_user_id);
   
   // Notify the target user about the connection request via real-time stream + push
-  userEmitter.emit(`user:${to_user_id}`, {
+  userBus.publish(`user:${to_user_id}`, {
     type: 'connection_request',
     senderId: req.session.userId,
     senderName: user.username,
@@ -2149,7 +2173,7 @@ app.post('/api/connections/respond', requireAuth, actionLimiter, async (req, res
       const accepter = await userOps.getById(req.session.userId);
       const requester = await userOps.getById(conn.from_user_id);
       if (accepter && requester) {
-        userEmitter.emit(`user:${conn.from_user_id}`, {
+        userBus.publish(`user:${conn.from_user_id}`, {
           type: 'match_celebration',
           connectionId: Number(connection_id),
           username: accepter.username,
@@ -2213,17 +2237,76 @@ app.get('/api/connections/:id', requireAuth, async (req, res) => {
 });
 
 // ===== In-Memory Presence & Typing Tracking (0% DB cost) =====
+// Presence leases live in the local Map below (per-tab connectionKeys), AND —
+// while Redis is up — are mirrored into a per-room ZSET:
+//
+//   key   pres:room:<connectionId>
+//   member <INSTANCE_ID>:<userId>     score  expiry epoch-ms
+//
+// That mirror is what makes presence correct across instances: rosters are
+// computed from it (so instance B sees users whose SSE streams hang off
+// instance A), heartbeats are accepted on any instance even when a round-robin
+// load balancer routes them away from the stream's home instance, and teardown
+// only removes THIS instance's member entry so multi-instance tabs don't
+// falsely mark each other offline. Without REDIS_URL everything degrades to
+// the original single-instance behaviour.
 const activeRoomUsers = new Map(); // connectionId -> Map<userId, presence lease>
 const PRESENCE_HEARTBEAT_INTERVAL_MS = 20 * 1000;
 const PRESENCE_EXPIRY_MS = 60 * 1000;
-const presenceExpiryTimer = setInterval(() => {
+const PRESENCE_REDIS_PREFIX = 'pres:room:';
+const presenceRedisUp = () => redisClient.isRedisReady();
+const presenceRedisKey = (connectionId) => PRESENCE_REDIS_PREFIX + String(connectionId);
+const presenceMember = (userId) => `${INSTANCE_ID}:${Number(userId)}`;
+
+function presenceRosterFromLocal(connectionId) {
+  const users = activeRoomUsers.get(String(connectionId));
+  return users ? Array.from(users.keys()) : [];
+}
+
+// Authoritative roster for broadcasts: Redis ZSET members that haven't expired,
+// falling back to the local view when Redis is down/unreachable.
+async function computeRoomRoster(connectionId) {
+  if (!presenceRedisUp()) return presenceRosterFromLocal(connectionId);
+  try {
+    const members = await redisClient.getRedis().zrangebyscore(
+      presenceRedisKey(connectionId), Date.now(), '+inf'
+    );
+    const ids = new Set();
+    for (const m of members) {
+      const idx = m.indexOf(':');
+      if (idx > 0) ids.add(Number(m.slice(idx + 1)));
+    }
+    return Array.from(ids);
+  } catch {
+    return presenceRosterFromLocal(connectionId);
+  }
+}
+
+async function mirrorPresenceUpsert(connectionId, userId) {
+  if (!presenceRedisUp()) return;
+  try {
+    const key = presenceRedisKey(connectionId);
+    await redisClient.getRedis().zadd(key, Date.now() + PRESENCE_EXPIRY_MS, presenceMember(userId));
+    // Lazy sweep of expired entries; the TTL below reaps rooms nobody joins.
+    await redisClient.getRedis().zremrangebyscore(key, '-inf', Date.now());
+    await redisClient.getRedis().expire(key, Math.ceil(PRESENCE_EXPIRY_MS / 1000) * 2);
+  } catch {
+    // Mirror write failed — degrade to local-only presence for this beat.
+  }
+}
+
+const presenceExpiryTimer = setInterval(async () => {
   const now = Date.now();
+  // Collect first, then remove sequentially: removeRoomPresence mutates the
+  // maps being iterated here.
+  const expired = [];
   for (const [connectionId, users] of activeRoomUsers) {
     for (const [userId, lease] of users) {
-      if (now - lease.lastHeartbeatAt > PRESENCE_EXPIRY_MS) {
-        removeRoomPresence(connectionId, userId);
-      }
+      if (now - lease.lastHeartbeatAt > PRESENCE_EXPIRY_MS) expired.push([connectionId, userId]);
     }
+  }
+  for (const [connectionId, userId] of expired) {
+    await removeRoomPresence(connectionId, userId);
   }
 }, PRESENCE_HEARTBEAT_INTERVAL_MS);
 if (typeof presenceExpiryTimer.unref === 'function') presenceExpiryTimer.unref();
@@ -2260,7 +2343,7 @@ function releaseSSEConnection(key) {
   else _sseCounts.set(key, count - 1);
 }
 
-function addRoomPresence(connectionId, userId, connectionKey = null) {
+async function addRoomPresence(connectionId, userId, connectionKey = null) {
   const roomKey = String(connectionId);
   const users = activeRoomUsers.get(roomKey) || new Map();
   const numericUserId = Number(userId);
@@ -2270,46 +2353,76 @@ function addRoomPresence(connectionId, userId, connectionKey = null) {
   users.set(numericUserId, lease);
   activeRoomUsers.set(roomKey, users);
 
-  // Broadcast presence event to connection stream
-  connectionEmitter.emit(`update:${connectionId}`, {
+  await mirrorPresenceUpsert(connectionId, userId);
+
+  // Broadcast presence event to every instance's connection streams.
+  connectionBus.publish(`update:${connectionId}`, {
     type: 'presence',
     userId: numericUserId,
     status: 'online',
-    onlineUserIds: Array.from(users.keys())
+    onlineUserIds: await computeRoomRoster(connectionId)
   });
 }
 
 function getRoomPresenceSnapshot(connectionId) {
-  const users = activeRoomUsers.get(String(connectionId));
-  return users ? Array.from(users.keys()) : [];
+  return presenceRosterFromLocal(connectionId);
 }
 
-function refreshRoomPresence(connectionId, userId) {
-  const users = activeRoomUsers.get(String(connectionId));
-  const lease = users && users.get(Number(userId));
-  if (!lease) return false;
-  lease.lastHeartbeatAt = Date.now();
-  return true;
+// Heartbeats may arrive on ANY instance when a load balancer round-robins, so a
+// miss on the local lease is not proof of absence — check the Redis mirror
+// before rejecting. Returns true when the presence session is live.
+async function refreshRoomPresence(connectionId, userId) {
+  const roomKey = String(connectionId);
+  const numericUserId = Number(userId);
+  const users = activeRoomUsers.get(roomKey);
+  const lease = users && users.get(numericUserId);
+  if (lease) {
+    lease.lastHeartbeatAt = Date.now();
+    void mirrorPresenceUpsert(connectionId, userId); // fire-and-forget refresh
+    return true;
+  }
+  if (!presenceRedisUp()) return false;
+  try {
+    const score = await redisClient.getRedis().zscore(presenceRedisKey(connectionId), presenceMember(userId));
+    if (score === null || Number(score) <= Date.now()) return false;
+    // Recreate the local lease so this instance's fast path succeeds next beat.
+    const map = activeRoomUsers.get(roomKey) || new Map();
+    map.set(numericUserId, { connectionKeys: new Set(), lastHeartbeatAt: Date.now() });
+    activeRoomUsers.set(roomKey, map);
+    await mirrorPresenceUpsert(connectionId, userId);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-function removeRoomPresence(connectionId, userId, connectionKey = null) {
+async function removeRoomPresence(connectionId, userId, connectionKey = null) {
   const roomKey = String(connectionId);
   const users = activeRoomUsers.get(roomKey);
   const numericUserId = Number(userId);
   const lease = users && users.get(numericUserId);
-  if (!lease) return;
-  if (connectionKey) lease.connectionKeys.delete(connectionKey);
-  if (connectionKey && lease.connectionKeys.size > 0) return;
-  users.delete(numericUserId);
-  if (users.size === 0) {
-    activeRoomUsers.delete(roomKey);
+  if (lease) {
+    if (connectionKey) lease.connectionKeys.delete(connectionKey);
+    if (connectionKey && lease.connectionKeys.size > 0) return; // other local tabs remain
+  }
+  if (users) {
+    users.delete(numericUserId);
+    if (users.size === 0) activeRoomUsers.delete(roomKey);
   }
 
-  connectionEmitter.emit(`update:${connectionId}`, {
+  // Drop only THIS instance's mirror entry — another instance's member entry
+  // for the same user stays until its own teardown or expiry.
+  if (presenceRedisUp()) {
+    try {
+      await redisClient.getRedis().zrem(presenceRedisKey(connectionId), presenceMember(userId));
+    } catch { /* roster below falls back to local view */ }
+  }
+
+  connectionBus.publish(`update:${connectionId}`, {
     type: 'presence',
     userId: numericUserId,
     status: 'offline',
-    onlineUserIds: Array.from(users ? users.keys() : [])
+    onlineUserIds: await computeRoomRoster(connectionId)
   });
 }
 
@@ -2369,10 +2482,10 @@ app.get('/api/connections/:id/stream', requireSSEAuth, async (req, res) => {
   // Subscribe before registering presence so the initial online event cannot
   // race past this connection. Then send a complete roster snapshot so the
   // client never depends on a future presence event to render the state.
-  addRoomPresence(connectionId, userId, presenceConnectionKey);
+  await addRoomPresence(connectionId, userId, presenceConnectionKey);
   res.write(`data: ${JSON.stringify({
     type: 'presence',
-    onlineUserIds: getRoomPresenceSnapshot(connectionId)
+    onlineUserIds: await computeRoomRoster(connectionId)
   })}\n\n`);
 
   // Set heartbeat ping every 25 seconds to keep connection alive on Render/proxies
@@ -2396,7 +2509,7 @@ app.post('/api/connections/:id/presence', requireAuth, async (req, res) => {
   const conn = await getCachedConnection(connectionId, userId);
   if (!conn || conn._dataIntegrityError) return res.status(404).json({ error: 'Connection not found' });
   if (!requireActiveConnection(conn, res)) return;
-  if (!refreshRoomPresence(connectionId, userId)) {
+  if (!(await refreshRoomPresence(connectionId, userId))) {
     return res.status(409).json({ error: 'Presence session is not active' });
   }
   res.json({ success: true });
@@ -2414,7 +2527,7 @@ app.post('/api/connections/:id/typing', requireAuth, typingLimiter, async (req, 
   if (!conn || conn._dataIntegrityError) return res.status(404).json({ error: 'Connection not found' });
   if (!requireActiveConnection(conn, res)) return;
 
-  connectionEmitter.emit(`update:${connectionId}`, {
+  connectionBus.publish(`update:${connectionId}`, {
     type: 'typing',
     userId,
     isTyping: !!isTyping
@@ -2492,7 +2605,7 @@ app.post('/api/connections/end', requireAuth, actionLimiter, async (req, res) =>
   const endedMsg = 'Oops! Bad Luck... The other person was not vibing or ended the chat. This chat has ended and messages have been cleared.';
 
   // Notify BOTH users' chat SSE streams instantly (connection page redirect)
-  connectionEmitter.emit(`update:${connection_id}`, {
+  connectionBus.publish(`update:${connection_id}`, {
     type: 'ended',
     reason: 'not_vibing',
     message: endedMsg
@@ -2507,9 +2620,9 @@ app.post('/api/connections/end', requireAuth, actionLimiter, async (req, res) =>
     type: 'chat_ended',
     connectionId: Number(connection_id)
   };
-  userEmitter.emit(`user:${enderId}`, chatEndedEvent);
+  userBus.publish(`user:${enderId}`, chatEndedEvent);
   if (otherId) {
-    userEmitter.emit(`user:${otherId}`, chatEndedEvent);
+    userBus.publish(`user:${otherId}`, chatEndedEvent);
   }
 
   res.json(result);
@@ -2524,12 +2637,12 @@ app.post('/api/connections/end', requireAuth, actionLimiter, async (req, res) =>
   if (result.error) return res.status(400).json(result);
   
   if (result.bothRevealed) {
-    connectionEmitter.emit(`update:${connection_id}`, { 
+    connectionBus.publish(`update:${connection_id}`, { 
       type: 'revealed', 
       meeting_code: result.meeting_code 
     });
   } else {
-    connectionEmitter.emit(`update:${connection_id}`, { type: 'game' });
+    connectionBus.publish(`update:${connection_id}`, { type: 'game' });
   }
 
   res.json(result);
@@ -2543,7 +2656,7 @@ app.post('/api/connections/end', requireAuth, actionLimiter, async (req, res) =>
   
   // A decline is a decision, not an implicit chat deletion. The other person is
   // notified and can explicitly choose to end the chat.
-  connectionEmitter.emit(`update:${connection_id}`, {
+  connectionBus.publish(`update:${connection_id}`, {
     type: 'face-declined',
     declinedBy: Number(req.session.userId)
   });
@@ -2562,7 +2675,7 @@ app.post('/api/connections/end-after-decline', requireAuth, actionLimiter, async
   // Same evidence-preserving archive as /api/connections/end
   await messageOps.softDeleteAllForConnection(connection_id, req.session.userId);
   
-  connectionEmitter.emit(`update:${connection_id}`, {
+  connectionBus.publish(`update:${connection_id}`, {
     type: 'ended',
     reason: 'declined',
     message: 'This chat ended after the face reveal was declined.'
@@ -2597,7 +2710,7 @@ app.post('/api/connections/:id/start-game', requireAuth, gameLimiter, async (req
     // Save to Firestore so clients receive it via real-time connection doc snapshot listener
     const payload = await connectionOps.startGame(req.params.id, game_type, questionStr, questionOptions);
     
-    connectionEmitter.emit(`update:${req.params.id}`, {
+    connectionBus.publish(`update:${req.params.id}`, {
       type: 'game',
       from_user_id: conn.from_user_id,
       to_user_id: conn.to_user_id,
@@ -2623,7 +2736,7 @@ app.post('/api/connections/:id/answer-game', requireAuth, gameLimiter, async (re
     const result = await connectionOps.submitGameAnswer(req.params.id, req.session.userId, answer);
     if (result.error) return res.status(400).json(result);
     
-    connectionEmitter.emit(`update:${req.params.id}`, {
+    connectionBus.publish(`update:${req.params.id}`, {
       type: 'game',
       from_user_id: conn.from_user_id,
       to_user_id: conn.to_user_id,
@@ -2657,7 +2770,7 @@ app.post('/api/connections/:id/clear-game', requireAuth, gameLimiter, async (req
     
     // Notify both clients only if the game was actually removed.
     if (cleared) {
-      connectionEmitter.emit(`update:${req.params.id}`, {
+      connectionBus.publish(`update:${req.params.id}`, {
         type: 'game',
         from_user_id: conn.from_user_id,
         to_user_id: conn.to_user_id,
@@ -2720,7 +2833,7 @@ app.post('/api/messages/:connectionId/read', requireAuth, readReceiptLimiter, as
   const readAt = new Date().toISOString();
 
   // Instantly notify the OTHER user's SSE stream (<5ms) so seen ticks turn blue immediately
-  connectionEmitter.emit(`update:${req.params.connectionId}`, {
+  connectionBus.publish(`update:${req.params.connectionId}`, {
     type: 'read',
     readAt,
     connectionId: Number(req.params.connectionId)
@@ -2782,7 +2895,7 @@ app.post('/api/messages/send', requireAuth, messageLimiter, async (req, res) => 
   const displayContent = Number(is_encrypted) === 1 ? 'Encrypted message' : sanitizeText(content.trim());
 
   // Embed full message in SSE event so the receiver gets it with ZERO extra round-trips
-  connectionEmitter.emit(`update:${connection_id}`, {
+  connectionBus.publish(`update:${connection_id}`, {
     type: 'message',
     senderId,
     msg: { ...msg, sender_id: senderId }
@@ -2807,7 +2920,7 @@ app.post('/api/messages/send', requireAuth, messageLimiter, async (req, res) => 
   }
   const senderUsername = (senderUser && senderUser.username) ? senderUser.username : 'User';
 
-  userEmitter.emit(`user:${otherUserId}`, {
+  userBus.publish(`user:${otherUserId}`, {
     type: 'message',
     connectionId: Number(connection_id),
     lastMessage: displayContent,
@@ -2836,7 +2949,10 @@ app.post('/api/messages/send', requireAuth, messageLimiter, async (req, res) => 
       createdAt: msg.created_at,
       url: `/chat.html?id=${connection_id}`
     },
-    (userId, connId) => getRoomPresenceSnapshot(connId).includes(Number(userId))
+    // Cross-instance aware: roster comes from the Redis presence mirror when
+    // Redis is up, so a send landing on instance B still sees a recipient whose
+    // SSE stream hangs off instance A.
+    async (userId, connId) => (await computeRoomRoster(connId)).includes(Number(userId))
   ).catch(err => console.warn('Push notification dispatch error:', err.message));
 
   // Message order and previews come directly from Supabase. Do not write
@@ -3121,7 +3237,7 @@ app.post('/api/messages/:id/react', requireAuth, async (req, res) => {
   const result = await messageOps.toggleReaction(req.params.id, req.session.userId, connection_id, emoji);
   if (result.error) return res.status(400).json(result);
 
-  connectionEmitter.emit(`update:${connection_id}`, { type: 'messages' });
+  connectionBus.publish(`update:${connection_id}`, { type: 'messages' });
   res.json(result);
 });
 
@@ -3187,7 +3303,7 @@ app.post('/api/users/block', requireAuth, actionLimiter, async (req, res) => {
         await messageOps.softDeleteAllForConnection(connId, blockerId);
         
         // Notify chat page SSE
-        connectionEmitter.emit(`update:${connId}`, {
+        connectionBus.publish(`update:${connId}`, {
           type: 'ended',
           reason: 'blocked',
           message: 'This chat has ended.'
@@ -3198,8 +3314,8 @@ app.post('/api/users/block', requireAuth, actionLimiter, async (req, res) => {
           type: 'chat_ended',
           connectionId: Number(connId)
         };
-        userEmitter.emit(`user:${blockerId}`, chatEndedEvent);
-        userEmitter.emit(`user:${blockedId}`, chatEndedEvent);
+        userBus.publish(`user:${blockerId}`, chatEndedEvent);
+        userBus.publish(`user:${blockedId}`, chatEndedEvent);
       }
     }
 
@@ -3325,7 +3441,7 @@ app.delete('/api/messages/:id', requireAuth, async (req, res) => {
   if (result.error) return res.status(403).json(result);
 
   if (connection_id) {
-    connectionEmitter.emit(`update:${connection_id}`, { type: 'messages' });
+    connectionBus.publish(`update:${connection_id}`, { type: 'messages' });
   }
   res.json(result);
 });
@@ -3436,14 +3552,14 @@ setInterval(async () => {
         // Expired connections must drop out of the message-send auth cache
         // immediately, or messages can still be sent for up to 30s post-expiry.
         evictConnectionAuth(entry.id);
-        connectionEmitter.emit(`update:${entry.id}`, {
+        connectionBus.publish(`update:${entry.id}`, {
           type: 'ended',
           reason: 'expired',
           message: endedMsg
         });
         const chatEndedEvent = { type: 'chat_ended', connectionId: Number(entry.id) };
-        userEmitter.emit(`user:${entry.from_user_id}`, chatEndedEvent);
-        userEmitter.emit(`user:${entry.to_user_id}`, chatEndedEvent);
+        userBus.publish(`user:${entry.from_user_id}`, chatEndedEvent);
+        userBus.publish(`user:${entry.to_user_id}`, chatEndedEvent);
       }
     }
   } catch (err) {

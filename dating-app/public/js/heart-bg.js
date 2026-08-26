@@ -159,13 +159,24 @@
     }
   });
 
-  function loop() {
+  // Cap to ~30fps: a decorative background doesn't need 60fps, and halving
+  // the redraw rate halves its GPU/CPU cost on low-end Android devices.
+  const FRAME_INTERVAL = 1000 / 30;
+  let lastFrameTime = 0;
+
+  function loop(ts) {
     if (!active) { rafId = null; return; }
     
     // Cancel any previously scheduled frame before scheduling a new one.
     // This prevents overlapping animation loops when visibility changes rapidly.
     if (rafId) cancelAnimationFrame(rafId);
-    
+
+    if (lastFrameTime && ts - lastFrameTime < FRAME_INTERVAL) {
+      rafId = requestAnimationFrame(loop);
+      return;
+    }
+    lastFrameTime = ts;
+
     ctx.clearRect(0, 0, width, height);
 
     mouseX += (targetMouseX - mouseX) * 0.08;

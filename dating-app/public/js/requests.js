@@ -27,6 +27,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 let _requestsLoading = false;
+let _pendingReloadType = null; // tab clicked while a load was in flight
 
 function renderRequestItem(r, type) {
   const isIncoming = type === 'incoming';
@@ -54,7 +55,12 @@ function renderRequestItem(r, type) {
 }
 
 async function loadRequests(type = 'incoming') {
-  if (_requestsLoading) return;
+  if (_requestsLoading) {
+    // A different tab was clicked mid-flight: remember it and reload that tab
+    // as soon as the current load finishes, instead of silently no-oping.
+    _pendingReloadType = type;
+    return;
+  }
   _requestsLoading = true;
   const list = document.getElementById('requests-list');
 
@@ -67,6 +73,7 @@ async function loadRequests(type = 'incoming') {
       if (cachedReqs.length > 0) {
         hasCache = true;
         list.innerHTML = cachedReqs.map(r => renderRequestItem(r, type)).join('');
+        bindRequestActions();
       }
     }
   } catch (e) {}
@@ -89,24 +96,19 @@ async function loadRequests(type = 'incoming') {
     }
 
     list.innerHTML = reqs.map(r => renderRequestItem(r, type)).join('');
-
-    // Bind click events programmatically to prevent adblocker/browser security policies from blocking inline script handlers
-    list.querySelectorAll('[data-action]').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        const action = btn.getAttribute('data-action');
-        const id = Number(btn.getAttribute('data-id'));
-        if (action === 'accept' || action === 'reject') {
-          await respondReq(id, action);
-        } else if (action === 'revoke') {
-          await revokeReq(id);
-        }
-      });
-    });
+    bindRequestActions();
   } catch (err) {
     list.innerHTML = `<div class="p-4 text-error">${escapeHtml(err.message)}</div>`;
   } finally {
     _requestsLoading = false;
+    // Serve the tab the user clicked while this load was running.
+    if (_pendingReloadType && _pendingReloadType !== type) {
+      const next = _pendingReloadType;
+      _pendingReloadType = null;
+      loadRequests(next);
+    } else {
+      _pendingReloadType = null;
+    }
   }
 }
 

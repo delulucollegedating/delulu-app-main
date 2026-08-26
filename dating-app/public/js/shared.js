@@ -310,9 +310,20 @@ async function requireAuth() {
 
   // Fallback: no cached user — must verify synchronously before showing the page
   try {
-    const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 8000));
-    const data = await Promise.race([apiCall('/api/session'), timeoutPromise]);
-    
+    const sessionWithTimeout = (ms) => Promise.race([
+      apiCall('/api/session'),
+      new Promise((resolve) => setTimeout(() => resolve(null), ms))
+    ]);
+
+    let data = await sessionWithTimeout(8000);
+
+    // A single timeout must never bounce a logged-in user to login.html — slow
+    // networks and Railway cold starts routinely exceed 8s. Retry once before
+    // concluding anything; only an explicit authenticated:false signs out.
+    if (!data) {
+      data = await sessionWithTimeout(10000);
+    }
+
     if (data && data.authenticated && data.user) {
       currentUser = data.user;
       window.localStorage.setItem('cached_user', JSON.stringify(data.user));
@@ -425,7 +436,13 @@ async function reencryptE2EEKeysForNewPassword(newPassword, email) {
   }
 }
 
-async function apiCall(url, method = 'GET', body = null) {
+// Default request timeout: a hung mobile/campus connection should fail fast
+// (with a clear message) instead of leaving spinners running for minutes.
+// Callers that need longer can pass { timeoutMs } in the options argument;
+// callers managing their own deadline can pass { signal }.
+const DEFAULT_API_TIMEOUT_MS = 20000;
+
+async function apiCall(url, method = 'GET', body = null, opts = {}) {
   const options = { 
     method, 
     headers: { 'Content-Type': 'application/json' },
@@ -439,12 +456,28 @@ async function apiCall(url, method = 'GET', body = null) {
 
   if (body) options.body = JSON.stringify(body);
 
+  // Abort the request after timeoutMs so fetch can never hang indefinitely.
+  const controller = new AbortController();
+  const timeoutMs = Number(opts.timeoutMs) || DEFAULT_API_TIMEOUT_MS;
+  const abortTimer = setTimeout(() => controller.abort(), timeoutMs);
+  if (opts.signal) {
+    // Honor an external signal too (e.g. component unmount).
+    if (opts.signal.aborted) controller.abort();
+    else opts.signal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+  options.signal = controller.signal;
+
   const targetUrl = resolveUrl(url);
   let res;
   try {
     res = await fetch(targetUrl, options);
   } catch (netErr) {
+    if (netErr && netErr.name === 'AbortError') {
+      throw new Error('Request timed out. Please check your connection and try again.');
+    }
     throw new Error('Network connection error. Please check your internet connection.');
+  } finally {
+    clearTimeout(abortTimer);
   }
 
   let data;
@@ -660,7 +693,7 @@ window.showRichToast = showRichToast;
 
 function initHeartBackground() {
   const script = document.createElement('script');
-  script.src = '/js/heart-bg.js';
+  script.src = '/js/heart-bg.js?v=285';
   document.body.appendChild(script);
 }
 

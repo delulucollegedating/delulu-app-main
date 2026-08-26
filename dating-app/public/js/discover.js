@@ -138,17 +138,21 @@ async function handleDismissCenter() {
   removeProfileAt(idx);
   hapticLight();
   showUndoToast('Profile dismissed', () => {
-    discoverProfiles.splice(idx, 0, profile);
-    currentIndex = idx;
+    // Clamp: other dismisses may have shrunk the deck during the undo window,
+// so the original index may no longer be valid.
+    const restoreIdx = Math.min(idx, discoverProfiles.length);
+    discoverProfiles.splice(restoreIdx, 0, profile);
+    currentIndex = restoreIdx;
     init3DScene();
   }, 3000);
 
   try {
     await apiCall('/api/connections/dismiss', 'POST', { to_user_id: profile.id });
   } catch (err) {
-    // Rollback: restore profile card if server request fails
-    discoverProfiles.splice(idx, 0, profile);
-    currentIndex = idx;
+    // Rollback: restore profile card if server request fails (clamped for safety)
+    const restoreIdx = Math.min(idx, discoverProfiles.length);
+    discoverProfiles.splice(restoreIdx, 0, profile);
+    currentIndex = restoreIdx;
     init3DScene();
     showToast(`Failed to dismiss profile: ${err.message}`, 'error');
   }

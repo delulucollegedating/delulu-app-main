@@ -164,7 +164,12 @@ function startFloatAnimation() {
     const el = avatarEls[targetIndex];
     if (el) {
       const img = el.querySelector('img');
-      if (img) img.style.marginBottom = (Math.sin(ts * 0.002) * 7) + 'px';
+      if (img) {
+        // Compositor-only float: translateY instead of marginBottom.
+        // Margin writes force full layout recalculation every frame; transforms
+        // skip layout/paint entirely — noticeably smoother on low-end Android.
+        img.style.transform = 'translateY(' + (Math.sin(ts * 0.002) * 7).toFixed(2) + 'px)';
+      }
     }
   }
   animationId = requestAnimationFrame(frame);

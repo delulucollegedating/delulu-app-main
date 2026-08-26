@@ -39,7 +39,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (currentUser.avatar === av) {
         wrapper.classList.add('border-primary', 'border-2', 'ring-2', 'ring-primary/20', 'scale-105');
       }
-      wrapper.innerHTML = `<img src="/avatars/${av}.png" class="w-full h-full object-cover">`;
+      wrapper.innerHTML = `<img src="/avatars/${av}.png" loading="lazy" decoding="async" class="w-full h-full object-cover">`;
       wrapper.onclick = () => {
         avatarGrid.querySelectorAll('.aspect-square').forEach(el => el.classList.remove('border-primary', 'border-2', 'ring-2', 'ring-primary/20'));
         wrapper.classList.add('border-primary', 'border-2', 'ring-2', 'ring-primary/20');
@@ -165,10 +165,17 @@ function init3DPreview() {
       while(previewScene.children.length > 0) {
         const child = previewScene.children[0];
         if (child.geometry) child.geometry.dispose();
-        if (child.material) child.material.dispose();
+        if (child.material) {
+          // Disposing the material does NOT dispose its maps — without this,
+          // every CanvasTexture leaks GPU memory until the WebView kills the context.
+          if (child.material.map) child.material.map.dispose();
+          child.material.dispose();
+        }
         previewScene.remove(child);
       }
     }
+    previewTexIdle = null;
+    previewTexWave = null;
     previewScene = null;
     previewCamera = null;
     previewMesh = null;
@@ -313,16 +320,24 @@ function update3DPreview(avatarCode, gender) {
   if (!previewScene) {
     init3DPreview();
   }
+  // init3DPreview bails out if the container element is missing — bail too,
+  // otherwise the scene.add() below would throw a TypeError.
+  if (!previewScene || !previewRenderer) return;
 
+  // Free the previous textures BEFORE replacing them: material.dispose() alone
+  // never releases texture GPU memory, so tapping through the avatar grid used
+  // to leak both idle and wave textures per click.
   if (previewMesh) {
     previewScene.remove(previewMesh);
     previewMesh.geometry.dispose();
+    if (previewMesh.material.map && previewMesh.material.map !== previewTexIdle && previewMesh.material.map !== previewTexWave) {
+      previewMesh.material.map.dispose();
+    }
     previewMesh.material.dispose();
     previewMesh = null;
   }
-
-  previewTexIdle = null;
-  previewTexWave = null;
+  if (previewTexIdle) { previewTexIdle.dispose(); previewTexIdle = null; }
+  if (previewTexWave) { previewTexWave.dispose(); previewTexWave = null; }
   previewState = 'idle';
   previewLastSwap = Date.now();
 
@@ -332,8 +347,14 @@ function update3DPreview(avatarCode, gender) {
     idleUrl = avatarCode;
     waveUrl = avatarCode;
   } else {
-    idleUrl = `/avatars/${gender}/${avatarCode}/idle.png`;
-    waveUrl = `/avatars/${gender}/${avatarCode}/wave.png`;
+    // Avatar folders exist only as male/ and female/ on disk. Derive the folder
+    // from the avatar's own prefix — never from the account gender, which can
+    // be 'other' (no folder) or disagree with the chosen avatar.
+    const folder = /^(male|female)_/.test(avatarCode)
+      ? avatarCode.slice(0, avatarCode.indexOf('_'))
+      : gender;
+    idleUrl = `/avatars/${folder}/${avatarCode}/idle.png`;
+    waveUrl = `/avatars/${folder}/${avatarCode}/wave.png`;
   }
 
   // Set card base width/height to look exactly like the discover cards

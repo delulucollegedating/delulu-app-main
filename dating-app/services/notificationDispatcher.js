@@ -238,10 +238,11 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
   // ssePresenceChecker(receiverId, connectionId) returns true only when the
   // recipient is present in this specific conversation's room — being online
   // elsewhere in the app (messages list, another chat, etc.) does NOT suppress.
+  // The checker may be async (cross-instance roster lookup) — awaited here.
   const suppressFcm = typeof ssePresenceChecker === 'function'
     && payload.type === 'chat_message'
     && connectionId
-    && !!ssePresenceChecker(receiverId, connectionId);
+    && !!(await Promise.resolve(ssePresenceChecker(receiverId, connectionId)));
 
   // 1. Fetch registered devices for the receiver
   const devices = await getActiveDevices(receiverId);
