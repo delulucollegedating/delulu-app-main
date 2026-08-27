@@ -34,7 +34,13 @@ function initAvatarScene(containerId, profiles) {
       if (p.avatar.idle) { const img = new Image(); img.src = p.avatar.idle; }
       if (p.avatar.wave) { const img = new Image(); img.src = p.avatar.wave; }
     } else if (p.avatar) {
-      const img = new Image(); img.src = `/avatars/${p.avatar}.png`;
+      // Legacy string format (e.g. 'female_02') — resolve to subdirectory idle path
+      // so the flat root duplicates (public/avatars/female_02.png) are not needed.
+      const m = p.avatar.match(/^(male|female)_(\d+)$/);
+      const resolvedSrc = m
+        ? `/avatars/${m[1]}/${m[1]}_${m[2].length < 2 ? '0' + m[2] : m[2]}/idle.png`
+        : `/avatars/${p.avatar}`;
+      const img = new Image(); img.src = resolvedSrc;
     }
   });
 
@@ -50,7 +56,13 @@ function initAvatarScene(containerId, profiles) {
   avatarEls = profiles.map((profile, i) => {
     const idleSrc = profile.avatar && typeof profile.avatar === 'object'
       ? profile.avatar.idle
-      : profile.avatar ? `/avatars/${profile.avatar}.png` : null;
+      : profile.avatar ? (() => {
+          const m = profile.avatar.match(/^(male|female)_(\d+)$/);
+          return m
+            ? `/avatars/${m[1]}/${m[1]}_${m[2].length < 2 ? '0' + m[2] : m[2]}/idle.png`
+            : `/avatars/${profile.avatar}`;
+        })()
+      : null;
     const waveSrc = profile.avatar && typeof profile.avatar === 'object'
       ? profile.avatar.wave
       : idleSrc;

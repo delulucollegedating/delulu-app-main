@@ -72,9 +72,23 @@ let presenceHeartbeatTimer = null;
 
 function startPresenceHeartbeat() {
   if (presenceHeartbeatTimer) return;
-  const sendPresenceHeartbeat = () => {
+  const sendPresenceHeartbeat = async () => {
     if (!currentConnId || !streamReady) return;
-    apiCall(`/api/connections/${currentConnId}/presence`, 'POST').catch(() => {});
+    try {
+      await apiCall(`/api/connections/${currentConnId}/presence`, 'POST');
+    } catch (err) {
+      // 409 means the server-side presence lease expired (common when Android
+      // battery-saver freezes the tab for >60s). Re-opening the SSE stream
+      // re-registers presence via addRoomPresence() and broadcasts online.
+      if (err && err.status === 409) {
+        dbgWarn('[Presence] Lease expired (409) — reconnecting SSE to rejoin presence roster.');
+        stopPresenceHeartbeat();
+        if (eventSource) { eventSource.close(); eventSource = null; }
+        streamReady = false;
+        // initRealtimeStream() is idempotent (guards _sseOpening + eventSource).
+        initRealtimeStream().catch(() => {});
+      }
+    }
   };
   sendPresenceHeartbeat();
   presenceHeartbeatTimer = setInterval(sendPresenceHeartbeat, 20 * 1000);

@@ -22,7 +22,7 @@
 // ── Cache Version ─────────────────────────────────────────────────────────────
 // Increment this string whenever you deploy a new version of the app.
 // This causes the service worker to delete the old cache and re-download assets.
-const CACHE_VERSION = 'delulu-v10';
+const CACHE_VERSION = 'delulu-v11';
 
 // ── Static Assets to Pre-Cache on Install ─────────────────────────────────────
 // These files are cached immediately when the service worker installs.
@@ -41,10 +41,11 @@ const PRECACHE_ASSETS = [
   '/js/crypto.js',
   '/js/image-compress.js',
   '/js/dexie.min.js',
-  '/js/three.min.js',
+  // three.min.js (592 KB) is only used on profile.html — lazy-cached at runtime
+  // when that page loads it, so it does not block the SW install budget here.
   '/logo.png',
-  '/favicon.png',
-  '/favicon.ico'
+  '/favicon.png'
+  // favicon.ico omitted — only favicon.png exists; .ico causes a silent 404 on install
 ];
 
 // ── Runtime Cache Patterns ─────────────────────────────────────────────────────

@@ -986,6 +986,14 @@ registerCapacitorPushListeners();
 registerLocalNotificationTap();
 
 async function initPushNotifications() {
+  // Idempotency guard: requireAuth() calls this function up to 5× during its
+  // multi-tier session-verification retry chain. Without this flag each call
+  // re-requests push permission, re-calls PushNotifications.register(), and
+  // re-registers the device doc in Firestore — creating duplicate FCM tokens
+  // and unnecessary Firestore writes.
+  if (window.__pushNotificationsInitialized) return;
+  window.__pushNotificationsInitialized = true;
+
   const deviceId = getOrCreateDeviceId();
 
   // 1. Native Capacitor FCM Push Notifications (Android / iOS native app)
