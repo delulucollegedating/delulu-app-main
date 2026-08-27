@@ -282,8 +282,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     avatars.forEach(av => {
       const wrapper = document.createElement('div');
       wrapper.className = 'aspect-square rounded-lg overflow-hidden border border-outline-variant/30 hover:border-primary/50 cursor-pointer transition-all flex items-center justify-center p-1 bg-surface-container';
-      wrapper.innerHTML = `<img src="/avatars/${av}.png" loading="lazy" decoding="async" class="w-full h-full object-cover">`;
-      wrapper.onclick = () => {
+      // av is like 'female_02' — resolve to subdirectory webp path
+      const avParts = av.match(/^(male|female)_(\d+)$/);
+      const avSrc = avParts
+        ? `/avatars/${avParts[1]}/${av}/idle.webp`
+        : `/avatars/${av}.webp`;
+      wrapper.innerHTML = `<img src="${avSrc}" loading="lazy" decoding="async" class="w-full h-full object-cover">`;      wrapper.onclick = () => {
         avatarGrid.querySelectorAll('.aspect-square').forEach(el => el.classList.remove('border-primary', 'border-2', 'ring-2', 'ring-primary/20'));
         wrapper.classList.add('border-primary', 'border-2', 'ring-2', 'ring-primary/20');
         profileAvatarInput.value = av;

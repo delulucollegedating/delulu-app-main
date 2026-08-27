@@ -39,7 +39,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (currentUser.avatar === av) {
         wrapper.classList.add('border-primary', 'border-2', 'ring-2', 'ring-primary/20', 'scale-105');
       }
-      wrapper.innerHTML = `<img src="/avatars/${av}.png" loading="lazy" decoding="async" class="w-full h-full object-cover">`;
+      // av is like 'female_02' — resolve to subdirectory webp path
+      const avParts = av.match(/^(male|female)_(\d+)$/);
+      const avSrc = avParts
+        ? `/avatars/${avParts[1]}/${av}/idle.webp`
+        : `/avatars/${av}.webp`;
+      wrapper.innerHTML = `<img src="${avSrc}" loading="lazy" decoding="async" class="w-full h-full object-cover">`;
       wrapper.onclick = () => {
         avatarGrid.querySelectorAll('.aspect-square').forEach(el => el.classList.remove('border-primary', 'border-2', 'ring-2', 'ring-primary/20'));
         wrapper.classList.add('border-primary', 'border-2', 'ring-2', 'ring-primary/20');
@@ -353,8 +358,8 @@ function update3DPreview(avatarCode, gender) {
     const folder = /^(male|female)_/.test(avatarCode)
       ? avatarCode.slice(0, avatarCode.indexOf('_'))
       : gender;
-    idleUrl = `/avatars/${folder}/${avatarCode}/idle.png`;
-    waveUrl = `/avatars/${folder}/${avatarCode}/wave.png`;
+    idleUrl = `/avatars/${folder}/${avatarCode}/idle.webp`;
+    waveUrl = `/avatars/${folder}/${avatarCode}/wave.webp`;
   }
 
   // Set card base width/height to look exactly like the discover cards

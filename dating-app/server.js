@@ -2042,18 +2042,12 @@ app.get('/api/discover', requireAuth, async (req, res) => {
               if (match) {
                 const num = parseInt(match[2], 10);
                 if (num < 10 && !match[2].startsWith('0')) {
-                  // Folder comes from the AVATAR's own prefix, not the account
-                  // gender — accounts with gender 'other' have no avatar folder,
-                  // and an avatar prefix can differ from the stored gender.
-                  return `/avatars/${match[1]}/${match[1]}_0${num}/idle.png`;
+                  return `/avatars/${match[1]}/${match[1]}_0${num}/idle.webp`;
                 }
-                return `/avatars/${match[1]}/${avatarStr}/idle.png`;
+                return `/avatars/${match[1]}/${avatarStr}/idle.webp`;
               }
-              // Non male_/female_ avatar strings have no folder; gender 'other'
-              // has no avatar folder either — null lets the client render the
-              // initial-letter fallback instead of a guaranteed 404.
               if (genderStr === 'male' || genderStr === 'female') {
-                return `/avatars/${genderStr}/${avatarStr}/idle.png`;
+                return `/avatars/${genderStr}/${avatarStr}/idle.webp`;
               }
               return null;
             })() : null,
@@ -2062,12 +2056,12 @@ app.get('/api/discover', requireAuth, async (req, res) => {
               if (match) {
                 const num = parseInt(match[2], 10);
                 if (num < 10 && !match[2].startsWith('0')) {
-                  return `/avatars/${match[1]}/${match[1]}_0${num}/wave.png`;
+                  return `/avatars/${match[1]}/${match[1]}_0${num}/wave.webp`;
                 }
-                return `/avatars/${match[1]}/${avatarStr}/wave.png`;
+                return `/avatars/${match[1]}/${avatarStr}/wave.webp`;
               }
               if (genderStr === 'male' || genderStr === 'female') {
-                return `/avatars/${genderStr}/${avatarStr}/wave.png`;
+                return `/avatars/${genderStr}/${avatarStr}/wave.webp`;
               }
               return null;
             })() : null

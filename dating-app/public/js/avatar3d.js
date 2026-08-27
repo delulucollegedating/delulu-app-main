@@ -38,7 +38,7 @@ function initAvatarScene(containerId, profiles) {
       // so the flat root duplicates (public/avatars/female_02.png) are not needed.
       const m = p.avatar.match(/^(male|female)_(\d+)$/);
       const resolvedSrc = m
-        ? `/avatars/${m[1]}/${m[1]}_${m[2].length < 2 ? '0' + m[2] : m[2]}/idle.png`
+        ? `/avatars/${m[1]}/${m[1]}_${m[2].length < 2 ? '0' + m[2] : m[2]}/idle.webp`
         : `/avatars/${p.avatar}`;
       const img = new Image(); img.src = resolvedSrc;
     }
@@ -59,7 +59,7 @@ function initAvatarScene(containerId, profiles) {
       : profile.avatar ? (() => {
           const m = profile.avatar.match(/^(male|female)_(\d+)$/);
           return m
-            ? `/avatars/${m[1]}/${m[1]}_${m[2].length < 2 ? '0' + m[2] : m[2]}/idle.png`
+            ? `/avatars/${m[1]}/${m[1]}_${m[2].length < 2 ? '0' + m[2] : m[2]}/idle.webp`
             : `/avatars/${profile.avatar}`;
         })()
       : null;

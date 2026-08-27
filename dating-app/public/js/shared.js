@@ -568,18 +568,18 @@ function getAvatarHtml(username, avatar, options = {}) {
         src = avatar;
       } else {
         const match = avatar.match(/^(male|female)_(\d+)$/);
-        if (match) {
-          const gender = match[1];
-          const num = parseInt(match[2], 10);
-          const numStr = num < 10 ? `0${num}` : `${num}`;
-          src = `/avatars/${gender}/${gender}_${numStr}/idle.png`;
-        } else {
-          src = `/avatars/${avatar}`;
-        }
+          if (match) {
+            const gender = match[1];
+            const num = parseInt(match[2], 10);
+            const numStr = num < 10 ? `0${num}` : `${num}`;
+            src = `/avatars/${gender}/${gender}_${numStr}/idle.webp`;
+          } else {
+            src = `/avatars/${avatar}`;
+          }
       }
     }
     if (src) {
-      return `<span class="avatar-circle-wrapper"><img src="${src}" alt="${safeUsername}" class="${className}" ${loadingAttr}></span>`;
+      return `<span class="avatar-circle-wrapper"><img src="${src}" alt="${safeUsername}" class="${className}" ${loadingAttr} onerror="this.onerror=null;this.src='/avatars/default.webp';"></span>`;
     }
   }
   const initial = safeUsername ? safeUsername.charAt(0).toUpperCase() : '?';

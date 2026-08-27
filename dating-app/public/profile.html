@@ -146,7 +146,24 @@
   </div>
   </main>
   
-  <script src="js/three.min.js"></script>
+  <!-- Three.js: load from CDN (not bundled in SW precache). Falls back to local
+       copy automatically if CDN is unreachable (offline / corp firewall). -->
+  <script>
+    (function() {
+      var s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
+      s.integrity = 'sha512-dLxUelApnYxpLt6K2iomGngnHO83iUvZytA3YjDUCjT0HDOHKXnVYdf3hU4JjM8uEhxf9nD1/ey98U3t2vZ0A==';
+      s.crossOrigin = 'anonymous';
+      s.referrerPolicy = 'no-referrer';
+      s.onerror = function() {
+        // CDN unreachable — fall back to locally bundled copy
+        var fallback = document.createElement('script');
+        fallback.src = 'js/three.min.js';
+        document.head.appendChild(fallback);
+      };
+      document.head.appendChild(s);
+    })();
+  </script>
   <link rel="preload" href="js/shared.js?v=286" as="script">
   <script src="js/profanity-words.generated.js"></script>
   <script src="js/shared.js?v=286"></script>

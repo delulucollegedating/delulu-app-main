@@ -56,6 +56,7 @@ const STATIC_PATTERNS = [
   /styles\.css/,
   /logo\.png/,
   /favicon/,
+  /\.webp$/,  // WebP avatars (converted from PNG for ~75% smaller files)
 ];
 
 // Never cache these — always network only
@@ -65,6 +66,7 @@ const BYPASS_PATTERNS = [
   /\/uploads\//,
   /fonts\.googleapis\.com/,
   /fonts\.gstatic\.com/,
+  /cdnjs\.cloudflare\.com/,  // Three.js CDN — let browser/CDN handle caching
 ];
 
 // ── Install: Pre-Cache Static Assets ─────────────────────────────────────────
