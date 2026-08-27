@@ -287,7 +287,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       const avSrc = avParts
         ? `/avatars/${avParts[1]}/${av}/idle.webp`
         : `/avatars/${av}.webp`;
-      wrapper.innerHTML = `<img src="${avSrc}" loading="lazy" decoding="async" class="w-full h-full object-cover">`;      wrapper.onclick = () => {
+      wrapper.innerHTML = `<img src="${avSrc}" loading="lazy" decoding="async" class="w-full h-full object-cover" onerror="if(this.src.endsWith('.webp')){this.src=this.src.replace(/\\.webp$/,'.png');}">`;
+      wrapper.onclick = () => {
         avatarGrid.querySelectorAll('.aspect-square').forEach(el => el.classList.remove('border-primary', 'border-2', 'ring-2', 'ring-primary/20'));
         wrapper.classList.add('border-primary', 'border-2', 'ring-2', 'ring-primary/20');
         profileAvatarInput.value = av;

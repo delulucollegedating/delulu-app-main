@@ -30,18 +30,10 @@ function initAvatarScene(containerId, profiles) {
 
   // Preload all avatar images immediately to prevent flashing on swipe
   profiles.forEach(p => {
-    if (p.avatar && typeof p.avatar === 'object') {
-      if (p.avatar.idle) { const img = new Image(); img.src = p.avatar.idle; }
-      if (p.avatar.wave) { const img = new Image(); img.src = p.avatar.wave; }
-    } else if (p.avatar) {
-      // Legacy string format (e.g. 'female_02') — resolve to subdirectory idle path
-      // so the flat root duplicates (public/avatars/female_02.png) are not needed.
-      const m = p.avatar.match(/^(male|female)_(\d+)$/);
-      const resolvedSrc = m
-        ? `/avatars/${m[1]}/${m[1]}_${m[2].length < 2 ? '0' + m[2] : m[2]}/idle.webp`
-        : `/avatars/${p.avatar}`;
-      const img = new Image(); img.src = resolvedSrc;
-    }
+    const idlePath = (window.resolveAvatarPath ? window.resolveAvatarPath(p.avatar, 'idle') : null) || (p.avatar?.idle || null);
+    const wavePath = (window.resolveAvatarPath ? window.resolveAvatarPath(p.avatar, 'wave') : null) || (p.avatar?.wave || idlePath);
+    if (idlePath) { const img = new Image(); img.src = idlePath; }
+    if (wavePath && wavePath !== idlePath) { const img = new Image(); img.src = wavePath; }
   });
 
   sceneContainer.innerHTML = '';
@@ -54,18 +46,10 @@ function initAvatarScene(containerId, profiles) {
   `;
 
   avatarEls = profiles.map((profile, i) => {
-    const idleSrc = profile.avatar && typeof profile.avatar === 'object'
-      ? profile.avatar.idle
-      : profile.avatar ? (() => {
-          const m = profile.avatar.match(/^(male|female)_(\d+)$/);
-          return m
-            ? `/avatars/${m[1]}/${m[1]}_${m[2].length < 2 ? '0' + m[2] : m[2]}/idle.webp`
-            : `/avatars/${profile.avatar}`;
-        })()
-      : null;
-    const waveSrc = profile.avatar && typeof profile.avatar === 'object'
-      ? profile.avatar.wave
-      : idleSrc;
+    const idleSrc = (window.resolveAvatarPath ? window.resolveAvatarPath(profile.avatar, 'idle') : null) ||
+      (profile.avatar && typeof profile.avatar === 'object' ? profile.avatar.idle : null);
+    const waveSrc = (window.resolveAvatarPath ? window.resolveAvatarPath(profile.avatar, 'wave') : null) ||
+      (profile.avatar && typeof profile.avatar === 'object' ? profile.avatar.wave : idleSrc);
 
     const wrapper = document.createElement('div');
     wrapper.dataset.index = i;
@@ -86,6 +70,15 @@ function initAvatarScene(containerId, profiles) {
       img.dataset.wave = waveSrc || idleSrc;
       img.alt = profile.username || '';
       img.draggable = false;
+      img.onerror = function() {
+        if (this.src.endsWith('.webp')) {
+          this.src = this.src.replace(/\.webp$/, '.png');
+          this.dataset.idle = this.src;
+        } else if (this.src.endsWith('.png')) {
+          this.src = '/avatars/default.png';
+          this.dataset.idle = this.src;
+        }
+      };
       img.style.cssText = `
         height: clamp(180px, 28vh, 290px);
         max-height: 290px;

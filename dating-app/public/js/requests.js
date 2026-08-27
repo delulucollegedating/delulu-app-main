@@ -35,11 +35,7 @@ function renderRequestItem(r, type) {
     <div class="glass-panel p-4 rounded-2xl flex items-center justify-between gap-3 shadow-sm border border-outline-variant/20">
       <div class="flex items-center gap-3 min-w-0 flex-1">
         <div class="w-12 h-12 rounded-full bg-primary-container text-white font-bold flex items-center justify-center overflow-hidden shrink-0 border border-outline-variant/30">
-          ${r.avatar ? (() => {
-            const m = r.avatar.match(/^(male|female)_(\d+)$/);
-            const src = m ? `/avatars/${m[1]}/${r.avatar}/idle.webp` : `/avatars/${r.avatar}.webp`;
-            return `<img src="${src}" class="w-full h-full object-cover" alt="${escapeHtml(r.username)}">`;
-          })() : escapeHtml(r.username.charAt(0).toUpperCase())}
+          ${getAvatarHtml(r.username, r.avatar, { className: 'w-full h-full object-cover' })}
         </div>
         <div class="min-w-0 flex-1">
           <h3 class="font-bold text-on-surface text-base capitalize truncate">${escapeHtml(r.username)}</h3>

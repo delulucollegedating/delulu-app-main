@@ -555,32 +555,38 @@ async function buildSSEUrl(path) {
   return `${base}${base.includes('?') ? '&' : '?'}sse_token=${encodeURIComponent(token)}`;
 }
 
+function resolveAvatarPath(avatar, variant = 'idle') {
+  if (!avatar) return null;
+  if (typeof avatar === 'object') {
+    const v = avatar[variant] || avatar.idle || null;
+    if (v) return v;
+  }
+  if (typeof avatar === 'string') {
+    if (avatar.startsWith('http') || avatar.startsWith('data:') || avatar.startsWith('blob:')) {
+      return avatar;
+    }
+    const match = avatar.match(/(male|female)_(\d+)/);
+    if (match) {
+      const gender = match[1];
+      const num = parseInt(match[2], 10);
+      const numStr = num < 10 ? `0${num}` : `${num}`;
+      return `/avatars/${gender}/${gender}_${numStr}/${variant}.webp`;
+    }
+    if (avatar.startsWith('/avatars/')) {
+      return avatar;
+    }
+    return `/avatars/${avatar}`;
+  }
+  return null;
+}
+
 function getAvatarHtml(username, avatar, options = {}) {
   const { className = 'prof-avatar-img', lazy = false } = options;
   const loadingAttr = lazy ? 'loading="lazy"' : '';
   const safeUsername = escapeHtml(username || '');
-  if (avatar) {
-    let src = '';
-    if (typeof avatar === 'object' && avatar.idle) {
-      src = avatar.idle;
-    } else if (typeof avatar === 'string') {
-      if (avatar.startsWith('/avatars/') || avatar.startsWith('http') || avatar.startsWith('data:')) {
-        src = avatar;
-      } else {
-        const match = avatar.match(/^(male|female)_(\d+)$/);
-          if (match) {
-            const gender = match[1];
-            const num = parseInt(match[2], 10);
-            const numStr = num < 10 ? `0${num}` : `${num}`;
-            src = `/avatars/${gender}/${gender}_${numStr}/idle.webp`;
-          } else {
-            src = `/avatars/${avatar}`;
-          }
-      }
-    }
-    if (src) {
-      return `<span class="avatar-circle-wrapper"><img src="${src}" alt="${safeUsername}" class="${className}" ${loadingAttr} onerror="this.onerror=null;this.src='/avatars/default.webp';"></span>`;
-    }
+  const src = resolveAvatarPath(avatar, 'idle');
+  if (src) {
+    return `<span class="avatar-circle-wrapper"><img src="${src}" alt="${safeUsername}" class="${className}" ${loadingAttr} onerror="if(this.src.endsWith('.webp')){this.src=this.src.replace(/\\.webp$/,'.png');}else if(this.src.endsWith('.png')){this.src='/avatars/default.webp';}else{this.style.display='none';}"></span>`;
   }
   const initial = safeUsername ? safeUsername.charAt(0).toUpperCase() : '?';
   return `<div class="w-full h-full bg-gradient-to-br from-primary-container to-secondary-container text-white flex items-center justify-center font-bold text-3xl">${initial}</div>`;
@@ -1361,6 +1367,6 @@ window.hapticHeavy              = hapticHeavy;
 window.updateHeaderAvatar       = updateHeaderAvatar;
 window.prefetchPage             = prefetchPage;
 window.showReconnectBanner      = showReconnectBanner;
-window.hideReconnectBanner      = hideReconnectBanner;
+window.resolveAvatarPath       = resolveAvatarPath;
 window.dbg                      = dbg;
 window.dbgWarn                  = dbgWarn;
