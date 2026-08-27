@@ -54,6 +54,23 @@ function renderRequestItem(r, type) {
   `;
 }
 
+function bindRequestActions() {
+  const list = document.getElementById('requests-list');
+  if (!list) return;
+  list.querySelectorAll('button[data-action]').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const action = btn.dataset.action;
+      const id = btn.dataset.id;
+      if (action === 'accept' || action === 'reject') {
+        window.respondReq(id, action);
+      } else if (action === 'revoke') {
+        window.revokeReq(id);
+      }
+    };
+  });
+}
+
 async function loadRequests(type = 'incoming') {
   if (_requestsLoading) {
     // A different tab was clicked mid-flight: remember it and reload that tab
