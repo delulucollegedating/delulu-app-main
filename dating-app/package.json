@@ -10,8 +10,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "generate:profanity": "node scripts/generate-profanity-client.js",
-    "build:css": "tailwindcss -i ./tailwind.input.css -o ./public/css/tailwind.css --minify",
-    "build": "npm run typecheck && npm run build:css"
+    "build:css": "tailwindcss -i ./tailwind.input.css -o ./public/css/tailwind.css --minify"
   },
   "keywords": [],
   "author": "",
