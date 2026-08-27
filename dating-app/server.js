@@ -868,6 +868,11 @@ function requireSSEAuth(req, res, next) {
 app.use(express.json({ limit: '32kb' }));
 app.use(express.urlencoded({ extended: true, limit: '32kb' }));
 
+// Health check — no auth, no rate limit, used by load balancers and monitoring
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', uptime: process.uptime() });
+});
+
 // Apply general API rate limiter to all /api/ routes
 app.use('/api/', apiLimiter);
 
