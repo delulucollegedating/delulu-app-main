@@ -3,6 +3,23 @@ apply plugin: 'com.android.application'
 android {
     namespace = "com.delulu.college.app"
     compileSdk = rootProject.ext.compileSdkVersion
+
+    // Release signing: uses keystore + env vars when available,
+    // silently falls back to debug key for local dev builds.
+    def releaseKeystoreFile = rootProject.file('keystore/delulu-release.keystore')
+    def hasReleaseKeystore = releaseKeystoreFile.exists()
+        && System.getenv('RELEASE_STORE_PASSWORD')
+        && System.getenv('RELEASE_KEY_ALIAS')
+
+    signingConfigs {
+        release {
+            storeFile releaseKeystoreFile
+            storePassword System.getenv('RELEASE_STORE_PASSWORD') ?: ''
+            keyAlias System.getenv('RELEASE_KEY_ALIAS') ?: 'delulu'
+            keyPassword System.getenv('RELEASE_KEY_PASSWORD') ?: ''
+        }
+    }
+
     defaultConfig {
         applicationId "com.delulu.college.app"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -21,7 +38,7 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            signingConfig signingConfigs.debug
+            signingConfig hasReleaseKeystore ? signingConfigs.release : signingConfigs.debug
         }
     }
 }
