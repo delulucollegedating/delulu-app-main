@@ -1,0 +1,49 @@
+# =============================================================================
+# .claudeignore — Ignore large binaries, build outputs, and caches in Claude Code
+# =============================================================================
+
+# Binary and App Package files
+*.apk
+*.idsig
+*.ipa
+*.aab
+*.aar
+*.jar
+*.jks
+*.keystore
+
+# Builds & Outputs
+builds/
+dating-app/builds/
+dating-app/android/build/
+dating-app/android/app/build/
+dating-app/android/.gradle/
+dating-app/android/.idea/
+dating-app/android/app/src/main/assets/public/
+dating-app/ios/App/build/
+dating-app/ios/App/DerivedData/
+
+# Dependencies & Lockfiles
+node_modules/
+dating-app/node_modules/
+package-lock.json
+dating-app/package-lock.json
+
+# Minified third-party JS/CSS libraries
+dating-app/public/js/dexie.min.js
+
+# Media & Uploads
+dating-app/public/uploads/
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.mp3
+*.wav
+*.mp4
+
+# OS and Scratch Files
+.DS_Store
+Thumbs.db
+.git/
+dating-app/data/

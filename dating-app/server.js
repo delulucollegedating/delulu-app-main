@@ -83,6 +83,55 @@ const bcrypt = require('bcrypt');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = rateLimit;
+
+// Helper: Extract IP address from request and generate rate limit key
+function getRequestIp(req) {
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+function generateIpKey(req) {
+  return ipKeyGenerator(getRequestIp(req));
+}
+
+// Helper: Normalize avatar string (e.g., "male_1" -> "male_01")
+function normalizeAvatar(avatarStr) {
+  if (!avatarStr || typeof avatarStr !== 'string') return avatarStr;
+  const match = avatarStr.match(/^(male|female)_(\d+)$/);
+  if (match) {
+    const num = parseInt(match[2], 10);
+    if (num < 10 && !match[2].startsWith('0')) {
+      return `${match[1]}_0${num}`;
+    }
+  }
+  return avatarStr;
+}
+
+// Helper: Generate avatar path URLs for idle and wave animations
+function getAvatarPaths(avatarStr, genderStr) {
+  if (!avatarStr) return { idle: null, wave: null };
+
+  const normalized = normalizeAvatar(avatarStr);
+  const match = normalized.match(/^(male|female)_(\d+)$/);
+
+  if (match) {
+    const gender = match[1];
+    return {
+      idle: `/avatars/${gender}/${normalized}/idle.webp`,
+      wave: `/avatars/${gender}/${normalized}/wave.webp`
+    };
+  }
+
+  // Fallback for non-standard avatar strings
+  if (genderStr === 'male' || genderStr === 'female') {
+    return {
+      idle: `/avatars/${genderStr}/${avatarStr}/idle.webp`,
+      wave: `/avatars/${genderStr}/${avatarStr}/wave.webp`
+    };
+  }
+
+  return { idle: null, wave: null };
+}
+
 const { initializeApp: firebaseInitializeApp, cert } = require('firebase-admin/app');
 const { getAuth: getFirebaseAuth } = require('firebase-admin/auth');
 const { getDB, seedDemoUsers, userOps, connectionOps, messageOps, otpOps, authTokenOps, invalidateUserCache, reportOps, blockOps, pushOps, createMeetingRoom, normalizeMeetBaseUrl } = require('./database');
@@ -90,6 +139,7 @@ const fs = require('fs');
 const CircuitBreaker = require('./utils/circuitBreaker');
 const EmailQueue = require('./utils/emailQueue');
 const { hasForbiddenText, FORBIDDEN_MESSAGE_ERROR } = require('./utils/profanity');
+const { validateEnvironment } = require('./utils/envValidator');
 
 // Circuit breakers for external service isolation
 const brevoBreaker = new CircuitBreaker('BrevoEmailAPI', {
@@ -119,18 +169,32 @@ const pushBreaker = new CircuitBreaker('PushNotificationsAPI', {
 // Load environment variables
 require('dotenv').config();
 
+// ===== Fail-Fast Environment Validation (Cheap checks before expensive I/O) =====
+
 // Check Node.js version — Node 18+ required for global fetch used in sendBrevoEmail
 if (Number(process.versions.node.split('.')[0]) < 18) {
   console.error(`FATAL: Node.js 18+ required (current: ${process.version}). Upgrade Node to use this app.`);
   process.exit(1);
 }
 
-// Validate critical environment variables at startup — fail early, not at runtime
-if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-  console.error('FATAL: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in .env or environment.');
-  console.error('Without them, message sending/reading will silently fail. Set both and restart.');
-  process.exit(1);
-}
+// Validate all required environment variables in one pass
+validateEnvironment([
+  {
+    varName: 'SESSION_SECRET',
+    errorMessage: 'SESSION_SECRET environment variable is not set.',
+    helpText: 'Generate one with: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"'
+  },
+  {
+    varName: ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'],
+    errorMessage: 'Without them, message sending/reading will silently fail. Set both and restart.'
+  },
+  {
+    varName: 'BREVO_API_KEY',
+    errorMessage: 'Email verification and password reset will not work without it.',
+    helpText: 'Get your API key from: https://app.brevo.com/settings/keys/api\nThen add to .env: BREVO_API_KEY=xkeysib-your-key-here',
+    productionOnly: true
+  }
+]);
 
 const app = express();
 app.use(pinoHttp);
@@ -141,18 +205,18 @@ const PORT = process.env.PORT || 3000;
 
 // Allowed student college email domains for signup & password reset
 const ALLOWED_EMAIL_DOMAINS = [
-  'rishihood.edu.in', 
-  'vitbhopal.ac.in', 
-  'nst.rishihood.edu.in', 
+  'rishihood.edu.in',
+  'vitbhopal.ac.in',
+  'nst.rishihood.edu.in',
   'psy.rishihood.edu.in',
-  'som.rishihood.edu.in', 
-  'sod.rishihood.edu.in', 
+  'som.rishihood.edu.in',
+  'sod.rishihood.edu.in',
   'soh.rishihood.edu.in'
 ];
 
 const USERNAME_COOLDOWN_MS = 15 * 24 * 60 * 60 * 1000; // 15 days between username changes
 
-// ===== Firebase Admin SDK Initialization =====
+// ===== Firebase Admin SDK Initialization (Expensive I/O - runs after all cheap checks) =====
 let firebaseInitialized = false;
 let firebaseAuth = null;
 if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
@@ -171,15 +235,15 @@ if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && proc
     console.error('Firebase init error:', err.message);
   }
 } else if (process.env.NODE_ENV === 'production') {
-  // The app cannot function without Firestore (users, connections, OTPs), so a
-  // production boot without Firebase config is a hard failure unless the
-  // operator explicitly opts into the degraded mode.
-  if (process.env.REQUIRE_FIREBASE !== 'false') {
-    throw new Error('FATAL: FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY must be set in production.');
-  }
-  console.warn('WARNING: Firebase not configured in production (REQUIRE_FIREBASE=false) — core features will fail.');
+  // The app CANNOT function without Firestore (users, connections, OTPs).
+  // In production, Firebase config is MANDATORY - no degraded mode allowed.
+  console.error('FATAL: Firebase not configured in production environment.');
+  console.error('FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY must be set.');
+  console.error('Get credentials from: Firebase Console > Project Settings > Service Accounts > Generate New Private Key');
+  process.exit(1);
 } else {
   console.log('Firebase not configured — OTP endpoint will use local verification only');
+  console.log('NOTE: This is OK for development/testing, but production REQUIRES Firebase.');
 }
 
 // Firebase client config for Firestore realtime listener (onSnapshot for connection document)
@@ -191,11 +255,6 @@ const FIREBASE_CLIENT_CONFIG = process.env.FIREBASE_API_KEY ? {
   projectId: process.env.FIREBASE_PROJECT_ID,
   storageBucket: process.env.FIREBASE_STORAGE_BUCKET || `${process.env.FIREBASE_PROJECT_ID}.appspot.com`
 } : null;
-
-// Hard-fail if SESSION_SECRET is not set — this app must never run with a guessable session secret
-if (!process.env.SESSION_SECRET) {
-  throw new Error('FATAL: SESSION_SECRET environment variable is not set. Generate one with: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"');
-}
 
 // Trust proxy for when running behind nginx/render/heroku
 app.set('trust proxy', 1);
@@ -336,12 +395,15 @@ const authLimiter = rateLimit({
 
 // OTP send endpoints (emailing is expensive): 3 sends per hour per email + 10 per
 // hour per IP. This keeps an attacker from blasting one target address with reset
-// emails or exhausting the email provider quota.
+// emails or exhausting the email provider quota. Both limiters must pass for the
+// request to proceed - this prevents both email spam and IP-based DoS attacks.
 function otpEmailKey(req) {
   if (req.body && typeof req.body.email === 'string' && req.body.email.includes('@')) {
     return `email:${req.body.email.toLowerCase().trim()}`;
   }
-  return `ip:${ipKeyGenerator(req.ip || req.socket?.remoteAddress || 'unknown')}`;
+  // Fallback to IP key when email is missing/invalid (request will fail validation
+  // anyway, but we still want to rate-limit malformed requests to prevent abuse).
+  return `ip:${generateIpKey(req)}`;
 }
 
 const otpSendLimiter = rateLimit({
@@ -357,7 +419,7 @@ const otpSendLimiter = rateLimit({
 const otpSendIpLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 10,
-  keyGenerator: (req) => `ip:${ipKeyGenerator(req.ip || req.socket?.remoteAddress || 'unknown')}`,
+  keyGenerator: (req) => `ip:${generateIpKey(req)}`,
   message: { error: 'Too many verification emails from this device. Please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -379,7 +441,7 @@ const otpVerifyLimiter = rateLimit({
 const otpVerifyIpLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
   max: 10,
-  keyGenerator: (req) => `ip:${ipKeyGenerator(req.ip || req.socket?.remoteAddress || 'unknown')}`,
+  keyGenerator: (req) => `ip:${generateIpKey(req)}`,
   message: { error: 'Too many verification attempts from this device. Please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -392,7 +454,7 @@ const otpVerifyIpLimiter = rateLimit({
 function rateLimitIdentity(req) {
   const userId = Number(req.session?.userId);
   if (Number.isSafeInteger(userId) && userId > 0) return `user:${userId}`;
-  return `ip:${ipKeyGenerator(req.ip || req.socket?.remoteAddress || 'unknown')}`;
+  return `ip:${generateIpKey(req)}`;
 }
 
 // General API rate limit. Higher unauthenticated limit ensures college campus Wi-Fi
@@ -919,7 +981,7 @@ const apkLimiter = rateLimit({
   // Campus Wi-Fi NATs hundreds of students behind ONE public IP — a tight cap
   // 429'd legitimate launch-day downloads. Env-tunable for bigger events.
   max: resolveSseCap(process.env.MAX_APK_DOWNLOADS_PER_10MIN, 60),
-  keyGenerator: (req) => ipKeyGenerator(req.ip || req.socket?.remoteAddress || 'unknown'),
+  keyGenerator: generateIpKey,
   message: { error: 'Too many APK downloads. Please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -1056,14 +1118,8 @@ function sanitizeUser(user) {
     try { safeUser.hobbies = JSON.parse(safeUser.hobbies); } 
     catch(e) { safeUser.hobbies = []; }
   }
-  if (safeUser.avatar && typeof safeUser.avatar === 'string') {
-    const match = safeUser.avatar.match(/^(male|female)_(\d+)$/);
-    if (match) {
-      const num = parseInt(match[2], 10);
-      if (num < 10 && !match[2].startsWith('0')) {
-        safeUser.avatar = `${match[1]}_0${num}`;
-      }
-    }
+  if (safeUser.avatar) {
+    safeUser.avatar = normalizeAvatar(safeUser.avatar);
   }
   return safeUser;
 }
@@ -2041,36 +2097,7 @@ app.get('/api/discover', requireAuth, async (req, res) => {
           hobbies: profileHobbies,
           matching_hobbies: matchingHobbies,
           match_count: matchCount,
-          avatar: {
-            idle: avatarStr ? (() => {
-              const match = avatarStr.match(/^(male|female)_(\d+)$/);
-              if (match) {
-                const num = parseInt(match[2], 10);
-                if (num < 10 && !match[2].startsWith('0')) {
-                  return `/avatars/${match[1]}/${match[1]}_0${num}/idle.webp`;
-                }
-                return `/avatars/${match[1]}/${avatarStr}/idle.webp`;
-              }
-              if (genderStr === 'male' || genderStr === 'female') {
-                return `/avatars/${genderStr}/${avatarStr}/idle.webp`;
-              }
-              return null;
-            })() : null,
-            wave: avatarStr ? (() => {
-              const match = avatarStr.match(/^(male|female)_(\d+)$/);
-              if (match) {
-                const num = parseInt(match[2], 10);
-                if (num < 10 && !match[2].startsWith('0')) {
-                  return `/avatars/${match[1]}/${match[1]}_0${num}/wave.webp`;
-                }
-                return `/avatars/${match[1]}/${avatarStr}/wave.webp`;
-              }
-              if (genderStr === 'male' || genderStr === 'female') {
-                return `/avatars/${genderStr}/${avatarStr}/wave.webp`;
-              }
-              return null;
-            })() : null
-          },
+          avatar: getAvatarPaths(avatarStr, genderStr),
           gender: genderStr
         };
       });
@@ -2433,7 +2460,7 @@ app.get('/api/connections/:id/stream', requireSSEAuth, async (req, res) => {
 
   // Enforce per-user/per-IP connection caps before any DB work.
   const userKey = `u:${userId}`;
-  const ipKey = `ip:${ipKeyGenerator(req.ip || req.socket?.remoteAddress || 'unknown')}`;
+  const ipKey = `ip:${generateIpKey(req)}`;
   if (!trackSSEConnection(userKey, MAX_SSE_PER_USER)) {
     return res.status(429).json({ error: 'Too many open connections. Please close other chat tabs.' });
   }
@@ -2543,7 +2570,7 @@ app.get('/api/user/stream', requireSSEAuth, (req, res) => {
 
   // Enforce per-user/per-IP connection caps before opening the stream.
   const userKey = `u:${userId}`;
-  const ipKey = `ip:${ipKeyGenerator(req.ip || req.socket?.remoteAddress || 'unknown')}`;
+  const ipKey = `ip:${generateIpKey(req)}`;
   if (!trackSSEConnection(userKey, MAX_SSE_PER_USER)) {
     return res.status(429).json({ error: 'Too many open connections. Please close other tabs.' });
   }

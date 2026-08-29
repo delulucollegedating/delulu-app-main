@@ -1,0 +1,46 @@
+# =============================================================================
+# .claudeignore — Dating App Subfolder Exclusions
+# =============================================================================
+
+# Binary and App Package files
+*.apk
+*.idsig
+*.ipa
+*.aab
+*.aar
+*.jar
+*.jks
+*.keystore
+
+# Builds & Outputs
+builds/
+android/build/
+android/app/build/
+android/.gradle/
+android/.idea/
+android/app/src/main/assets/public/
+ios/App/build/
+ios/App/DerivedData/
+
+# Dependencies & Lockfiles
+node_modules/
+package-lock.json
+
+# Minified third-party JS/CSS libraries
+public/js/dexie.min.js
+
+# Media & Uploads
+public/uploads/
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.mp3
+*.wav
+*.mp4
+
+# OS and Scratch Files
+.DS_Store
+Thumbs.db
+.git/
+data/
