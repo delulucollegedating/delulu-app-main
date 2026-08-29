@@ -48,22 +48,21 @@ public class MainActivity extends BridgeActivity {
             }
         } catch (Exception e) {}
 
-        // Create MAX priority notification channel for Delulu messages (Android 8+)
+        // Create HIGH priority notification channel for Delulu messages (Android 8+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             try {
                 NotificationChannel channel = new NotificationChannel(
                     "delulu_messages",
                     "Delulu Chat Messages",
-                    NotificationManager.IMPORTANCE_MAX  // Changed from HIGH to MAX for instant delivery
+                    NotificationManager.IMPORTANCE_HIGH  // HIGH priority - respects user DND settings
                 );
                 channel.setDescription("Notifications for incoming chat messages and connections");
                 channel.enableVibration(true);
                 channel.setShowBadge(true);
                 channel.enableLights(true);
                 channel.setLockscreenVisibility(android.app.Notification.VISIBILITY_PUBLIC);
-                // CRITICAL: Bypass Do Not Disturb for chat messages
-                channel.setBypassDnd(true);
-                // Allow sound even in priority-only mode
+                // REMOVED: setBypassDnd(true) - violates Play Store policy
+                // Users can manually set notification exceptions in Android Settings if desired
                 channel.setSound(android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION), null);
 
                 NotificationManager manager = getSystemService(NotificationManager.class);
@@ -75,15 +74,25 @@ public class MainActivity extends BridgeActivity {
             }
         }
 
-        // Request battery optimization exemption for instant notifications
-        requestBatteryOptimizationExemption();
+        // DO NOT request battery optimization on first launch - too aggressive
+        // Users should enable this manually in settings if notifications are delayed
+        // See: https://dontkillmyapp.com/ for manufacturer-specific issues
+        // requestBatteryOptimizationExemption();
     }
 
     /**
-     * Request to disable battery optimization (Doze mode) for this app.
-     * This ensures FCM notifications arrive instantly even when the device is idle.
-     * The user will see a system dialog asking to allow unrestricted battery usage.
+     * DEPRECATED: Battery optimization exemption request removed from startup.
+     *
+     * Play Store policy discourages requesting this at startup unless absolutely
+     * necessary for core functionality. For a dating app, delayed notifications
+     * are acceptable - users can enable manually if needed.
+     *
+     * Alternative approach: Show in-app guidance when users report delayed notifications.
+     *
+     * @deprecated Removed to comply with Play Store policies - only messaging apps
+     *             with real-time requirements should request this exemption.
      */
+    @Deprecated
     private void requestBatteryOptimizationExemption() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             try {

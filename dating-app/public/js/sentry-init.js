@@ -2,15 +2,20 @@
  * Sentry — Client-side error tracking
  *
  * Loads the Sentry browser SDK from CDN and initializes it.
- * DSN placeholder: replace __YOUR_SENTRY_DSN__ with your real DSN from sentry.io
+ *
+ * CRITICAL: Set SENTRY_DSN environment variable or replace placeholder below
+ * To get DSN: https://sentry.io/settings/[your-org]/projects/[your-project]/keys/
  *
  * Silent no-op when:
  *   - Running on localhost (dev)
  *   - CDN fails to load
- *   - DSN not configured
+ *   - DSN not configured (prevents production errors)
  */
 (function () {
-  var SENTRY_DSN = '__YOUR_SENTRY_DSN__';
+  // CRITICAL: Replace with your actual Sentry DSN from sentry.io
+  // Format: https://[key]@[org].ingest.sentry.io/[project-id]
+  // Leave as null to disable crash reporting (not recommended for production)
+  var SENTRY_DSN = null; // Set to your real DSN: 'https://xxxxx@xxxxx.ingest.sentry.io/xxxxx'
 
   // Skip in development — only track production errors
   if (
@@ -20,8 +25,9 @@
     return;
   }
 
-  // Skip if DSN not configured
+  // Skip if DSN not configured - silent no-op instead of breaking
   if (!SENTRY_DSN || SENTRY_DSN.indexOf('__YOUR_SENTRY_DSN__') !== -1) {
+    console.warn('[Sentry] Crash reporting not configured - set SENTRY_DSN to enable');
     return;
   }
 

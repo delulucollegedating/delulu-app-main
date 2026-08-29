@@ -70,11 +70,12 @@ async function checkRedis() {
 function checkCircuitBreakers(breakers) {
   const states = {};
   for (const [name, breaker] of Object.entries(breakers)) {
-    const state = breaker.getState();
+    const status = breaker.getStatus(); // Fixed: getStatus() not getState()
     states[name] = {
-      state: state.state, // 'closed', 'open', 'half-open'
-      failures: state.failures,
-      lastFailure: state.lastFailureTime
+      state: status.state, // 'CLOSED', 'OPEN', 'HALF_OPEN'
+      failures: status.consecutiveFailures,
+      activeCount: status.activeCount,
+      lastStateChange: status.lastStateChange
     };
   }
   return states;

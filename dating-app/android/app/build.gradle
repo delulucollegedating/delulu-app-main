@@ -4,8 +4,12 @@ android {
     namespace = "com.delulu.college.app"
     compileSdk = rootProject.ext.compileSdkVersion
 
-    // Release signing: uses keystore + env vars when available,
-    // silently falls back to debug key for local dev builds.
+    // Release signing: uses keystore + env vars when available.
+    // CRITICAL: Release builds MUST be signed with release keystore for Play Store.
+    // Set environment variables before building:
+    // export RELEASE_STORE_PASSWORD="your_keystore_password"
+    // export RELEASE_KEY_ALIAS="delulu"
+    // export RELEASE_KEY_PASSWORD="your_key_password"
     def releaseKeystoreFile = rootProject.file('keystore/delulu-release.keystore')
     def hasReleaseKeystore = releaseKeystoreFile.exists()
         && System.getenv('RELEASE_STORE_PASSWORD')
@@ -16,7 +20,7 @@ android {
             storeFile releaseKeystoreFile
             storePassword System.getenv('RELEASE_STORE_PASSWORD') ?: ''
             keyAlias System.getenv('RELEASE_KEY_ALIAS') ?: 'delulu'
-            keyPassword System.getenv('RELEASE_KEY_PASSWORD') ?: ''
+            keyPassword System.getenv('RELEASE_KEY_PASSWORD') ?: System.getenv('RELEASE_STORE_PASSWORD') ?: ''
         }
     }
 
@@ -38,6 +42,7 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // Release builds use release keystore if env vars are present, otherwise debug for local dev builds
             signingConfig hasReleaseKeystore ? signingConfigs.release : signingConfigs.debug
         }
     }

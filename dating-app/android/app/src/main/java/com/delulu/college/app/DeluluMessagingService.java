@@ -181,7 +181,7 @@ public class DeluluMessagingService extends FirebaseMessagingService {
     }
 
     /**
-     * Ensure the notification channel exists with MAX importance.
+     * Ensure the notification channel exists with HIGH importance.
      * Called on every notification so it's always ready — no-op if already created.
      */
     private void ensureChannel(NotificationManager manager) {
@@ -191,7 +191,7 @@ public class DeluluMessagingService extends FirebaseMessagingService {
                 channel = new NotificationChannel(
                         CHANNEL_ID,
                         "Delulu Messages",
-                        NotificationManager.IMPORTANCE_MAX
+                        NotificationManager.IMPORTANCE_HIGH  // HIGH priority - respects user DND
                 );
                 channel.setDescription("Chat message and connection notifications");
                 channel.enableVibration(true);
@@ -200,7 +200,7 @@ public class DeluluMessagingService extends FirebaseMessagingService {
                 channel.setLightColor(Color.parseColor("#85431E"));
                 channel.setShowBadge(true);
                 channel.setLockscreenVisibility(android.app.Notification.VISIBILITY_PUBLIC);
-                channel.setBypassDnd(true);
+                // REMOVED: setBypassDnd(true) - violates Play Store policy
                 channel.setSound(
                         RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
                         new android.media.AudioAttributes.Builder()
