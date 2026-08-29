@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8" ?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <!-- Network -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -63,5 +64,20 @@
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="delulu_messages"
         />
+
+        <!-- Replace Capacitor's default MessagingService with our own.
+             Capacitor's version silently drops notifications when the app is killed
+             because the plugin bridge isn't loaded yet. Ours always shows a system
+             notification AND forwards to Capacitor when the bridge is alive. -->
+        <service
+            android:name="com.capacitorjs.plugins.pushnotifications.MessagingService"
+            tools:node="remove" />
+        <service
+            android:name=".DeluluMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

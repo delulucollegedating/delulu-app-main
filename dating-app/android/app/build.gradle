@@ -59,6 +59,9 @@ dependencies {
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
+
+    // Firebase Messaging — required for DeluluMessagingService (FirebaseMessagingService, RemoteMessage)
+    implementation 'com.google.firebase:firebase-messaging:24.1.1'
 }
 
 apply from: 'capacitor.build.gradle'
