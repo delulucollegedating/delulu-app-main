@@ -39,15 +39,38 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (currentUser.avatar === av) {
         wrapper.classList.add('border-primary', 'border-2', 'ring-2', 'ring-primary/20', 'scale-105');
       }
+
       // av is like 'female_02' — resolve to subdirectory webp path
       const avParts = av.match(/^(male|female)_(\d+)$/);
       const avSrc = avParts
-        ? `/avatars/${avParts[1]}/${av}/idle.webp`
-        : `/avatars/${av}.webp`;
-      wrapper.innerHTML = `<img src="${avSrc}" loading="lazy" decoding="async" class="w-full h-full object-cover" onerror="if(this.src.endsWith('.webp')){this.src=this.src.replace(/\\.webp$/,'.png');}">`;
+        ? `avatars/${avParts[1]}/${av}/idle.webp`
+        : `avatars/${av}.webp`;
+
+      const img = document.createElement('img');
+      img.src = avSrc;
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      img.className = 'w-full h-full object-cover';
+      img.alt = av;
+
+      // Fallback to PNG if WebP fails
+      img.onerror = function() {
+        if (this.src.endsWith('.webp')) {
+          this.src = this.src.replace(/\.webp$/, '.png');
+        } else {
+          // If PNG also fails, show a placeholder
+          this.style.display = 'none';
+          const placeholder = document.createElement('div');
+          placeholder.className = 'w-full h-full flex items-center justify-center bg-primary/10 text-primary text-xs font-bold';
+          placeholder.textContent = av.split('_')[0].charAt(0).toUpperCase();
+          wrapper.appendChild(placeholder);
+        }
+      };
+
+      wrapper.appendChild(img);
       wrapper.onclick = () => {
-        avatarGrid.querySelectorAll('.aspect-square').forEach(el => el.classList.remove('border-primary', 'border-2', 'ring-2', 'ring-primary/20'));
-        wrapper.classList.add('border-primary', 'border-2', 'ring-2', 'ring-primary/20');
+        avatarGrid.querySelectorAll('.aspect-square').forEach(el => el.classList.remove('border-primary', 'border-2', 'ring-2', 'ring-primary/20', 'scale-105'));
+        wrapper.classList.add('border-primary', 'border-2', 'ring-2', 'ring-primary/20', 'scale-105');
         avatarInput.value = av;
         update3DPreview(av, gender);
       };
