@@ -1,4 +1,4 @@
-# AGENTS.md — Delulu College Social Discovery & Dating Platform
+# AGENTS.md — Delulu College Social Discovery Platform
 
 > **Purpose**: This file gives any AI agent (Antigravity, Claude, Cursor, Copilot, ChatGPT) or human developer a 100% complete mental model of the Delulu project — its architecture, APK build workflows, data flows, database schemas, real-time mechanisms, security rules, and developer invariants — so **no source files need to be re-read before making changes**.
 
@@ -6,7 +6,7 @@
 
 ## 1. Project Overview & Core Philosophy
 
-**Delulu** is a college-exclusive **social discovery and slow-connection platform** built for university students. Unlike generic swipe-dating apps, Delulu prioritizes campus community trust, safety, gradual identity reveals, and interactive icebreakers.
+**Delulu** is a college-exclusive **social discovery and slow-connection platform** built for university students. Unlike generic swipe apps, Delulu prioritizes campus community trust, safety, gradual identity reveals, and interactive icebreakers.
 
 ### Core Product Pillars:
 1. **Ecosystem Silos**: Students only discover and interact with peers from their own verified college email domain (`@rishihood.edu.in`, `@vitbhopal.ac.in`, etc.).

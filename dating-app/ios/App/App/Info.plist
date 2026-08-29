@@ -79,7 +79,7 @@
 	<key>UIMainStoryboardFile</key>
 	<string>Main</string>
 
-	<!-- Portrait-only (standard for dating apps) -->
+	<!-- Portrait-only (standard for mobile social apps) -->
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>armv7</string>

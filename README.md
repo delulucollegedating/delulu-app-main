@@ -1,4 +1,4 @@
-# Delulu — College Social Discovery & Dating Platform
+# Delulu — College Social Discovery Platform
 
 <div align="center">
 
@@ -141,5 +141,5 @@ cp app/build/outputs/apk/release/app-release.apk ../../delulu.apk
 ---
 
 ## 📄 License & Distribution
-Private & Proprietary — Delulu College Dating & Social Discovery Platform.
+Private & Proprietary — Delulu College Social Discovery Platform.
 All rights reserved.
