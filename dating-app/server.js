@@ -140,6 +140,13 @@ const CircuitBreaker = require('./utils/circuitBreaker');
 const EmailQueue = require('./utils/emailQueue');
 const { hasForbiddenText, FORBIDDEN_MESSAGE_ERROR } = require('./utils/profanity');
 const { validateEnvironment } = require('./utils/envValidator');
+const { performHealthCheck, livenessProbe, readinessProbe } = require('./utils/healthCheck');
+const { correlationMiddleware, createLogger } = require('./utils/logger');
+
+// Create application-level logger
+const logger = createLogger({ component: 'server' });
+
+const { setupGracefulShutdown } = require('./utils/gracefulShutdown');
 
 // Circuit breakers for external service isolation
 const brevoBreaker = new CircuitBreaker('BrevoEmailAPI', {
@@ -197,6 +204,10 @@ validateEnvironment([
 ]);
 
 const app = express();
+
+// Add correlation ID middleware early (before pino logging)
+app.use(correlationMiddleware);
+
 app.use(pinoHttp);
 
 const server = http.createServer(app);
@@ -933,6 +944,50 @@ app.use(express.urlencoded({ extended: true, limit: '32kb' }));
 // Health check — no auth, no rate limit, used by load balancers and monitoring
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
+});
+
+// Detailed health check with dependency validation (for monitoring systems)
+app.get('/health/detailed', async (req, res) => {
+  try {
+    const health = await performHealthCheck({
+      firebaseInitialized,
+      breakers: { brevoBreaker, pushBreaker }
+    });
+
+    // Return 503 if unhealthy so load balancers can detect issues
+    const statusCode = health.status === 'unhealthy' ? 503 : 200;
+    res.status(statusCode).json(health);
+  } catch (error) {
+    res.status(503).json({
+      status: 'unhealthy',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Liveness probe for Kubernetes/Railway (is the process alive?)
+app.get('/health/live', (req, res) => {
+  res.json(livenessProbe());
+});
+
+// Readiness probe for Kubernetes/Railway (can it handle traffic?)
+app.get('/health/ready', async (req, res) => {
+  try {
+    const readiness = await readinessProbe({
+      firebaseInitialized,
+      breakers: { brevoBreaker, pushBreaker }
+    });
+
+    const statusCode = readiness.ready ? 200 : 503;
+    res.status(statusCode).json(readiness);
+  } catch (error) {
+    res.status(503).json({
+      ready: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
 });
 
 // Apply general API rate limiter to all /api/ routes
@@ -3472,6 +3527,166 @@ app.delete('/api/messages/:id', requireAuth, async (req, res) => {
   res.json(result);
 });
 
+// ===== GDPR & DATA PRIVACY =====
+
+const { exportUserData, deleteUserData } = require('./utils/gdprCompliance');
+
+// Export user data (GDPR Article 20 - Right to Data Portability)
+app.get('/api/gdpr/export', requireAuth, actionLimiter, async (req, res) => {
+  try {
+    const result = await exportUserData(req.session.userId);
+
+    if (!result.success) {
+      return res.status(500).json({ error: result.error });
+    }
+
+    // Set appropriate headers for download
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="delulu-data-export-${req.session.userId}-${Date.now()}.json"`);
+    res.json(result.data);
+  } catch (error) {
+    req.logger?.error('GDPR export failed', { error: error.message, userId: req.session.userId });
+    res.status(500).json({ error: 'Failed to export user data' });
+  }
+});
+
+// Request account deletion (GDPR Article 17 - Right to Erasure)
+app.post('/api/gdpr/delete-account', requireAuth, actionLimiter, async (req, res) => {
+  const { confirmPassword } = req.body;
+
+  if (!confirmPassword) {
+    return res.status(400).json({ error: 'Password confirmation required' });
+  }
+
+  try {
+    // Verify password before deletion
+    const user = await userOps.getUserById(req.session.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const isValid = await bcrypt.compare(confirmPassword, user.passcode_hash);
+    if (!isValid) {
+      return res.status(403).json({ error: 'Invalid password' });
+    }
+
+    // Perform deletion
+    const result = await deleteUserData(req.session.userId, {
+      keepAuditLogs: true,
+      keepReports: true
+    });
+
+    if (!result.success) {
+      return res.status(500).json({ error: result.error, partialResults: result.partialResults });
+    }
+
+    // Destroy session
+    req.session.destroy();
+
+    res.json({
+      success: true,
+      message: 'Your account and data have been deleted',
+      deletionResults: result.deletionResults
+    });
+  } catch (error) {
+    req.logger?.error('Account deletion failed', { error: error.message, userId: req.session.userId });
+    res.status(500).json({ error: 'Failed to delete account' });
+  }
+});
+
+// ===== ADMIN & MODERATION =====
+
+const { queryAuditLogs } = require('./utils/auditLog');
+const { getAllFeatureFlags, setFeatureFlag } = require('./utils/featureFlags');
+
+// Admin authentication middleware (placeholder - implement proper admin auth)
+function requireAdmin(req, res, next) {
+  // TODO: Implement proper admin role checking
+  // For now, check for admin secret in header
+  const adminSecret = req.headers['x-admin-secret'];
+  if (adminSecret !== process.env.ADMIN_SECRET) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  next();
+}
+
+// Get feature flags (admin only)
+app.get('/api/admin/feature-flags', requireAdmin, (req, res) => {
+  res.json({
+    flags: getAllFeatureFlags()
+  });
+});
+
+// Update feature flag (admin only)
+app.post('/api/admin/feature-flags/:flag', requireAdmin, async (req, res) => {
+  const { flag } = req.params;
+  const { value } = req.body;
+
+  try {
+    setFeatureFlag(flag, value);
+
+    await logAuditEvent({
+      type: 'admin.feature_flag_changed',
+      userId: 0, // System/admin action
+      metadata: {
+        flag,
+        newValue: value,
+        adminSecret: req.headers['x-admin-secret']?.substring(0, 8) + '...'
+      },
+      ipAddress: req.ip,
+      correlationId: req.correlationId
+    });
+
+    res.json({ success: true, flag, value });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update feature flag' });
+  }
+});
+
+// Get audit logs for a user (admin only)
+app.get('/api/admin/audit-logs/:userId', requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+  const { limit, startDate, endDate, eventType } = req.query;
+
+  try {
+    const logs = await queryAuditLogs(parseInt(userId), {
+      limit: limit ? parseInt(limit) : 50,
+      startDate: startDate ? new Date(startDate) : null,
+      endDate: endDate ? new Date(endDate) : null,
+      eventType
+    });
+
+    res.json({ logs });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch audit logs' });
+  }
+});
+
+// Admin dashboard stats
+app.get('/api/admin/stats', requireAdmin, async (req, res) => {
+  try {
+    const db = getDB();
+
+    // Get basic stats
+    const usersSnapshot = await db.collection('users').count().get();
+    const connectionsSnapshot = await db.collection('connections').count().get();
+    const reportsSnapshot = await db.collection('reported_users').count().get();
+
+    res.json({
+      stats: {
+        totalUsers: usersSnapshot.data().count,
+        totalConnections: connectionsSnapshot.data().count,
+        totalReports: reportsSnapshot.data().count,
+        activeSSEConnections: require('./utils/gracefulShutdown').getActiveConnectionCount(),
+        uptime: process.uptime(),
+        memory: process.memoryUsage()
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch stats' });
+  }
+});
+
 // ===== PAGE ROUTES =====
 
 // Serve static HTML files for MPA
@@ -3617,14 +3832,10 @@ if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
   });
 }
 
-// Graceful shutdown: on SIGTERM (platform deploys), stop accepting new
-// connections and let in-flight requests/SSE streams finish briefly instead of
-// dropping every open stream mid-write.
-process.on('SIGTERM', () => {
-  pino.info('SIGTERM received — shutting down gracefully');
-  server.close(() => process.exit(0));
-  // Hard-exit if connections refuse to drain (EventSource streams can linger).
-  setTimeout(() => process.exit(0), 10000).unref();
+// Setup graceful shutdown handlers with SSE connection cleanup
+setupGracefulShutdown(server, {
+  timeout: 30000,    // 30 seconds total shutdown timeout
+  sseTimeout: 5000   // 5 seconds for SSE cleanup
 });
 
 module.exports = {
