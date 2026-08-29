@@ -93,6 +93,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadMessagesList();
   initUserStream();
 
+  // Check notification permissions and show banner if needed
+  if (typeof checkAndShowNotificationBanner === 'function') {
+    checkAndShowNotificationBanner();
+  }
+
   // Refresh when the tab becomes visible and reconnect SSE if necessary.
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {

@@ -1048,12 +1048,41 @@ async function initPushNotifications() {
 
       // Request runtime notification permissions (Android 13+ / iOS)
       if (typeof PushNotifications.requestPermissions === 'function') {
-        let perm = await PushNotifications.requestPermissions().catch(() => ({ receive: 'prompt' }));
+        // Check current permission status first
+        let currentPerm = { receive: 'prompt' };
+        if (typeof PushNotifications.checkPermissions === 'function') {
+          try {
+            currentPerm = await PushNotifications.checkPermissions();
+            dbg('[Push] Current permission status:', currentPerm);
+          } catch (e) {
+            dbg('[Push] Could not check permissions:', e.message);
+          }
+        }
+
+        // Only request if not already granted
+        if (currentPerm.receive !== 'granted' && currentPerm.display !== 'granted') {
+          dbg('[Push] Requesting notification permissions...');
+          let perm = await PushNotifications.requestPermissions().catch((err) => {
+            console.warn('[Push] Permission request failed:', err.message);
+            return { receive: 'denied' };
+          });
+          dbg('[Push] Permission result:', perm);
+          currentPerm = perm;
+        }
+
+        // Request LocalNotifications permission separately (Android 13+)
         if (LocalNotifications && typeof LocalNotifications.requestPermissions === 'function') {
           await LocalNotifications.requestPermissions().catch(() => {});
         }
-        if (perm && (perm.receive === 'granted' || perm.display === 'granted')) {
-          await PushNotifications.register().catch(() => {});
+
+        // Register for FCM token if permission granted
+        if (currentPerm && (currentPerm.receive === 'granted' || currentPerm.display === 'granted')) {
+          dbg('[Push] Permissions granted, registering for FCM...');
+          await PushNotifications.register().catch((err) => {
+            console.warn('[Push] FCM registration failed:', err.message);
+          });
+        } else {
+          console.warn('[Push] Notification permissions denied or not granted. User will not receive push notifications.');
         }
       }
     } catch (e) {

@@ -26,6 +26,11 @@
     },
     "PushNotifications": {
       "presentationOptions": ["badge", "sound", "alert"]
+    },
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_delulu",
+      "iconColor": "#85431E",
+      "sound": "default"
     }
   }
 }

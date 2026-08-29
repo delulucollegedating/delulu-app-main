@@ -18,7 +18,12 @@ const DISCOVER_BACKTRACK_SIZE = 15;
 document.addEventListener('DOMContentLoaded', async () => {
   await requireAuth();
   await loadDiscovery();
-  
+
+  // Check notification permissions and show banner if needed
+  if (typeof checkAndShowNotificationBanner === 'function') {
+    checkAndShowNotificationBanner();
+  }
+
   // Scroll buttons for 3D scene
   document.getElementById('btn-scroll-left').onclick = () => navigateCards(-1);
   document.getElementById('btn-scroll-right').onclick = () => navigateCards(1);
