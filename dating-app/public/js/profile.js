@@ -77,9 +77,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       avatarGrid.appendChild(wrapper);
     });
 
-    document.getElementById('prof-avatar').innerHTML = getAvatarHtml(currentUser.username, currentUser.avatar, {
-      className: 'absolute w-[180%] max-w-none left-[-40%] top-[-25%]'
-    });
+    updateProfAvatarCircle(currentUser.avatar, currentUser.username);
     
     // Initial 3D avatar preview load
     if (currentUser.avatar) {
@@ -113,9 +111,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       window.localStorage.setItem('cached_user', JSON.stringify(currentUser));
     } catch (e) {}
 
-    document.getElementById('prof-avatar').innerHTML = getAvatarHtml(currentUser.username, currentUser.avatar, {
-      className: 'absolute w-[180%] max-w-none left-[-40%] top-[-25%]'
-    });
+    updateProfAvatarCircle(currentUser.avatar, currentUser.username);
     updateHeaderAvatar();
 
     msgEl.textContent = 'Profile updated successfully!';
@@ -132,9 +128,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         window.localStorage.setItem('cached_user', JSON.stringify(currentUser));
       } catch (e) {}
 
-      document.getElementById('prof-avatar').innerHTML = getAvatarHtml(currentUser.username, currentUser.avatar, {
-        className: 'absolute w-[180%] max-w-none left-[-40%] top-[-25%]'
-      });
+      updateProfAvatarCircle(currentUser.avatar, currentUser.username);
       updateHeaderAvatar();
 
       msgEl.textContent = `Failed to save profile: ${err.message}`;
@@ -143,6 +137,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   };
 });
+
+// Updates the circular avatar preview in the profile card header.
+// getAvatarHtml() wraps the <img> in an unstyled <span class="avatar-circle-wrapper">
+// which collapses to zero size inside the w-20 h-20 rounded-full container.
+// A direct <img> with object-cover is the correct pattern here.
+function updateProfAvatarCircle(avatar, username) {
+  const el = document.getElementById('prof-avatar');
+  if (!el) return;
+  const src = resolveAvatarPath(avatar, 'idle');
+  if (src) {
+    const safeAlt = (username || '').replace(/"/g, '');
+    el.innerHTML = `<img src="${src}" alt="${safeAlt}" class="w-full h-full object-cover" onerror="if(this.src.endsWith('.webp')){this.src=this.src.replace(/\\.webp$/,'.png');}else if(this.src.endsWith('.png')){this.style.display='none';}">`;
+  } else {
+    const initial = username ? username.charAt(0).toUpperCase() : '?';
+    el.innerHTML = `<div class="w-full h-full bg-gradient-to-br from-primary-container to-secondary-container text-white flex items-center justify-center font-bold text-3xl">${initial}</div>`;
+  }
+}
 
 // Three.js 3D Preview Engine
 function init3DPreview() {
