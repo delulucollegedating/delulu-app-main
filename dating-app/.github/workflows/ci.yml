@@ -7,8 +7,27 @@ on:
     branches: [main]
 
 jobs:
+  security-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Run npm audit
+        run: npm audit --audit-level=moderate
+
+      - name: Check for known vulnerabilities
+        run: npx audit-ci --moderate
+
   test:
     runs-on: ubuntu-latest
+    needs: security-audit
     strategy:
       matrix:
         node-version: [20, 22]

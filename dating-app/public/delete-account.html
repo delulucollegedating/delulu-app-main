@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Delete Account - Delulu</title>
+  <link rel="stylesheet" href="/css/tailwind.css"/>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      line-height: 1.6;
+      color: #38190B;
+      background: #FAF6F0;
+      padding: 20px;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      background: white;
+      padding: 40px;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #85431E;
+      font-size: 28px;
+      font-weight: 700;
+      margin-bottom: 24px;
+    }
+    h2 {
+      color: #85431E;
+      font-size: 20px;
+      font-weight: 600;
+      margin-top: 24px;
+      margin-bottom: 12px;
+    }
+    p {
+      margin-bottom: 16px;
+    }
+    ul {
+      margin-left: 24px;
+      margin-bottom: 16px;
+    }
+    li {
+      margin-bottom: 8px;
+    }
+    .warning-box {
+      background: #FEF3C7;
+      border: 2px solid #F59E0B;
+      border-radius: 8px;
+      padding: 16px;
+      margin: 24px 0;
+    }
+    .warning-box strong {
+      color: #B45309;
+    }
+    .btn {
+      display: inline-block;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.2s;
+      border: none;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    .btn-danger {
+      background: #DC2626;
+      color: white;
+    }
+    .btn-danger:hover {
+      background: #B91C1C;
+    }
+    .btn-secondary {
+      background: #E5E7EB;
+      color: #374151;
+    }
+    .btn-secondary:hover {
+      background: #D1D5DB;
+    }
+    .btn-container {
+      display: flex;
+      gap: 12px;
+      margin-top: 32px;
+    }
+    #deleteStatus {
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: 8px;
+      display: none;
+    }
+    #deleteStatus.error {
+      background: #FEE2E2;
+      color: #991B1B;
+    }
+    #deleteStatus.success {
+      background: #D1FAE5;
+      color: #065F46;
+    }
+    .back-link {
+      color: #85431E;
+      text-decoration: none;
+      display: inline-block;
+      margin-bottom: 24px;
+    }
+    .back-link:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <a href="/support.html" class="back-link">← Back to Support</a>
+
+    <h1>Delete Your Account</h1>
+
+    <p>We're sorry to see you go. Deleting your account is permanent and cannot be undone.</p>
+
+    <div class="warning-box">
+      <strong>⚠️ Warning: This action is permanent</strong>
+      <p style="margin-top: 8px; margin-bottom: 0;">Once you delete your account, all your data will be permanently removed from our servers.</p>
+    </div>
+
+    <h2>What will be deleted:</h2>
+    <ul>
+      <li>Your profile and account information</li>
+      <li>All your messages and chat history</li>
+      <li>Your connections and matches</li>
+      <li>Your photos and uploaded content</li>
+      <li>Your preferences and settings</li>
+    </ul>
+
+    <h2>Before you delete:</h2>
+    <ul>
+      <li>Make sure you've saved any important conversations or information</li>
+      <li>Consider whether you might want to return to Delulu in the future</li>
+      <li>If you're having issues with the app, <a href="/support.html" style="color: #85431E;">contact support</a> first—we're here to help</li>
+    </ul>
+
+    <form id="deleteForm">
+      <label for="password" style="display: block; font-weight: 600; margin-bottom: 8px; color: #85431E;">Enter your password to confirm:</label>
+      <input
+        type="password"
+        id="password"
+        name="password"
+        required
+        style="width: 100%; padding: 10px; border: 2px solid #E5E7EB; border-radius: 8px; font-size: 16px; margin-bottom: 16px;"
+        placeholder="Your password"
+      />
+
+      <div class="btn-container">
+        <button type="submit" id="deleteBtn" class="btn btn-danger">Delete My Account</button>
+        <a href="/profile.html" class="btn btn-secondary">Cancel</a>
+      </div>
+    </form>
+
+    <div id="deleteStatus"></div>
+  </div>
+
+  <script type="module">
+    import { platform } from '/js/platform.js';
+
+    const deleteForm = document.getElementById('deleteForm');
+    const deleteBtn = document.getElementById('deleteBtn');
+    const deleteStatus = document.getElementById('deleteStatus');
+    const passwordInput = document.getElementById('password');
+
+    deleteForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const password = passwordInput.value;
+      if (!password) {
+        deleteStatus.className = 'error';
+        deleteStatus.textContent = 'Please enter your password to confirm deletion.';
+        deleteStatus.style.display = 'block';
+        return;
+      }
+
+      // Confirm deletion
+      const confirmed = confirm(
+        'Are you absolutely sure you want to delete your account?\n\n' +
+        'This action is permanent and cannot be undone.\n\n' +
+        'Click OK to permanently delete your account, or Cancel to go back.'
+      );
+
+      if (!confirmed) return;
+
+      // Second confirmation
+      const doubleConfirmed = confirm(
+        'Final confirmation: Delete your account permanently?\n\n' +
+        'All your data, messages, and connections will be lost forever.'
+      );
+
+      if (!doubleConfirmed) return;
+
+      deleteBtn.disabled = true;
+      deleteBtn.textContent = 'Deleting...';
+      deleteStatus.style.display = 'none';
+
+      try {
+        const token = await platform.getAuthToken();
+        const response = await fetch('/api/gdpr/delete-account', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ confirmPassword: password })
+        });
+
+        if (response.ok) {
+          deleteStatus.className = 'success';
+          deleteStatus.textContent = 'Account deleted successfully. Redirecting...';
+          deleteStatus.style.display = 'block';
+
+          // Clear local auth and redirect to goodbye page
+          await platform.clearAuthToken();
+          setTimeout(() => {
+            window.location.href = '/goodbye.html';
+          }, 2000);
+        } else {
+          const error = await response.json();
+          throw new Error(error.error || 'Failed to delete account');
+        }
+      } catch (error) {
+        console.error('Delete account error:', error);
+        deleteStatus.className = 'error';
+        deleteStatus.textContent = error.message || 'Failed to delete account. Please try again or contact support.';
+        deleteStatus.style.display = 'block';
+        deleteBtn.disabled = false;
+        deleteBtn.textContent = 'Delete My Account';
+      }
+    });
+  </script>
+</body>
+</html>

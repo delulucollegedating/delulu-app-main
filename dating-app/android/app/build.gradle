@@ -42,8 +42,22 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            // Release builds use release keystore if env vars are present, otherwise debug for local dev builds
-            signingConfig hasReleaseKeystore ? signingConfigs.release : signingConfigs.debug
+
+            // CRITICAL: Release builds MUST use release keystore, never debug
+            // This prevents accidental debug signing which breaks future updates
+            if (!hasReleaseKeystore) {
+                throw new GradleException(
+                    "❌ Release keystore not configured!\n\n" +
+                    "Set these environment variables before building:\n" +
+                    "  export RELEASE_STORE_PASSWORD='your_keystore_password'\n" +
+                    "  export RELEASE_KEY_ALIAS='delulu'\n" +
+                    "  export RELEASE_KEY_PASSWORD='your_key_password'\n\n" +
+                    "Keystore location: android/keystore/delulu-release.keystore\n" +
+                    "Generate with: keytool -genkey -v -keystore android/keystore/delulu-release.keystore " +
+                    "-alias delulu -keyalg RSA -keysize 2048 -validity 10000"
+                )
+            }
+            signingConfig signingConfigs.release
         }
     }
 }
