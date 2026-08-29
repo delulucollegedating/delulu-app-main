@@ -314,6 +314,10 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
         },
         android: {
           priority: 'high',
+          // Critical: Set TTL to 0 for instant delivery, bypassing FCM throttling
+          ttl: 0,
+          // Restrict delivery only to high-priority connections (bypass doze)
+          restrictedPackageName: null,
           notification: {
             title: notifTitle,
             body: notifBody,
@@ -323,9 +327,15 @@ async function dispatchNotification(receiverId, connectionId, payload = {}, sseP
             sound: 'default',
             defaultSound: true,
             defaultVibrateTimings: true,
-            priority: 'high',
+            priority: 'max',
             visibility: 'public',
-            tag: connectionId ? `conn_${connectionId}` : `notif_${Date.now()}`
+            // Critical: Use notificationPriority=PRIORITY_MAX for instant delivery
+            notificationPriority: 'PRIORITY_MAX',
+            tag: connectionId ? `conn_${connectionId}` : `notif_${Date.now()}`,
+            // Wake the screen for incoming messages
+            sticky: false,
+            // Bypass doze mode restrictions
+            bypassDoze: true
           }
         },
         apns: {

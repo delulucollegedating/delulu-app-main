@@ -12,8 +12,13 @@ node_modules/
 .idea/
 *.iml
 
-# Root-level scratch/notes
+# Root-level scratch/notes (allow core project documentation)
 *.md
+!README.md
+!AGENTS.md
+!APK_BUILD_GUIDE.md
+!ARCHITECTURE.md
+!CLAUDE.md
 
 # Load test files
 dating-app/load/

@@ -78,6 +78,8 @@ async function initUserStream() {
 
   userEventSource.onerror = () => {
     userEventSource = null;
+    // CRITICAL FIX: Reload messages list when SSE disconnects to catch any missed updates
+    loadMessagesList({ skipRecent: false });
     // Exponential backoff: 2s → 4s → 8s → 16s → 30s cap
     const delay = _sseBackoffMs;
     _sseBackoffMs = Math.min(_sseBackoffMs * 2, 30000);

@@ -1016,10 +1016,12 @@ async function initPushNotifications() {
           id: 'delulu_messages',
           name: 'Delulu Messages',
           description: 'Instant chat message and connection notifications',
-          importance: 5,
+          importance: 5,  // MAX importance (Android IMPORTANCE_MAX)
           vibration: true,
           sound: 'default',
-          visibility: 1
+          visibility: 1,
+          lights: true,
+          lightColor: '#A53B29'
         }).catch(() => {});
       }
 
@@ -1136,10 +1138,12 @@ async function showNativeNotification({ title, body, url, id }) {
           id: 'delulu_messages',
           name: 'Delulu Messages',
           description: 'Instant chat message and connection notifications',
-          importance: 5,
+          importance: 5,  // MAX importance (Android IMPORTANCE_MAX)
           vibration: true,
           sound: 'default',
-          visibility: 1
+          visibility: 1,
+          lights: true,
+          lightColor: '#A53B29'
         }).catch(() => {});
       }
       await LocalNotifications.schedule({

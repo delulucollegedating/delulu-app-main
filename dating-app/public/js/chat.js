@@ -399,7 +399,7 @@ async function initRealtimeStream() {
 
   eventSource.onerror = () => {
     dbgWarn('[SSE] EventSource disconnected. Falling back to HTTP polling.');
-    
+
     streamReady = false;
     stopPresenceHeartbeat();
     handlePresenceChange(false);
@@ -411,6 +411,12 @@ async function initRealtimeStream() {
     if (eventSource) {
       eventSource.close();
       eventSource = null;
+    }
+
+    // CRITICAL FIX: Immediately fetch any missed messages before starting polling
+    // This prevents message loss during SSE disconnection windows
+    if (currentConnId && typeof loadMessages === 'function') {
+      loadMessages(false, true).catch(() => {});
     }
 
     // Start HTTP polling fallback immediately — with aggressive 3s base interval
@@ -431,6 +437,10 @@ async function initRealtimeStream() {
         // Tab hidden — don't burn a connection; retry once it's visible again.
         window.__sseReconnectTimer = setTimeout(retrySse, 15000);
         return;
+      }
+      // CRITICAL: Sync messages again before reconnecting SSE
+      if (typeof loadMessages === 'function') {
+        loadMessages(false, true).catch(() => {});
       }
       initRealtimeStream();
     }, delay);
