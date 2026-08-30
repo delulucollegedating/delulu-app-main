@@ -3,7 +3,14 @@
  *
  * Loads the Sentry browser SDK from CDN and initializes it.
  *
- * CRITICAL: Set SENTRY_DSN environment variable or replace placeholder below
+ * Configuration priority (first found wins):
+ *   1. Server-injected window.__SENTRY_DSN__ (from environment variable)
+ *   2. Hardcoded SENTRY_DSN below
+ *
+ * To enable:
+ *   Option A: Set Railway environment variable SENTRY_DSN (recommended)
+ *   Option B: Replace SENTRY_DSN = null below with your actual DSN
+ *
  * To get DSN: https://sentry.io/settings/[your-org]/projects/[your-project]/keys/
  *
  * Silent no-op when:
@@ -12,10 +19,14 @@
  *   - DSN not configured (prevents production errors)
  */
 (function () {
-  // CRITICAL: Replace with your actual Sentry DSN from sentry.io
+  // Check for server-injected DSN first (from Railway environment variable)
+  var SENTRY_DSN = window.__SENTRY_DSN__ || null;
+
+  // Fallback: Hardcoded DSN (replace null with your actual DSN if not using env var)
   // Format: https://[key]@[org].ingest.sentry.io/[project-id]
-  // Leave as null to disable crash reporting (not recommended for production)
-  var SENTRY_DSN = null; // Set to your real DSN: 'https://xxxxx@xxxxx.ingest.sentry.io/xxxxx'
+  if (!SENTRY_DSN) {
+    SENTRY_DSN = null; // Replace with: 'https://xxxxx@xxxxx.ingest.sentry.io/xxxxx'
+  }
 
   // Skip in development — only track production errors
   if (

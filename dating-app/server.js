@@ -1056,6 +1056,38 @@ app.get(['/delulu.apk', '/api/download-apk'], apkLimiter, (req, res) => {
 // Protect user-uploaded files with authentication
 app.use('/uploads', requireAuth);
 
+// Inject Sentry DSN into HTML files from environment variable
+// This allows client-side crash monitoring to be configured via SENTRY_DSN env var
+// without hardcoding the DSN into source code (sentry-init.js checks window.__SENTRY_DSN__)
+app.use((req, res, next) => {
+  const sentryDsn = process.env.SENTRY_DSN;
+  if (!sentryDsn || !req.path.endsWith('.html')) {
+    return next();
+  }
+
+  const fs = require('fs');
+  const filePath = path.join(__dirname, 'public', req.path);
+
+  fs.readFile(filePath, 'utf8', (err, data) => {
+    if (err) {
+      return next(); // File doesn't exist, let static handler return 404
+    }
+
+    // Inject Sentry DSN as inline script before </head> or before first <script>
+    const sentryScript = `<script>window.__SENTRY_DSN__=${JSON.stringify(sentryDsn)};</script>`;
+    let injected = data.replace('</head>', `  ${sentryScript}\n</head>`);
+
+    // Fallback: if no </head> found, inject before first <script>
+    if (injected === data) {
+      injected = data.replace('<script', `${sentryScript}\n  <script`);
+    }
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.send(injected);
+  });
+});
+
 // Static asset names are not fingerprinted, so a one-year immutable cache would
 // keep users on stale client code after a deploy. Strategy:
 //   - HTML:    never cached (always re-fetch so code updates land instantly)
