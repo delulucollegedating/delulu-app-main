@@ -19,6 +19,7 @@ node_modules/
 !APK_BUILD_GUIDE.md
 !ARCHITECTURE.md
 !CLAUDE.md
+!PRODUCTION_RELEASE_PLAN.md
 
 # Load test files
 dating-app/load/
