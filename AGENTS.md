@@ -30,11 +30,11 @@
 ├── README.md                      # Project documentation & quickstart
 ├── APK_BUILD_GUIDE.md             # Complete Android APK & iOS build manual
 ├── ARCHITECTURE.md                # In-depth architectural & state-machine spec
-├── firebase.json                  # Root Firebase config pointing to dating-app rules/indexes
+├── firebase.json                  # Root Firebase config pointing to delulu-college rules/indexes
 ├── .firebaserc                    # Firebase project configuration (delulu-final)
 ├── delulu.apk                     # Root copy of production Android release APK (18MB)
 ├── delulu.apk.idsig               # APK signature index scheme file
-└── dating-app/                    # Full application repository
+└── delulu-college/                # Full application repository
     ├── package.json               # Node 22+ dependencies, Capacitor 8, Tailwind, Vitest
     ├── capacitor.config.json      # Capacitor native runtime configuration
     ├── server.js                  # Master Express 5 server (REST API, SSE, Auth, Sweeps)
@@ -166,7 +166,7 @@ Served via GET /delulu.apk & GET /api/download-apk
 
 #### Keystore Generation:
 ```bash
-cd dating-app
+cd delulu-college
 bash scripts/generate-release-keystore.sh [YourPassword]
 ```
 Creates `android/keystore/delulu-release.keystore` with alias `delulu`.
@@ -174,7 +174,7 @@ Creates `android/keystore/delulu-release.keystore` with alias `delulu`.
 #### Build Commands:
 ```bash
 # 1. Build CSS & sync assets
-cd dating-app
+cd delulu-college
 npm run build:css
 npx cap sync android
 

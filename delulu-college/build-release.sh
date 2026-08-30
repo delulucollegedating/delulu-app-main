@@ -10,7 +10,7 @@ echo ""
 
 # Check if we're in the right directory
 if [ ! -f "android/app/build.gradle" ]; then
-    echo "❌ Error: Must run from dating-app/ directory"
+    echo "❌ Error: Must run from delulu-college/ directory"
     exit 1
 fi
 

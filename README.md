@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Delulu Logo](dating-app/public/logo.png)
+![Delulu Logo](delulu-college/public/logo.png)
 
 **A play-first, safer social discovery and gradual-reveal connection app for university students.**
 
@@ -51,7 +51,7 @@ For agents and developers working on this codebase, refer to these comprehensive
 
 ### 2. Installation
 ```bash
-cd dating-app
+cd delulu-college
 npm install
 ```
 
@@ -70,14 +70,14 @@ Key environment variables:
 
 ### 4. Running the Dev Server
 ```bash
-cd dating-app
+cd delulu-college
 npm run dev
 # Server starts on http://localhost:3000
 ```
 
 ### 5. Running Test Suites
 ```bash
-cd dating-app
+cd delulu-college
 npm test
 ```
 

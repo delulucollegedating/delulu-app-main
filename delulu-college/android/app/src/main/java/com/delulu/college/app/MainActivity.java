@@ -84,7 +84,7 @@ public class MainActivity extends BridgeActivity {
      * DEPRECATED: Battery optimization exemption request removed from startup.
      *
      * Play Store policy discourages requesting this at startup unless absolutely
-     * necessary for core functionality. For a dating app, delayed notifications
+     * necessary for core functionality. For a college social discovery app, delayed notifications
      * are acceptable - users can enable manually if needed.
      *
      * Alternative approach: Show in-app guidance when users report delayed notifications.

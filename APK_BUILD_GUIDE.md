@@ -6,7 +6,7 @@
 
 ## 1. Mobile Architecture Overview
 
-Delulu uses **Capacitor 8** to package its mobile-first web frontend (`dating-app/public`) as high-performance native apps for Android and iOS.
+Delulu uses **Capacitor 8** to package its mobile-first web frontend (`delulu-college/public`) as high-performance native apps for Android and iOS.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -34,15 +34,15 @@ Delulu uses **Capacitor 8** to package its mobile-first web frontend (`dating-ap
 | File / Folder | Purpose |
 |---|---|
 | `delulu.apk` (Root) | Primary distribution copy of the production Android APK (~18MB) |
-| `dating-app/builds/delulu.apk` | Build output destination served by backend via `/delulu.apk` |
-| `dating-app/builds/delulu.ipa` | iOS build archive package |
-| `dating-app/capacitor.config.json` | Capacitor app configuration (ID, name, server, plugins) |
-| `dating-app/android/` | Android Studio project root |
-| `dating-app/android/app/build.gradle` | Gradle build config, release signing, Proguard rules |
-| `dating-app/android/app/src/main/AndroidManifest.xml` | App permissions, hardware acceleration, FCM setup |
-| `dating-app/android/app/src/main/java/.../MainActivity.java` | Native lifecycle, `FLAG_SECURE` screen privacy |
-| `dating-app/scripts/generate-release-keystore.sh` | Shell script to generate release signing keystore |
-| `dating-app/android/keystore/delulu-release.keystore` | Android release signing keystore |
+| `delulu-college/builds/delulu.apk` | Build output destination served by backend via `/delulu.apk` |
+| `delulu-college/builds/delulu.ipa` | iOS build archive package |
+| `delulu-college/capacitor.config.json` | Capacitor app configuration (ID, name, server, plugins) |
+| `delulu-college/android/` | Android Studio project root |
+| `delulu-college/android/app/build.gradle` | Gradle build config, release signing, Proguard rules |
+| `delulu-college/android/app/src/main/AndroidManifest.xml` | App permissions, hardware acceleration, FCM setup |
+| `delulu-college/android/app/src/main/java/.../MainActivity.java` | Native lifecycle, `FLAG_SECURE` screen privacy |
+| `delulu-college/scripts/generate-release-keystore.sh` | Shell script to generate release signing keystore |
+| `delulu-college/android/keystore/delulu-release.keystore` | Android release signing keystore |
 
 ---
 
@@ -149,7 +149,7 @@ if (webView != null) {
 
 ### Step 1: Prepare Web Assets & Tailwind CSS
 ```bash
-cd dating-app
+cd delulu-college
 
 # 1. Build and minify production CSS
 npm run build:css
@@ -211,7 +211,7 @@ Output location:
 
 ### Step 5: Copy APK to Distribution Paths
 ```bash
-# From dating-app/ directory:
+# From delulu-college/ directory:
 cp android/app/build/outputs/apk/release/app-release.apk builds/delulu.apk
 cp android/app/build/outputs/apk/release/app-release.apk ../delulu.apk
 ```
@@ -234,7 +234,7 @@ adb shell monkey -p com.delulu.college.app -c android.intent.category.LAUNCHER 1
 
 ### Run via Android Studio:
 ```bash
-cd dating-app
+cd delulu-college
 npx cap open android
 ```
 - Click **Run 'app'** (Green play button) in Android Studio to launch on connected device or emulator.

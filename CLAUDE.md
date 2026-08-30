@@ -7,7 +7,7 @@
 
 ## Key Commands
 ```bash
-cd dating-app
+cd delulu-college
 npm run dev                  # Start local dev server (port 3000)
 npm test                     # Run Vitest test suites
 npm run build:css            # Compile Tailwind CSS

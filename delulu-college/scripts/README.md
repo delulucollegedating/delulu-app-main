@@ -85,7 +85,7 @@ npm run generate:profanity
 ### Building Release APK
 ```bash
 # After keystore is generated and Railway env vars are set
-cd dating-app
+cd delulu-college
 npx cap sync android
 cd android
 ./gradlew assembleRelease
