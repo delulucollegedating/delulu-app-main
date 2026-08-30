@@ -15,6 +15,20 @@ android {
         && System.getenv('RELEASE_STORE_PASSWORD')
         && System.getenv('RELEASE_KEY_ALIAS')
 
+    // A release artifact is a distribution contract: Android will reject future
+    // updates if its signing certificate changes. Never silently fall back to a
+    // machine-local debug key for an assembleRelease/bundleRelease invocation.
+    def isReleaseTask = gradle.startParameter.taskNames.any { taskName ->
+        taskName.toLowerCase().contains('release')
+    }
+    if (isReleaseTask && !hasReleaseKeystore) {
+        throw new GradleException(
+            'Release signing is not configured. Set RELEASE_STORE_PASSWORD, ' +
+            'RELEASE_KEY_ALIAS, and RELEASE_KEY_PASSWORD, and provide ' +
+            'android/keystore/delulu-release.keystore. Use assembleDebug for local testing.'
+        )
+    }
+
     signingConfigs {
         release {
             storeFile releaseKeystoreFile
@@ -43,8 +57,7 @@ android {
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
 
-            // Release builds use release keystore if env vars are present, otherwise debug for local dev builds
-            signingConfig hasReleaseKeystore ? signingConfigs.release : signingConfigs.debug
+            signingConfig signingConfigs.release
         }
     }
 }

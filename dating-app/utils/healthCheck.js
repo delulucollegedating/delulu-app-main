@@ -4,7 +4,7 @@
  */
 
 const { getDB } = require('../database');
-const { supabase } = require('../db/supabase');
+const { getSupabase } = require('../db/supabase');
 const { redisClient } = require('../services/redisClient');
 
 /**
@@ -28,8 +28,9 @@ async function checkFirestore(firebaseInitialized) {
 /**
  * Check Supabase Postgres connectivity
  */
-async function checkSupabase() {
+async function checkSupabase(client = null) {
   try {
+    const supabase = client || getSupabase();
     const { data, error } = await supabase
       .from('messages')
       .select('id')
