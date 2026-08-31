@@ -564,12 +564,12 @@ const discoverFeedCache = new Map();
 const DISCOVER_FEED_CACHE_TTL = 10 * 60 * 1000;
 const DISCOVER_FEED_CACHE_MAX = 500;
 
-function getDiscoverFeedCacheKey(userId, genderFilter) {
-  return `${Number(userId)}:${genderFilter || 'all'}`;
+function getDiscoverFeedCacheKey(userId, genderFilter, ecosystem) {
+  return `${Number(userId)}:${ecosystem}:${genderFilter || 'all'}`;
 }
 
-function getCachedDiscoverFeed(userId, genderFilter) {
-  const key = getDiscoverFeedCacheKey(userId, genderFilter);
+function getCachedDiscoverFeed(userId, genderFilter, ecosystem) {
+  const key = getDiscoverFeedCacheKey(userId, genderFilter, ecosystem);
   const entry = discoverFeedCache.get(key);
   if (!entry) return null;
   if (Date.now() - entry.timestamp >= DISCOVER_FEED_CACHE_TTL) {
@@ -579,8 +579,8 @@ function getCachedDiscoverFeed(userId, genderFilter) {
   return entry;
 }
 
-function setCachedDiscoverFeed(userId, genderFilter, feed) {
-  const key = getDiscoverFeedCacheKey(userId, genderFilter);
+function setCachedDiscoverFeed(userId, genderFilter, ecosystem, feed) {
+  const key = getDiscoverFeedCacheKey(userId, genderFilter, ecosystem);
   discoverFeedCache.set(key, { ...feed, timestamp: Date.now() });
   if (discoverFeedCache.size > DISCOVER_FEED_CACHE_MAX) {
     const oldestKey = discoverFeedCache.keys().next().value;
@@ -1409,11 +1409,12 @@ app.post('/api/auth/verify-otp', otpVerifyLimiter, otpVerifyIpLimiter, async (re
   // Save in session
   let token = null;
 
+  // CRITICAL: Always regenerate session when verifying email (session fixation defense)
+  await new Promise((resolve) => req.session.regenerate(resolve));
+
   // Check if user already exists
   const user = await userOps.getByEmail(cleanEmail);
   if (user) {
-    // Rotate the session ID when granting access — session-fixation defense.
-    await new Promise((resolve) => req.session.regenerate(resolve));
     req.session.pendingEmail = cleanEmail;
     req.session.userId = user.id;
     req.session.user = sanitizeUser(user);
@@ -2144,10 +2145,12 @@ app.get('/api/discover', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Invalid discover continuation. Please refresh the feed.' });
     }
 
-    let feed = getCachedDiscoverFeed(req.session.userId, genderFilter);
+    // Fetch user first to get ecosystem for cache key
+    const user = await userOps.getById(req.session.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    let feed = getCachedDiscoverFeed(req.session.userId, genderFilter, user.ecosystem);
     if (!feed) {
-      const user = await userOps.getById(req.session.userId);
-      if (!user) return res.status(404).json({ error: 'User not found' });
 
       // This Firebase-backed work runs once per viewer/filter cache window,
       // rather than once for every continuation page.
@@ -2194,7 +2197,7 @@ app.get('/api/discover', requireAuth, async (req, res) => {
         return String(a.id || '').localeCompare(String(b.id || ''));
       });
       feed = { profiles: mappedProfiles };
-      setCachedDiscoverFeed(req.session.userId, genderFilter, feed);
+      setCachedDiscoverFeed(req.session.userId, genderFilter, user.ecosystem, feed);
     }
 
     const paginatedProfiles = feed.profiles.slice(start, start + limit);
@@ -3677,7 +3680,7 @@ app.post('/api/admin/feature-flags/:flag', requireAdmin, async (req, res) => {
       metadata: {
         flag,
         newValue: value,
-        adminSecret: req.headers['x-admin-secret']?.substring(0, 8) + '...'
+        adminAction: true // Generic marker, no secret logged
       },
       ipAddress: req.ip,
       correlationId: req.correlationId

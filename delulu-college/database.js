@@ -476,7 +476,10 @@ const userOps = {
   async getDiscoverable(userId, genderFilter = null, excludeIds = []) {
     const firestore = getDB();
     const userDoc = await this.getById(userId);
-    const userEcosystem = userDoc?.ecosystem || 'rishihood';
+    const userEcosystem = userDoc?.ecosystem;
+    if (!userEcosystem) {
+      throw new Error('User ecosystem not set - cannot load discovery feed');
+    }
     
     // CRITICAL: Fetch blocked users involving this user - NEVER suppress errors on safety queries
     // If the block query fails (missing index, firestore down), we must fail hard rather than
@@ -840,6 +843,16 @@ const connectionOps = {
       // Allow reconnection if the previous connection was ended/rejected/expired.
       // This ensures users can send a new request after a chat ends ("Not Vibing").
       if (doc.status === 'rejected' || doc.status === 'expired') {
+        // CRITICAL: Re-verify blocks before allowing reconnection
+        // (blocks may have been added since the original rejection)
+        const [stillBlocked1, stillBlocked2] = await Promise.all([
+          blockOps.isBlocked(fromId, toId),
+          blockOps.isBlocked(toId, fromId)
+        ]);
+        if (stillBlocked1 || stillBlocked2) {
+          return { error: 'You cannot connect with this student.' };
+        }
+
         const docRef = !snap1.empty ? snap1.docs[0].ref : snap2.docs[0].ref;
         const connId = doc.id;
         await updateConnection(connId, () => docRef.update({
@@ -1046,8 +1059,22 @@ const connectionOps = {
       }
 
       const now = new Date();
-      const faceRevealAvailable = new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000).toISOString();
-      const faceRevealExpires = new Date(now.getTime() + 11 * 24 * 60 * 60 * 1000).toISOString();
+      // Use UTC midnight boundaries to ensure consistent Day 10/11 across all timezones
+      const chatStartedDate = new Date(now);
+      const day10Start = new Date(Date.UTC(
+        chatStartedDate.getUTCFullYear(),
+        chatStartedDate.getUTCMonth(),
+        chatStartedDate.getUTCDate() + 10,
+        0, 0, 0, 0
+      ));
+      const day11End = new Date(Date.UTC(
+        chatStartedDate.getUTCFullYear(),
+        chatStartedDate.getUTCMonth(),
+        chatStartedDate.getUTCDate() + 11,
+        23, 59, 59, 999
+      ));
+      const faceRevealAvailable = day10Start.toISOString();
+      const faceRevealExpires = day11End.toISOString();
       transaction.update(connDocRef, {
         status: 'accepted',
         chat_started_at: now.toISOString(),
