@@ -46,15 +46,27 @@ public class DeluluMessagingService extends FirebaseMessagingService {
      */
     @Override
     public void onMessageReceived(@NonNull RemoteMessage remoteMessage) {
-        Log.d(TAG, "FCM message received. from=" + remoteMessage.getFrom()
-                + " hasNotification=" + (remoteMessage.getNotification() != null)
-                + " dataKeys=" + remoteMessage.getData().keySet());
+        Log.i(TAG, "═════════════════════════════════════════════════");
+        Log.i(TAG, "FCM MESSAGE RECEIVED");
+        Log.i(TAG, "From: " + remoteMessage.getFrom());
+        Log.i(TAG, "MessageId: " + remoteMessage.getMessageId());
+        Log.i(TAG, "Has Notification Payload: " + (remoteMessage.getNotification() != null));
+        Log.i(TAG, "Data Keys: " + remoteMessage.getData().keySet());
+        Log.i(TAG, "Data Values: " + remoteMessage.getData());
+
+        // Check if app is in foreground or background
+        android.app.ActivityManager.RunningAppProcessInfo processInfo = new android.app.ActivityManager.RunningAppProcessInfo();
+        android.app.ActivityManager.getMyMemoryState(processInfo);
+        boolean isInBackground = processInfo.importance != android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND;
+        Log.i(TAG, "App State: " + (isInBackground ? "BACKGROUND/KILLED" : "FOREGROUND"));
+        Log.i(TAG, "═════════════════════════════════════════════════");
 
         // ── 1. Always try to show a system notification (works when app is killed) ──
         try {
             showSystemNotification(remoteMessage);
+            Log.i(TAG, "✓ System notification shown successfully");
         } catch (Exception e) {
-            Log.e(TAG, "Failed to show system notification", e);
+            Log.e(TAG, "✗ FAILED to show system notification", e);
         }
 
         // ── 2. Forward to Capacitor's plugin so JS listeners still fire ──
@@ -76,12 +88,17 @@ public class DeluluMessagingService extends FirebaseMessagingService {
     @Override
     public void onNewToken(@NonNull String token) {
         super.onNewToken(token);
-        Log.d(TAG, "FCM token refreshed");
+        Log.i(TAG, "═════════════════════════════════════════════════");
+        Log.i(TAG, "FCM TOKEN REFRESHED");
+        Log.i(TAG, "New Token: " + token);
+        Log.i(TAG, "Token Length: " + token.length());
+        Log.i(TAG, "═════════════════════════════════════════════════");
 
         try {
             PushNotificationsPlugin.onNewToken(token);
+            Log.i(TAG, "✓ Token forwarded to Capacitor plugin");
         } catch (Exception e) {
-            Log.w(TAG, "Could not forward token to Capacitor plugin", e);
+            Log.w(TAG, "✗ Could not forward token to Capacitor plugin", e);
         }
     }
 
@@ -91,9 +108,15 @@ public class DeluluMessagingService extends FirebaseMessagingService {
      * or falls back to the notification payload.
      */
     private void showSystemNotification(RemoteMessage remoteMessage) {
+        Log.d(TAG, "showSystemNotification() called");
+
         NotificationManager manager =
                 (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        if (manager == null) return;
+        if (manager == null) {
+            Log.e(TAG, "✗ NotificationManager is null!");
+            return;
+        }
+        Log.d(TAG, "✓ NotificationManager obtained");
 
         // ── Ensure the notification channel exists (idempotent) ──
         ensureChannel(manager);
@@ -108,6 +131,8 @@ public class DeluluMessagingService extends FirebaseMessagingService {
         String type    = data.getOrDefault("type",   "notification");
         String connId  = data.getOrDefault("connectionId", "");
         String senderName = data.getOrDefault("senderName", "");
+
+        Log.d(TAG, "Notification content: title=" + title + ", body=" + body + ", type=" + type + ", connId=" + connId);
 
         // If body is blank, derive from type
         if (body == null || body.isEmpty()) {
@@ -176,11 +201,18 @@ public class DeluluMessagingService extends FirebaseMessagingService {
 
         if (tag != null) {
             manager.notify(tag, notifId, builder.build());
+            Log.i(TAG, "✓ Notification posted with tag=" + tag + ", id=" + notifId);
         } else {
             manager.notify(notifId, builder.build());
+            Log.i(TAG, "✓ Notification posted with id=" + notifId);
         }
 
-        Log.d(TAG, "System notification shown: title=" + title + " type=" + type);
+        Log.i(TAG, "════════════════════════════════════════════════");
+        Log.i(TAG, "SYSTEM NOTIFICATION COMPLETED");
+        Log.i(TAG, "Title: " + title);
+        Log.i(TAG, "Type: " + type);
+        Log.i(TAG, "NotificationId: " + notifId);
+        Log.i(TAG, "════════════════════════════════════════════════");
     }
 
     /**
@@ -191,6 +223,7 @@ public class DeluluMessagingService extends FirebaseMessagingService {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = manager.getNotificationChannel(CHANNEL_ID);
             if (channel == null) {
+                Log.i(TAG, "Creating notification channel: " + CHANNEL_ID);
                 channel = new NotificationChannel(
                         CHANNEL_ID,
                         "Delulu Messages",
@@ -216,6 +249,9 @@ public class DeluluMessagingService extends FirebaseMessagingService {
                                 .build()
                 );
                 manager.createNotificationChannel(channel);
+                Log.i(TAG, "✓ Notification channel created successfully");
+            } else {
+                Log.d(TAG, "✓ Notification channel already exists");
             }
         }
     }
