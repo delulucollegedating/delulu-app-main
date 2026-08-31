@@ -1,5 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <external-path name="my_images" path="." />
-    <cache-path name="my_cache_images" path="." />
+    <!-- SECURITY: Restrict FileProvider access to specific app directories only.
+         Using "." (root) grants access to entire external storage which violates
+         principle of least privilege. Limit to app-specific subdirectories. -->
+
+    <!-- App-specific pictures directory for profile photos and shared images -->
+    <external-path name="my_images" path="Android/data/com.delulu.college.app/files/Pictures" />
+
+    <!-- Cache directory for temporary image processing -->
+    <cache-path name="my_cache_images" path="images" />
+
+    <!-- App files directory for voice notes and other media -->
+    <files-path name="app_files" path="." />
 </paths>

@@ -2,23 +2,13 @@ package com.delulu.college.app;
 
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
-import android.content.Context;
-import android.content.Intent;
-import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.PowerManager;
-import android.provider.Settings;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import com.getcapacitor.BridgeActivity;
-import com.getcapacitor.JSObject;
-import com.getcapacitor.Plugin;
-import com.getcapacitor.PluginCall;
-import com.getcapacitor.PluginMethod;
-import com.getcapacitor.annotation.CapacitorPlugin;
 
 public class MainActivity extends BridgeActivity {
     @Override
@@ -71,44 +61,6 @@ public class MainActivity extends BridgeActivity {
                 }
             } catch (Exception e) {
                 // Safe fallback if notification manager fails on custom ROM
-            }
-        }
-
-        // DO NOT request battery optimization on first launch - too aggressive
-        // Users should enable this manually in settings if notifications are delayed
-        // See: https://dontkillmyapp.com/ for manufacturer-specific issues
-        // requestBatteryOptimizationExemption();
-    }
-
-    /**
-     * DEPRECATED: Battery optimization exemption request removed from startup.
-     *
-     * Play Store policy discourages requesting this at startup unless absolutely
-     * necessary for core functionality. For a college social discovery app, delayed notifications
-     * are acceptable - users can enable manually if needed.
-     *
-     * Alternative approach: Show in-app guidance when users report delayed notifications.
-     *
-     * @deprecated Removed to comply with Play Store policies - only messaging apps
-     *             with real-time requirements should request this exemption.
-     */
-    @Deprecated
-    private void requestBatteryOptimizationExemption() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            try {
-                String packageName = getPackageName();
-                PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-
-                // Check if already whitelisted
-                if (pm != null && !pm.isIgnoringBatteryOptimizations(packageName)) {
-                    // Show system dialog to request exemption
-                    Intent intent = new Intent();
-                    intent.setAction(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
-                    intent.setData(Uri.parse("package:" + packageName));
-                    startActivity(intent);
-                }
-            } catch (Exception e) {
-                // Safe fallback - app will work but notifications may be delayed
             }
         }
     }

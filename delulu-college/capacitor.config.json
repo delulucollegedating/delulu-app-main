@@ -5,9 +5,7 @@
   "server": {
     "androidScheme": "https",
     "allowNavigation": [
-      "delulu-app-main-production.up.railway.app",
-      "*.railway.app",
-      "*.onrender.com"
+      "delulu-app-main-production.up.railway.app"
     ]
   },
   "android": {

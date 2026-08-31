@@ -94,11 +94,7 @@ dependencies {
 
 apply from: 'capacitor.build.gradle'
 
-try {
-    def servicesJSON = file('google-services.json')
-    if (servicesJSON.text) {
-        apply plugin: 'com.google.gms.google-services'
-    }
-} catch(Exception e) {
-    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
-}
+// CRITICAL: google-services.json MUST exist and be valid for FCM push notifications.
+// If the file is missing or invalid, the build SHOULD fail explicitly rather than
+// silently continuing with broken push notification functionality.
+apply plugin: 'com.google.gms.google-services'

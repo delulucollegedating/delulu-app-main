@@ -148,6 +148,9 @@ public class DeluluMessagingService extends FirebaseMessagingService {
         // ── Build the notification ──
         Uri defaultSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
 
+        // CRITICAL: Use brand color from resources for consistency across app and notifications
+        int brandColor = getResources().getColor(R.color.colorPrimary, null);
+
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_stat_delulu)
                 .setContentTitle(senderName != null && !senderName.isEmpty() ? senderName : title)
@@ -159,9 +162,9 @@ public class DeluluMessagingService extends FirebaseMessagingService {
                 .setContentIntent(pendingIntent)
                 .setSound(defaultSound)
                 .setVibrate(new long[]{0, 250, 250, 250})
-                .setLights(Color.parseColor("#85431E"), 500, 500)
+                .setLights(brandColor, 500, 500)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setColor(Color.parseColor("#85431E"));
+                .setColor(brandColor);
 
         // Use a stable tag for chat messages so duplicates collapse
         String tag = null;
@@ -197,7 +200,11 @@ public class DeluluMessagingService extends FirebaseMessagingService {
                 channel.enableVibration(true);
                 channel.setVibrationPattern(new long[]{0, 250, 250, 250});
                 channel.enableLights(true);
-                channel.setLightColor(Color.parseColor("#85431E"));
+
+                // CRITICAL: Use brand color from resources for consistency
+                int brandColor = getResources().getColor(R.color.colorPrimary, null);
+                channel.setLightColor(brandColor);
+
                 channel.setShowBadge(true);
                 channel.setLockscreenVisibility(android.app.Notification.VISIBILITY_PUBLIC);
                 // REMOVED: setBypassDnd(true) - violates Play Store policy
