@@ -1,8 +1,12 @@
 const express = require('express');
+
+// Initialize Sentry FIRST for early error capture
+const { initSentry, getSentryMiddleware, captureException } = require('./utils/sentrySetup');
+
 const pino = require('pino')({
   level: process.env.LOG_LEVEL || 'info'
 });
-const pinoHttp = require('pino-http')({ 
+const pinoHttp = require('pino-http')({
   logger: pino,
   autoLogging: {
     ignore: (req) => req.url.startsWith('/uploads/') || req.url.startsWith('/avatars/')
@@ -36,9 +40,14 @@ console.warn = (...args) => {
 
 process.on('unhandledRejection', (reason, promise) => {
   pino.error({ reason, promise }, 'Unhandled Promise Rejection');
+  captureException(reason instanceof Error ? reason : new Error(String(reason)), {
+    type: 'unhandledRejection',
+    promise: String(promise)
+  });
 });
 process.on('uncaughtException', (err) => {
   pino.fatal({ err }, 'Uncaught Exception');
+  captureException(err, { type: 'uncaughtException' });
   // A process that survives an uncaught exception is in an undefined state
   // (corrupted request handling, lost sockets). Exit so the platform restarts
   // us into a known-good state instead of limping along.
@@ -204,6 +213,14 @@ validateEnvironment([
 ]);
 
 const app = express();
+
+// Initialize Sentry with app instance
+const sentryResult = initSentry(app);
+const sentryMiddleware = getSentryMiddleware();
+
+// Sentry request handler must be the first middleware
+app.use(sentryMiddleware.requestHandler);
+app.use(sentryMiddleware.tracingHandler);
 
 // Add correlation ID middleware early (before pino logging)
 app.use(correlationMiddleware);

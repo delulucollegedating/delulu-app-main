@@ -1,6 +1,6 @@
 /**
  * db/supabase.js
- * Server-side only Supabase client with CircuitBreaker fault isolation.
+ * Server-side only Supabase client with CircuitBreaker fault isolation and retry logic.
  * Uses the SERVICE_ROLE_KEY — NEVER the anon key.
  * Never import this file in any client-side (public/) code.
  */
@@ -8,6 +8,7 @@
 
 const { createClient } = require('@supabase/supabase-js');
 const CircuitBreaker = require('../utils/circuitBreaker');
+const { retryDatabaseOperation } = require('../utils/retryWithBackoff');
 
 let _client = null;
 
@@ -42,4 +43,23 @@ function getSupabase() {
   return _client;
 }
 
-module.exports = { getSupabase, supabaseBreaker };
+/**
+ * Execute Supabase query with circuit breaker and retry logic
+ *
+ * @param {Function} queryFn - Function that executes the Supabase query
+ * @param {Object} options - Retry options
+ * @returns {Promise} Query result
+ */
+async function executeQuery(queryFn, options = {}) {
+  return retryDatabaseOperation(
+    () => supabaseBreaker.execute(queryFn),
+    {
+      maxAttempts: options.maxAttempts || 3,
+      baseDelayMs: options.baseDelayMs || 500,
+      maxDelayMs: options.maxDelayMs || 5000,
+      onRetry: options.onRetry
+    }
+  );
+}
+
+module.exports = { getSupabase, supabaseBreaker, executeQuery };
