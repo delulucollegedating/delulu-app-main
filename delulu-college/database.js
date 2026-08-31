@@ -57,9 +57,11 @@ async function getNextId(collectionName) {
 
 // Ecosystem mapping based on email domain
 function getEcosystem(email) {
-  if (!email) return 'rishihood';
+  if (!email) return null; // CRITICAL: Return null for invalid input instead of default
   const domain = email.toLowerCase().trim().split('@')[1] || '';
-  
+
+  if (!domain) return null; // No domain = invalid email
+
   if (domain.includes('vitbhopal')) {
     return 'vitbhopal';
   } else if (domain.includes('rishihood')) {
@@ -69,17 +71,19 @@ function getEcosystem(email) {
   } else if (domain.includes('cuchd') || domain.includes('cumail') || domain.includes('chandigarh')) {
     return 'chandigarh';
   }
-  
-  // Extract organization name from domain (e.g. lpu.in -> lpu, du.ac.in -> du)
+
+  // Reject personal email domains to prevent ecosystem isolation bypass
+  const personalDomains = ['gmail', 'yahoo', 'outlook', 'hotmail', 'icloud', 'protonmail', 'yandex', 'mail', 'aol'];
   const parts = domain.split('.');
   if (parts.length >= 2) {
     const org = parts[parts.length - 2];
-    if (org && !['gmail', 'yahoo', 'outlook', 'hotmail', 'icloud'].includes(org)) {
-      return org;
+    if (org && !personalDomains.includes(org)) {
+      return org; // Extract organization from domain
     }
   }
-  
-  return 'rishihood';
+
+  // Personal email or unknown domain - reject instead of assigning default
+  return null;
 }
 
 // Seed demo users. The "already seeded" flag lives in Firestore (meta/seed)
@@ -232,6 +236,14 @@ const userOps = {
   async createWithEmail(username, gender, email, passwordHash, bio, hobbies, avatar, publicKey = null, encryptedPrivateKey = null) {
     const firestore = getDB();
     const ecosystem = getEcosystem(email);
+
+    // CRITICAL: Reject user creation if ecosystem cannot be determined (personal emails, invalid domains)
+    if (!ecosystem) {
+      const err = new Error('Email domain is not from an allowed educational institution');
+      err.code = 'invalid_email_domain';
+      throw err;
+    }
+
     const lower = normalizeUsername(username);
     let userId = null;
 
@@ -466,19 +478,17 @@ const userOps = {
     const userDoc = await this.getById(userId);
     const userEcosystem = userDoc?.ecosystem || 'rishihood';
     
-    // Fetch blocked users involving this user safely
+    // CRITICAL: Fetch blocked users involving this user - NEVER suppress errors on safety queries
+    // If the block query fails (missing index, firestore down), we must fail hard rather than
+    // potentially showing blocked profiles in discovery feed
     const blockedIds = [];
-    try {
-      const numId = Number(userId);
-      const [blockedFrom, blockedTo] = await Promise.all([
-        firestore.collection('blocked_users').where('from_user_id', '==', numId).get(),
-        firestore.collection('blocked_users').where('to_user_id', '==', numId).get()
-      ]);
-      blockedFrom.forEach(doc => blockedIds.push(doc.data().to_user_id));
-      blockedTo.forEach(doc => blockedIds.push(doc.data().from_user_id));
-    } catch (bErr) {
-      console.warn('Blocked users fetch error in discover:', bErr.message);
-    }
+    const numId = Number(userId);
+    const [blockedFrom, blockedTo] = await Promise.all([
+      firestore.collection('blocked_users').where('from_user_id', '==', numId).get(),
+      firestore.collection('blocked_users').where('to_user_id', '==', numId).get()
+    ]);
+    blockedFrom.forEach(doc => blockedIds.push(doc.data().to_user_id));
+    blockedTo.forEach(doc => blockedIds.push(doc.data().from_user_id));
     
     const allExclude = [...new Set([...excludeIds, ...blockedIds, Number(userId)])];
     
@@ -1290,28 +1300,11 @@ const connectionOps = {
   async submitFaceReveal(connectionId, userId) {
     const firestore = getDB();
     const connDocRef = firestore.collection('connections').doc(String(connectionId));
-    
+
     let result = null;
-    
-    // Pre-read (outside the transaction): if the partner has already revealed,
-    // this submit completes the pair and a meeting room is needed. The room is
-    // created BEFORE the transaction because the provider API is a network call
-    // and must never run inside a Firestore transaction.
-    let partnerAlreadyRevealed = false;
-    let existingMeetingCode = null;
-    try {
-      const preDoc = await connDocRef.get();
-      if (preDoc.exists) {
-        const pre = preDoc.data();
-        const preIsFrom = pre.from_user_id === Number(userId);
-        partnerAlreadyRevealed = (preIsFrom ? pre.to_face_reveal : pre.from_face_reveal) === 1;
-        existingMeetingCode = pre.meeting_code || null;
-      }
-    } catch (preErr) {
-      // Ignore — the transaction re-reads and generateMeetingCode() is the fallback.
-    }
-    const meetingUrl = (partnerAlreadyRevealed && !existingMeetingCode) ? await createMeetingRoom() : null;
-    
+
+    // CRITICAL FIX: Do NOT create meeting room before transaction - if transaction fails,
+    // the room URL is wasted and potentially leaked. Always create AFTER successful commit.
     try {
       await updateConnection(connectionId, () => firestore.runTransaction(async (transaction) => {
         const doc = await transaction.get(connDocRef);
@@ -1345,10 +1338,9 @@ const connectionOps = {
         const field = isFrom ? 'from_face_reveal' : 'to_face_reveal';
         const otherVal = isFrom ? conn.to_face_reveal : conn.from_face_reveal;
         const bothRevealed = otherVal === 1;
-        // meetingUrl covers the normal flow; generateMeetingCode() covers a
-        // simultaneous double-submit race (both clicked at once, so the pre-read
-        // saw the partner as not-yet-revealed).
-        const meetingCode = bothRevealed ? (conn.meeting_code || meetingUrl || generateMeetingCode()) : null;
+
+        // Use existing meeting code or generate placeholder - real room created after commit
+        const meetingCode = bothRevealed ? (conn.meeting_code || generateMeetingCode()) : null;
         transaction.update(connDocRef, bothRevealed
           ? { [field]: 1, status: 'revealed', meeting_code: meetingCode }
           : { [field]: 1 });
@@ -1357,17 +1349,17 @@ const connectionOps = {
     } catch (txErr) {
       return { error: 'Failed to process face reveal. Please try again.' };
     }
-    
-    // A simultaneous double-submit can slip past the pre-read; if that happened,
-    // create the room now and persist it so the pair still gets a working link.
-    if (result && result.success && result.bothRevealed && !result.meeting_code) {
+
+    // After successful transaction: if both revealed and meeting code is a placeholder,
+    // create the actual meeting room and update the connection
+    if (result && result.success && result.bothRevealed && result.meeting_code && !result.meeting_code.startsWith('http')) {
       const url = await createMeetingRoom();
       if (url) {
         await connDocRef.update({ meeting_code: url }).catch(() => {});
         result.meeting_code = url;
       }
     }
-    
+
     return result || { error: 'Failed to process face reveal. Please try again.' };
   },
 
@@ -2142,7 +2134,12 @@ const messageOps = {
 const OTP_TTL_MS = 10 * 60 * 1000;
 
 function hashOtp(otp) {
-  const secret = process.env.SESSION_SECRET || 'delulu-otp-pepper';
+  // CRITICAL: Never allow weak default fallback for cryptographic operations
+  // If SESSION_SECRET is not set, the app should fail loudly at startup (already validated in server.js)
+  const secret = process.env.SESSION_SECRET;
+  if (!secret) {
+    throw new Error('SESSION_SECRET is required for OTP hashing but not configured');
+  }
   return crypto.createHmac('sha256', secret).update(String(otp)).digest('hex');
 }
 
@@ -2454,10 +2451,13 @@ const blockOps = {
 // Generate a random video-room slug (xxx-xxxx-xxx format) used as the last-resort
 // fallback room name when no meeting provider is configured.
 function generateMeetingCode() {
+  // CRITICAL: Use crypto.randomInt() for cryptographically secure random generation
+  // Math.random() is NOT cryptographically secure and meeting codes would be guessable
   const chars = 'abcdefghijklmnopqrstuvwxyz';
-  const p1 = Array.from({ length: 3 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-  const p2 = Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-  const p3 = Array.from({ length: 3 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+  const randomChar = () => chars[crypto.randomInt(0, chars.length)];
+  const p1 = Array.from({ length: 3 }, randomChar).join('');
+  const p2 = Array.from({ length: 4 }, randomChar).join('');
+  const p3 = Array.from({ length: 3 }, randomChar).join('');
   return `${p1}-${p2}-${p3}`;
 }
 
@@ -2471,7 +2471,8 @@ function generateMeetingCode() {
 //      provider dependency, rooms live on your own domain.
 //   3. The public Jitsi instance as a last resort so the feature never breaks.
 async function createMeetingRoom() {
-  const roomName = `delulu-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  // CRITICAL: Use crypto.randomBytes() for room names to prevent guessing
+  const roomName = `delulu-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
   const apiKey = process.env.DAILY_API_KEY || '';
   if (apiKey) {
     try {

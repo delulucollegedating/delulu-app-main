@@ -11,8 +11,11 @@ describe('College Ecosystem Domain Mapping', () => {
     expect(getEcosystem('student@rishihood.edu.in')).toBe('rishihood');
   });
 
-  it('defaults to rishihood for unmapped or empty domains', () => {
-    expect(getEcosystem('')).toBe('rishihood');
-    expect(getEcosystem(null)).toBe('rishihood');
+  it('returns null for unmapped or empty domains (security fix)', () => {
+    // CRITICAL: Changed to return null instead of default to prevent ecosystem isolation bypass
+    expect(getEcosystem('')).toBe(null);
+    expect(getEcosystem(null)).toBe(null);
+    expect(getEcosystem('user@gmail.com')).toBe(null);
+    expect(getEcosystem('user@yahoo.com')).toBe(null);
   });
 });

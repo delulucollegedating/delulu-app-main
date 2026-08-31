@@ -2226,8 +2226,10 @@ app.post('/api/connections/request', requireAuth, discoverLimiter, async (req, r
   const target = await userOps.getById(to_user_id);
   if (!user || !target) return res.status(404).json({ error: 'User not found' });
 
-  // Gender restriction removed — any user can connect with any user.
-  // The discover page filter is purely a UI preference, not enforced server-side.
+  // CRITICAL: Enforce ecosystem isolation - users can only connect within their own college
+  if (user.ecosystem !== target.ecosystem) {
+    return res.status(400).json({ error: 'Cannot connect with users from other colleges' });
+  }
 
   const result = await connectionOps.sendRequest(req.session.userId, to_user_id);
   if (result.error) return res.status(400).json(result);
@@ -2959,10 +2961,10 @@ app.post('/api/messages/:connectionId/read', requireAuth, readReceiptLimiter, as
     console.error('Background markAsRead error:', err.message);
   });
 });
-
 // Send normal text message
 const MAX_PLAIN_MESSAGE_LENGTH = 4000;
 const MAX_ENCRYPTED_MESSAGE_LENGTH = 6000; // base64 overhead over ~4.4k plaintext
+const MAX_IV_LENGTH = 64; // AES-GCM IV is 12 bytes (16 base64 chars), allow buffer for encoding
 
 app.post('/api/messages/send', requireAuth, messageLimiter, async (req, res) => {
   const { connection_id, content, is_encrypted, iv, client_uuid } = req.body;
@@ -2972,6 +2974,10 @@ app.post('/api/messages/send', requireAuth, messageLimiter, async (req, res) => 
   if (Number(is_encrypted) === 1) {
     if (content.length > MAX_ENCRYPTED_MESSAGE_LENGTH) {
       return res.status(400).json({ error: 'Message is too long' });
+    }
+    // CRITICAL: Validate IV length to prevent malicious oversized payloads
+    if (iv && (typeof iv !== 'string' || iv.length > MAX_IV_LENGTH)) {
+      return res.status(400).json({ error: 'Invalid encryption parameters' });
     }
   } else if (content.length > MAX_PLAIN_MESSAGE_LENGTH) {
     return res.status(400).json({ error: 'Message is too long' });
@@ -3403,6 +3409,14 @@ app.post('/api/users/block', requireAuth, actionLimiter, async (req, res) => {
   try {
     const blockerId = Number(req.session.userId);
     const blockedId = Number(blocked_user_id);
+
+    // CRITICAL: Evict connection auth cache for ALL connections between these users BEFORE blocking
+    // This prevents blocked users from sending messages during the 30-second cache window
+    const allConnectionsBetween = await connectionOps.getAllBetween(blockerId, blockedId);
+    for (const conn of allConnectionsBetween) {
+      evictConnectionAuth(conn.id);
+    }
+
     const result = await blockOps.block(blockerId, blockedId);
 
     // Invalidate discover feed cache for both users
@@ -3412,7 +3426,7 @@ app.post('/api/users/block', requireAuth, actionLimiter, async (req, res) => {
     // If any active connections were ended by this block, cleanup auth & messages, and notify SSE streams
     if (result.endedConnectionIds && result.endedConnectionIds.length > 0) {
       for (const connId of result.endedConnectionIds) {
-        evictConnectionAuth(connId);
+        // Cache already evicted above, now clean up messages
         await messageOps.softDeleteAllForConnection(connId, blockerId);
         
         // Notify chat page SSE
@@ -3592,7 +3606,7 @@ app.post('/api/gdpr/delete-account', requireAuth, actionLimiter, async (req, res
 
   try {
     // Verify password before deletion
-    const user = await userOps.getUserById(req.session.userId);
+    const user = await userOps.getById(req.session.userId);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
