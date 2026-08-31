@@ -22,7 +22,7 @@
 // ── Cache Version ─────────────────────────────────────────────────────────────
 // Increment this string whenever you deploy a new version of the app.
 // This causes the service worker to delete the old cache and re-download assets.
-const CACHE_VERSION = 'delulu-v11';
+const CACHE_VERSION = 'delulu-v12';
 
 // ── Static Assets to Pre-Cache on Install ─────────────────────────────────────
 // These files are cached immediately when the service worker installs.
@@ -153,8 +153,10 @@ async function staleWhileRevalidate(request) {
   // Kick off the background refresh regardless of whether we have a cached copy.
   const networkUpdate = fetch(request).then((response) => {
     if (response.ok) {
+      // Clone BEFORE any other operations to avoid "body already used" error
+      const responseToCache = response.clone();
       caches.open(CACHE_VERSION).then((cache) => {
-        cache.put(request, response.clone()).catch(() => {});
+        cache.put(request, responseToCache).catch(() => {});
       });
     }
     return response;
@@ -181,8 +183,10 @@ async function cacheFirst(request) {
     const response = await fetch(request);
     // Only cache successful responses
     if (response.ok) {
+      // Clone BEFORE returning to avoid "body already used" error
+      const responseToCache = response.clone();
       const cache = await caches.open(CACHE_VERSION);
-      cache.put(request, response.clone()).catch(() => {});
+      cache.put(request, responseToCache).catch(() => {});
     }
     return response;
   } catch {
@@ -200,8 +204,10 @@ async function networkFirst(request) {
   try {
     const response = await fetch(request);
     if (response.ok) {
+      // Clone BEFORE returning to avoid "body already used" error
+      const responseToCache = response.clone();
       const cache = await caches.open(CACHE_VERSION);
-      cache.put(request, response.clone()).catch(() => {});
+      cache.put(request, responseToCache).catch(() => {});
     }
     return response;
   } catch {
