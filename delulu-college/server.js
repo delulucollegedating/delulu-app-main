@@ -3898,6 +3898,75 @@ if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
   });
 }
 
+// ===== DEBUG: Test Notification Endpoint =====
+app.post('/api/test-notification', requireAuth, async (req, res) => {
+  const { targetUserId } = req.body;
+  const userId = targetUserId || req.session.userId;
+
+  console.log('═══════════════════════════════════════════════════════════');
+  console.log('TEST NOTIFICATION ENDPOINT CALLED');
+  console.log('Target User ID:', userId);
+  console.log('═══════════════════════════════════════════════════════════');
+
+  try {
+    // Get user info
+    const user = await userOps.getUser(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    console.log('User found:', user.username);
+
+    // Get all registered devices
+    const devices = await notificationDispatcher.getActiveDevices(userId).catch(() => []);
+    console.log(`Found ${devices.length} registered device(s):`);
+    devices.forEach((dev, i) => {
+      console.log(`  ${i + 1}. Platform: ${dev.platform}, DeviceId: ${dev.deviceId}`);
+      if (dev.fcm_token) {
+        console.log(`     FCM Token: ${dev.fcm_token.substring(0, 20)}...`);
+      }
+    });
+
+    // Get legacy tokens
+    const legacyTokens = await pushOps.getFCMTokens(userId).catch(() => []);
+    console.log(`Found ${legacyTokens.length} legacy FCM token(s)`);
+
+    if (devices.length === 0 && legacyTokens.length === 0) {
+      console.log('✗ NO TOKENS REGISTERED - User must open app and grant notification permission');
+      return res.status(400).json({
+        error: 'No FCM tokens registered for this user',
+        hint: 'User must open the app and grant notification permission first'
+      });
+    }
+
+    // Send test notification
+    console.log('Attempting to send test notification...');
+    await sendPushNotification(
+      userId,
+      'Test Notification',
+      'If you see this, FCM is working! 🎉',
+      '/messages.html',
+      'test_notification',
+      null
+    );
+
+    console.log('✓ Test notification sent successfully');
+    console.log('═══════════════════════════════════════════════════════════');
+
+    res.json({
+      success: true,
+      message: 'Test notification sent',
+      devicesCount: devices.length,
+      legacyTokensCount: legacyTokens.length,
+      hint: 'Check your device notification tray or run: adb logcat | grep DeluluMessaging'
+    });
+  } catch (error) {
+    console.error('✗ Test notification failed:', error);
+    console.log('═══════════════════════════════════════════════════════════');
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Setup graceful shutdown handlers with SSE connection cleanup
 setupGracefulShutdown(server, {
   timeout: 30000,    // 30 seconds total shutdown timeout
